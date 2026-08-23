@@ -9,7 +9,7 @@ Private Payroll is being built for the STRK20 Private Sprint. Employers can prep
 - Discover and connect a Starknet Wallet API signer (Ready works today).
 - Detect and display Ready's Wallet API version, then query the shielded STRK token explicitly.
 - Distinguish an unregistered account, zero balance, available balance, unsupported API, and read errors.
-- Initialize a new privacy account with its first 0.01 STRK shield, then refresh after confirmation.
+- Detect an unregistered pool account and hand it off to the one-time STRK20 setup flow before allowing shielding.
 - Build up to 50 recipient transfers and submit them as one STRK20 wallet request.
 - Track wallet approval, Sepolia confirmation, and the Starkscan receipt.
 - Validate Starknet addresses, amounts, duplicate recipients, network, and treasury coverage before submission.
@@ -58,9 +58,10 @@ Privy is the identity layer; it is not the human STRK20 signer. Human privacy ac
 
 1. Install Ready and select Starknet Sepolia in the wallet.
 2. Open `/wallet`, choose **Connect Ready**, and approve account access.
-3. Open `/payroll#private-payroll` and shield a small amount of test STRK.
-4. Add valid Starknet recipient addresses and amounts.
-5. Approve the private payroll request in Ready and follow the Sepolia receipt link.
+3. If the account is not registered, complete the linked one-time STRK20 setup and return to refresh the balance.
+4. Open `/payroll#private-payroll` and shield a small amount of test STRK.
+5. Add valid Starknet recipient addresses and amounts.
+6. Approve the private payroll request in Ready and follow the Sepolia receipt link.
 
 The application never requests or stores a recovery phrase, viewing key, or private key. Recipient names remain local component state in this frontend build; only addresses and atomic amounts are sent to Ready when the user explicitly approves the batch.
 

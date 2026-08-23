@@ -26,6 +26,7 @@ import {
   parseStrkAmount,
   shortStarknetAddress,
   STARKNET_SEPOLIA_EXPLORER,
+  STRK20_SETUP_URL,
   useStarknetWallet,
 } from "../starknet/starknet-wallet";
 import { useAppShell } from "../ui/app-shell";
@@ -75,6 +76,8 @@ export default function PayrollPage() {
   const busy = starknet.transaction?.stage === "wallet" || starknet.transaction?.stage === "confirming";
   const privacyChecking = starknet.privacyCapability === "checking";
   const privacyUnsupported = starknet.privacyCapability === "unsupported";
+  const registrationRequired = starknet.privacyCapability === "uninitialized";
+  const balanceUnavailable = starknet.privacyCapability === "error";
   const canRunPayroll = starknet.privacyCapability === "available";
   const treasuryLabel = starknet.privacyCapability === "uninitialized"
     ? "Not initialized"
@@ -86,13 +89,13 @@ export default function PayrollPage() {
           ? "Balance unavailable"
           : `${formatStrk(starknet.shieldedBalance)} STRK shielded`;
   const treasuryHelp = starknet.privacyCapability === "uninitialized"
-    ? "The first shield registers this account and funds its private treasury."
+    ? "Complete the one-time STRK20 registration first. Wallet API 0.10.3 cannot register an account from this dapp."
     : privacyUnsupported
       ? "Update Ready to a STRK20-compatible Wallet API, then reconnect."
       : starknet.privacyCapability === "zero"
         ? "The private account is ready. Shield public STRK to fund it."
         : starknet.privacyCapability === "error"
-          ? "The balance read failed, but you can retry it by shielding a small amount."
+          ? "Ready could not read this balance. Retry the balance check before shielding."
           : "Shield public STRK before it can be sent privately.";
   const payrollTotal = useMemo(() => {
     try {
@@ -167,7 +170,7 @@ export default function PayrollPage() {
 
             <div className={`runner-step ${starknet.isConnected && starknet.isSepolia ? "runner-step--active" : ""}`}>
               <span className="runner-step-number">2</span>
-              <div><small>FUND PRIVATE TREASURY</small><strong>{treasuryLabel}</strong><p>{treasuryHelp}</p><label className="amount-field"><span>Amount</span><input inputMode="decimal" value={shieldAmount} onChange={(event) => setShieldAmount(event.target.value)} aria-label="STRK amount to shield" /><b>STRK</b></label><button type="button" className="button button--soft button--wide" disabled={!starknet.isConnected || !starknet.isSepolia || busy || privacyChecking || privacyUnsupported} onClick={shieldTreasury}>{starknet.transaction?.kind === "shield" && busy ? <><LoaderCircle className="spin" size={16} /> {starknet.transaction.stage === "wallet" ? "Approve in Ready" : "Confirming"}</> : <><ShieldCheck size={16} /> {starknet.privacyCapability === "uninitialized" ? "Initialize & shield" : "Shield treasury"}</>}</button></div>
+              <div><small>FUND PRIVATE TREASURY</small><strong>{treasuryLabel}</strong><p>{treasuryHelp}</p>{registrationRequired ? <a className="button button--soft button--wide" href={STRK20_SETUP_URL} target="_blank" rel="noreferrer">Register STRK20 account <ExternalLink size={15} /></a> : balanceUnavailable ? <Link className="button button--soft button--wide" href="/wallet">Retry on Wallet page <ArrowRight size={15} /></Link> : <><label className="amount-field"><span>Amount</span><input inputMode="decimal" value={shieldAmount} onChange={(event) => setShieldAmount(event.target.value)} aria-label="STRK amount to shield" /><b>STRK</b></label><button type="button" className="button button--soft button--wide" disabled={!starknet.isConnected || !starknet.isSepolia || busy || privacyChecking || privacyUnsupported} onClick={shieldTreasury}>{starknet.transaction?.kind === "shield" && busy ? <><LoaderCircle className="spin" size={16} /> {starknet.transaction.stage === "wallet" ? "Approve in Ready" : "Confirming"}</> : <><ShieldCheck size={16} /> Shield treasury</>}</button></>}</div>
             </div>
 
             <div className="runner-step runner-step--quiet">

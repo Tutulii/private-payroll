@@ -24,6 +24,9 @@ import {
 
 export const STRK_TOKEN_ADDRESS =
   "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d";
+export const STRK20_SEPOLIA_POOL_ADDRESS =
+  "0x0254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91";
+export const STRK20_SETUP_URL = "https://strk20.starknet.io/app";
 export const STARKNET_SEPOLIA_CHAIN_ID = starknetConstants.StarknetChainId.SN_SEPOLIA;
 export const STARKNET_SEPOLIA_EXPLORER = "https://sepolia.starkscan.co";
 
@@ -155,6 +158,19 @@ function isUnsupportedWalletApiError(error: unknown) {
   );
 }
 
+async function readSepoliaPoolRegistration(address: string): Promise<boolean | null> {
+  try {
+    const result = await sepoliaProvider.callContract({
+      contractAddress: STRK20_SEPOLIA_POOL_ADDRESS,
+      entrypoint: "get_public_key",
+      calldata: [address],
+    });
+    return num.toBigInt(result[0] ?? "0x0") !== 0n;
+  } catch {
+    return null;
+  }
+}
+
 function versionParts(version: string) {
   return version
     .split("-")[0]
@@ -276,12 +292,15 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     } catch (balanceError) {
       const message = describeError(balanceError);
       setShieldedBalance(null);
-      if (isNotRegisteredError(balanceError)) {
+      const poolRegistration = isNotRegisteredError(balanceError)
+        ? false
+        : await readSepoliaPoolRegistration(account.address);
+      if (poolRegistration === false) {
         setPrivacyCapability("uninitialized");
         setPrivacyMessage(
-          "This Ready account is not registered in the STRK20 pool yet. Its first shield initializes the private account.",
+          "This account is not registered in the STRK20 pool. Ready Wallet API 0.10.3 cannot register it from a dapp; complete the one-time STRK20 setup, then refresh.",
         );
-        throw new Error("Privacy is not initialized yet. Shield 0.01 STRK to set it up.");
+        throw new Error("STRK20 registration is required before shielding.");
       }
       if (isUnsupportedWalletApiError(balanceError)) {
         setPrivacyCapability("unsupported");
@@ -482,6 +501,11 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
       if (privacyCapability === "checking") {
         throw new Error("Wait for Ready to finish checking the private STRK account.");
       }
+      if (privacyCapability === "uninitialized") {
+        throw new Error(
+          "Register this account in the STRK20 pool before shielding or running payroll.",
+        );
+      }
 
       const pending: PrivateTransaction = { kind, stage: "wallet", label };
       setError("");
@@ -497,7 +521,17 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
         void confirmTransaction(result.transaction_hash, confirming);
         return result.transaction_hash;
       } catch (transactionError) {
-        const message = describeError(transactionError);
+        const notRegistered = isNotRegisteredError(transactionError);
+        const message = notRegistered
+          ? "Ready returned NOT_REGISTERED (118). Complete the one-time STRK20 registration before shielding."
+          : describeError(transactionError);
+        if (notRegistered) {
+          setShieldedBalance(null);
+          setPrivacyCapability("uninitialized");
+          setPrivacyMessage(
+            "This account is not registered in the STRK20 pool. Ready Wallet API 0.10.3 cannot register it from a dapp; complete the one-time STRK20 setup, then refresh.",
+          );
+        }
         setTransaction({ ...pending, stage: "failed", error: message });
         setError(message);
         throw new Error(message);
@@ -509,12 +543,11 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
   const shieldStrk = useCallback(
     async (amount: string) => {
       const atomicAmount = parseStrkAmount(amount);
-      const firstUse = privacyCapability === "uninitialized";
-      return submitPrivateActions("shield", firstUse ? `${amount} STRK privacy setup` : `${amount} STRK shield`, [
+      return submitPrivateActions("shield", `${amount} STRK shield`, [
         { type: "deposit", token: STRK_TOKEN_ADDRESS, amount: num.toHex(atomicAmount) },
       ]);
     },
-    [privacyCapability, submitPrivateActions],
+    [submitPrivateActions],
   );
 
   const runPrivatePayroll = useCallback(

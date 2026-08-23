@@ -25,6 +25,7 @@ import {
   formatStrk,
   shortStarknetAddress,
   STARKNET_SEPOLIA_EXPLORER,
+  STRK20_SETUP_URL,
   useStarknetWallet,
 } from "../starknet/starknet-wallet";
 import { useAppShell } from "../ui/app-shell";
@@ -150,9 +151,19 @@ export default function WalletPage() {
           <div className="ready-account-row"><span>Private STRK</span><strong className={`privacy-status privacy-status--${starknet.privacyCapability}`}>{privacyStatus}</strong></div>
           <div className="ready-account-row"><span>Address</span><strong>{shortStarknetAddress(starknet.address)}</strong></div>
           {starknet.isConnected && starknet.privacyMessage && <div className={`ready-inline-note ready-inline-note--${starknet.privacyCapability}`}>{starknet.privacyMessage}</div>}
-          {starknet.isConnected && starknet.isSepolia && (starknet.privacyCapability === "uninitialized" || starknet.privacyCapability === "zero" || starknet.privacyCapability === "error") && (
+          {starknet.isConnected && starknet.isSepolia && starknet.privacyCapability === "uninitialized" && (
+            <a className="ready-privacy-action" href={STRK20_SETUP_URL} target="_blank" rel="noreferrer">
+              <KeyRound size={14} /> Open one-time STRK20 setup <ExternalLink size={12} />
+            </a>
+          )}
+          {starknet.isConnected && starknet.isSepolia && starknet.privacyCapability === "zero" && (
             <button type="button" className="ready-privacy-action" disabled={shieldBusy} onClick={initializePrivacy}>
-              {shieldBusy ? <><LoaderCircle className="spin" size={14} /> {shieldTransaction?.stage === "wallet" ? "Approve in Ready" : "Confirming on Sepolia"}</> : <><ShieldCheck size={14} /> {starknet.privacyCapability === "uninitialized" ? "Initialize & shield 0.01 STRK" : starknet.privacyCapability === "error" ? "Try shielding 0.01 STRK" : "Shield 0.01 STRK"}</>}
+              {shieldBusy ? <><LoaderCircle className="spin" size={14} /> {shieldTransaction?.stage === "wallet" ? "Approve in Ready" : "Confirming on Sepolia"}</> : <><ShieldCheck size={14} /> Shield 0.01 STRK</>}
+            </button>
+          )}
+          {starknet.isConnected && starknet.isSepolia && starknet.privacyCapability === "error" && (
+            <button type="button" className="ready-privacy-action" disabled={starknet.isRefreshingBalance} onClick={refreshShieldedBalance}>
+              {starknet.isRefreshingBalance ? <><LoaderCircle className="spin" size={14} /> Checking Ready</> : <><LoaderCircle size={14} /> Retry private balance</>}
             </button>
           )}
           {shieldTransaction && (
