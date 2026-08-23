@@ -32,6 +32,7 @@ jobs:
         uses: software-mansion/setup-scarb@v1
         with:
           scarb-version: 2.16.1
+          cache: false
       - name: Test and build circuit
         working-directory: circuits/payroll_integrity
         run: |
@@ -46,7 +47,10 @@ jobs:
       - name: Generate Starknet verifier
         working-directory: contracts
         run: garaga gen --system ultra_keccak_zk_honk --vk ../circuits/payroll_integrity/target/vk --project-name integrity_verifier
-      - uses: actions/upload-artifact@v4
+      - name: Build generated Starknet verifier
+        working-directory: contracts/integrity_verifier
+        run: scarb build
+      - uses: actions/upload-artifact@v6
         with:
           name: payo-payroll-integrity-${{ github.sha }}
           if-no-files-found: error
