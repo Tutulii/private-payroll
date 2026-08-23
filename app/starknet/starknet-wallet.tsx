@@ -48,7 +48,18 @@ export type PrivateTransaction = {
   label: string;
   hash?: string;
   error?: string;
+  balanceRefreshed?: boolean;
+  balanceRefreshError?: string;
 };
+
+export type PrivacyCapability =
+  | "unknown"
+  | "checking"
+  | "uninitialized"
+  | "zero"
+  | "available"
+  | "error"
+  | "unsupported";
 
 type StarknetWalletContextValue = {
   wallets: WalletChoice[];
@@ -61,7 +72,10 @@ type StarknetWalletContextValue = {
   networkName: string;
   isSepolia: boolean;
   supportedSpecs: string[];
-  privacyCapability: "unknown" | "ready" | "unsupported";
+  walletApiVersions: string[];
+  walletApiVersion: string;
+  privacyCapability: PrivacyCapability;
+  privacyMessage: string;
   shieldedBalance: bigint | null;
   isRefreshingBalance: boolean;
   transaction: PrivateTransaction | null;
@@ -87,9 +101,83 @@ function isReadyWallet(name: string) {
 }
 
 function describeError(error: unknown) {
-  if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
+  if (error && typeof error === "object") {
+    const candidate = error as {
+      code?: unknown;
+      message?: unknown;
+      data?: unknown;
+      error?: { code?: unknown; message?: unknown; data?: unknown };
+    };
+    const message = candidate.message ?? candidate.error?.message;
+    const code = candidate.code ?? candidate.error?.code;
+    const data = candidate.data ?? candidate.error?.data;
+    if (typeof message === "string" && (typeof code === "string" || typeof code === "number")) {
+      return `${message} (${code})${typeof data === "string" ? `: ${data}` : ""}`;
+    }
+    if (typeof message === "string") {
+      return `${message}${typeof data === "string" ? `: ${data}` : ""}`;
+    }
+    if (typeof code === "string" || typeof code === "number") return String(code);
+  }
+  if (error instanceof Error) return error.message;
   return "The wallet did not complete the request.";
+}
+
+function walletErrorCode(error: unknown): string {
+  if (!error || typeof error !== "object") return "";
+  const candidate = error as {
+    code?: unknown;
+    error?: { code?: unknown };
+  };
+  const code = candidate.code ?? candidate.error?.code;
+  return typeof code === "string" || typeof code === "number" ? String(code) : "";
+}
+
+function errorIncludes(error: unknown, value: string) {
+  return describeError(error).toUpperCase().includes(value);
+}
+
+function isNotRegisteredError(error: unknown) {
+  return walletErrorCode(error) === "118" || errorIncludes(error, "NOT_REGISTERED");
+}
+
+function isUnsupportedWalletApiError(error: unknown) {
+  const code = walletErrorCode(error);
+  return (
+    code === "162" ||
+    code === "-32601" ||
+    code === "4200" ||
+    errorIncludes(error, "API_VERSION_NOT_SUPPORTED") ||
+    errorIncludes(error, "METHOD_NOT_FOUND") ||
+    errorIncludes(error, "METHOD NOT FOUND") ||
+    errorIncludes(error, "UNSUPPORTED METHOD")
+  );
+}
+
+function versionParts(version: string) {
+  return version
+    .split("-")[0]
+    .split(".")
+    .map((part) => Number.parseInt(part, 10) || 0);
+}
+
+function compareVersions(left: string, right: string) {
+  const leftParts = versionParts(left);
+  const rightParts = versionParts(right);
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+function supportsStrk20WalletApi(versions: string[]) {
+  return versions.some((version) => compareVersions(version, "0.10.3") >= 0);
+}
+
+function latestVersion(versions: string[]) {
+  return [...versions].sort(compareVersions).at(-1) ?? "";
 }
 
 export function parseStrkAmount(value: string): bigint {
@@ -125,10 +213,12 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
   const [address, setAddress] = useState("");
   const [chainId, setChainId] = useState("");
   const [supportedSpecs, setSupportedSpecs] = useState<string[]>([]);
+  const [walletApiVersions, setWalletApiVersions] = useState<string[]>([]);
   const [isConnecting, setIsConnecting] = useState(false);
   const [shieldedBalance, setShieldedBalance] = useState<bigint | null>(null);
   const [isRefreshingBalance, setIsRefreshingBalance] = useState(false);
-  const [privacyCapability, setPrivacyCapability] = useState<"unknown" | "ready" | "unsupported">("unknown");
+  const [privacyCapability, setPrivacyCapability] = useState<PrivacyCapability>("unknown");
+  const [privacyMessage, setPrivacyMessage] = useState("");
   const [transaction, setTransaction] = useState<PrivateTransaction | null>(null);
   const [error, setError] = useState("");
   const unsubscribeWalletRef = useRef<(() => void) | null>(null);
@@ -155,16 +245,19 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     setAddress("");
     setChainId("");
     setSupportedSpecs([]);
+    setWalletApiVersions([]);
     setShieldedBalance(null);
     setPrivacyCapability("unknown");
+    setPrivacyMessage("");
     setTransaction(null);
   }, []);
 
   const refreshBalanceForAccount = useCallback(async (account: WalletAccountV6) => {
     setIsRefreshingBalance(true);
-    setError("");
+    setPrivacyCapability("checking");
+    setPrivacyMessage("");
     try {
-      const balances = await account.strk20Balances([]);
+      const balances = await account.strk20Balances([STRK_TOKEN_ADDRESS]);
       const strkEntry = balances.find((entry) => {
         try {
           return num.toBigInt(entry.token) === num.toBigInt(STRK_TOKEN_ADDRESS);
@@ -172,13 +265,34 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
           return false;
         }
       });
-      setShieldedBalance(strkEntry ? num.toBigInt(strkEntry.balance) : 0n);
-      setPrivacyCapability("ready");
+      const nextBalance = strkEntry ? num.toBigInt(strkEntry.balance) : 0n;
+      setShieldedBalance(nextBalance);
+      setPrivacyCapability(nextBalance > 0n ? "available" : "zero");
+      setPrivacyMessage(
+        nextBalance > 0n
+          ? "Your private STRK treasury is available for payroll."
+          : "Your STRK20 account is ready but its private STRK balance is zero.",
+      );
     } catch (balanceError) {
-      setPrivacyCapability("unsupported");
       const message = describeError(balanceError);
-      setError(message);
-      throw new Error(message);
+      setShieldedBalance(null);
+      if (isNotRegisteredError(balanceError)) {
+        setPrivacyCapability("uninitialized");
+        setPrivacyMessage(
+          "This Ready account is not registered in the STRK20 pool yet. Its first shield initializes the private account.",
+        );
+        throw new Error("Privacy is not initialized yet. Shield 0.01 STRK to set it up.");
+      }
+      if (isUnsupportedWalletApiError(balanceError)) {
+        setPrivacyCapability("unsupported");
+        setPrivacyMessage(
+          `Ready rejected the STRK20 balance method. Update Ready and reconnect. Wallet response: ${message}`,
+        );
+        throw new Error("This Ready version does not support the STRK20 balance API.");
+      }
+      setPrivacyCapability("error");
+      setPrivacyMessage(`Ready could not read the private STRK balance: ${message}`);
+      throw new Error(`Private STRK balance check failed: ${message}`);
     } finally {
       setIsRefreshingBalance(false);
     }
@@ -186,8 +300,11 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
 
   const refreshBalance = useCallback(async () => {
     if (!walletAccount) throw new Error("Connect Ready wallet first.");
+    if (privacyCapability === "unsupported") {
+      throw new Error("This Ready version does not support the STRK20 Wallet API.");
+    }
     await refreshBalanceForAccount(walletAccount);
-  }, [refreshBalanceForAccount, walletAccount]);
+  }, [privacyCapability, refreshBalanceForAccount, walletAccount]);
 
   const connectWallet = useCallback(
     async (name: string) => {
@@ -211,7 +328,13 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
 
         const connectedAddress = validateAndParseAddress(accounts[0]);
         const activeChainId = String(await walletV6.requestChainId(wallet));
-        const specs = await walletV6.supportedSpecs(wallet);
+        const [specsResult, walletApiResult] = await Promise.allSettled([
+          walletV6.supportedSpecs(wallet),
+          walletV6.supportedWalletApi(wallet),
+        ]);
+        const specs = specsResult.status === "fulfilled" ? specsResult.value.map(String) : [];
+        const apiVersions =
+          walletApiResult.status === "fulfilled" ? walletApiResult.value.map(String) : [];
 
         unsubscribeWalletRef.current?.();
         unsubscribeWalletRef.current = account.onChange((change) => {
@@ -234,10 +357,35 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
         setSelectedWallet(wallet);
         setAddress(connectedAddress);
         setChainId(activeChainId);
-        setSupportedSpecs(specs.map(String));
-        setPrivacyCapability(isReadyWallet(wallet.name) ? "unknown" : "unsupported");
+        setSupportedSpecs(specs);
+        setWalletApiVersions(apiVersions);
 
-        if (activeChainId === STARKNET_SEPOLIA_CHAIN_ID && isReadyWallet(wallet.name)) {
+        const isPrivacyWallet = isReadyWallet(wallet.name);
+        const reportsUnsupportedApi =
+          (apiVersions.length > 0 && !supportsStrk20WalletApi(apiVersions)) ||
+          (walletApiResult.status === "rejected" &&
+            isUnsupportedWalletApiError(walletApiResult.reason));
+        if (!isPrivacyWallet || reportsUnsupportedApi) {
+          const detectedApiVersion = latestVersion(apiVersions);
+          setShieldedBalance(null);
+          setPrivacyCapability("unsupported");
+          setPrivacyMessage(
+            !isPrivacyWallet
+              ? "This wallet does not currently advertise Ready-compatible STRK20 support."
+              : detectedApiVersion
+                ? `Ready reports Wallet API ${detectedApiVersion}; STRK20 requires Wallet API 0.10.3 or newer. Update Ready and reconnect.`
+                : "Ready does not expose a compatible STRK20 Wallet API. Update Ready and reconnect.",
+          );
+        } else {
+          setPrivacyCapability("checking");
+          setPrivacyMessage("Checking this account's private STRK balance…");
+        }
+
+        if (
+          activeChainId === STARKNET_SEPOLIA_CHAIN_ID &&
+          isPrivacyWallet &&
+          !reportsUnsupportedApi
+        ) {
           try {
             await refreshBalanceForAccount(account);
           } catch {
@@ -272,26 +420,41 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
       const switched = await walletAccount.switchStarknetChain(STARKNET_SEPOLIA_CHAIN_ID);
       if (!switched) throw new Error("Switch to Starknet Sepolia in Ready and try again.");
       setChainId(STARKNET_SEPOLIA_CHAIN_ID);
-      await refreshBalanceForAccount(walletAccount);
+      if (privacyCapability !== "unsupported") {
+        try {
+          await refreshBalanceForAccount(walletAccount);
+        } catch {
+          // Switching succeeds even when a new account has no private state yet.
+        }
+      }
     } catch (switchError) {
       const message = describeError(switchError);
       setError(message);
       throw new Error(message);
     }
-  }, [refreshBalanceForAccount, walletAccount]);
+  }, [privacyCapability, refreshBalanceForAccount, walletAccount]);
 
   const confirmTransaction = useCallback(
     async (hash: string, pending: PrivateTransaction) => {
       try {
         await sepoliaProvider.waitForTransaction(hash, { retries: 400, retryInterval: 3000 });
-        setTransaction({ ...pending, stage: "confirmed", hash });
+        let balanceRefreshed = false;
+        let balanceRefreshError = "";
         if (walletAccount) {
           try {
             await refreshBalanceForAccount(walletAccount);
-          } catch {
-            // A confirmed receipt remains useful even if the balance query is rejected.
+            balanceRefreshed = true;
+          } catch (refreshError) {
+            balanceRefreshError = describeError(refreshError);
           }
         }
+        setTransaction({
+          ...pending,
+          stage: "confirmed",
+          hash,
+          balanceRefreshed,
+          balanceRefreshError: balanceRefreshError || undefined,
+        });
       } catch (confirmationError) {
         setTransaction({
           ...pending,
@@ -312,6 +475,12 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
       }
       if (!isReadyWallet(selectedWallet?.name ?? "")) {
         throw new Error("Ready wallet is currently required for STRK20 privacy actions.");
+      }
+      if (privacyCapability === "unsupported") {
+        throw new Error("This Ready version does not report STRK20 Wallet API support. Update it and reconnect.");
+      }
+      if (privacyCapability === "checking") {
+        throw new Error("Wait for Ready to finish checking the private STRK account.");
       }
 
       const pending: PrivateTransaction = { kind, stage: "wallet", label };
@@ -334,17 +503,18 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
         throw new Error(message);
       }
     },
-    [address, chainId, confirmTransaction, selectedWallet?.name, walletAccount],
+    [address, chainId, confirmTransaction, privacyCapability, selectedWallet?.name, walletAccount],
   );
 
   const shieldStrk = useCallback(
     async (amount: string) => {
       const atomicAmount = parseStrkAmount(amount);
-      return submitPrivateActions("shield", `${amount} STRK shield`, [
+      const firstUse = privacyCapability === "uninitialized";
+      return submitPrivateActions("shield", firstUse ? `${amount} STRK privacy setup` : `${amount} STRK shield`, [
         { type: "deposit", token: STRK_TOKEN_ADDRESS, amount: num.toHex(atomicAmount) },
       ]);
     },
-    [submitPrivateActions],
+    [privacyCapability, submitPrivateActions],
   );
 
   const runPrivatePayroll = useCallback(
@@ -402,6 +572,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
       })),
     [discoveredWallets],
   );
+  const walletApiVersion = latestVersion(walletApiVersions);
 
   const value: StarknetWalletContextValue = {
     wallets,
@@ -414,7 +585,10 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     networkName,
     isSepolia,
     supportedSpecs,
+    walletApiVersions,
+    walletApiVersion,
     privacyCapability,
+    privacyMessage,
     shieldedBalance,
     isRefreshingBalance,
     transaction,

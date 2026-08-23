@@ -7,8 +7,9 @@ Private Payroll is being built for the STRK20 Private Sprint. Employers can prep
 ## Working human-payroll MVP
 
 - Discover and connect a Starknet Wallet API signer (Ready works today).
-- Read the connected account's STRK20 shielded STRK balance.
-- Shield public STRK into the private treasury from the payroll screen.
+- Detect and display Ready's Wallet API version, then query the shielded STRK token explicitly.
+- Distinguish an unregistered account, zero balance, available balance, unsupported API, and read errors.
+- Initialize a new privacy account with its first 0.01 STRK shield, then refresh after confirmation.
 - Build up to 50 recipient transfers and submit them as one STRK20 wallet request.
 - Track wallet approval, Sepolia confirmation, and the Starkscan receipt.
 - Validate Starknet addresses, amounts, duplicate recipients, network, and treasury coverage before submission.

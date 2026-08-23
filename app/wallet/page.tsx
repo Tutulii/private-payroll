@@ -52,6 +52,17 @@ export default function WalletPage() {
 
   const primaryWallet = wallets[0];
   const identity = user?.email?.address ?? user?.wallet?.address ?? "Privy account";
+  const privacyStatus = {
+    unknown: "—",
+    checking: "Checking…",
+    uninitialized: "Not initialized",
+    zero: "0 STRK",
+    available: "Available",
+    error: "Balance error",
+    unsupported: "API unsupported",
+  }[starknet.privacyCapability];
+  const shieldTransaction = starknet.transaction?.kind === "shield" ? starknet.transaction : null;
+  const shieldBusy = shieldTransaction?.stage === "wallet" || shieldTransaction?.stage === "confirming";
 
   const copyValue = async (value: string, label: string) => {
     await navigator.clipboard?.writeText(value);
@@ -76,6 +87,15 @@ export default function WalletPage() {
       notify("Shielded STRK balance refreshed");
     } catch (balanceError) {
       notify(balanceError instanceof Error ? balanceError.message : "Balance check failed");
+    }
+  };
+
+  const initializePrivacy = async () => {
+    try {
+      const hash = await starknet.shieldStrk("0.01");
+      notify(`0.01 STRK shield submitted · ${hash.slice(0, 10)}…`);
+    } catch (shieldError) {
+      notify(shieldError instanceof Error ? shieldError.message : "Shielding was not completed");
     }
   };
 
@@ -124,10 +144,23 @@ export default function WalletPage() {
             <span><small>Starknet account</small><strong>{starknet.isConnected ? starknet.walletName : "Not connected"}</strong></span>
             <i className={starknet.isConnected ? "identity-light identity-light--live" : "identity-light"} />
           </div>
-          <div className="ready-account-balance"><small>Shielded treasury</small><strong>{formatStrk(starknet.shieldedBalance)} <span>STRK</span></strong><button type="button" disabled={!starknet.isConnected || starknet.isRefreshingBalance} onClick={refreshShieldedBalance}>{starknet.isRefreshingBalance ? <LoaderCircle className="spin" size={14} /> : "Refresh"}</button></div>
+          <div className="ready-account-balance"><small>Shielded treasury</small><strong>{formatStrk(starknet.shieldedBalance)} <span>STRK</span></strong><button type="button" disabled={!starknet.isConnected || starknet.isRefreshingBalance || starknet.privacyCapability === "unsupported"} onClick={refreshShieldedBalance}>{starknet.isRefreshingBalance ? <LoaderCircle className="spin" size={14} /> : "Refresh"}</button></div>
           <div className="ready-account-row"><span>Network</span><strong className={starknet.isSepolia ? "network-good" : "network-warn"}>{starknet.networkName}</strong></div>
-          <div className="ready-account-row"><span>STRK20 API</span><strong>{starknet.privacyCapability === "ready" ? "Available" : starknet.privacyCapability === "unsupported" ? "Needs Ready" : starknet.isConnected ? "Checking…" : "—"}</strong></div>
+          <div className="ready-account-row"><span>Wallet API</span><strong>{starknet.walletApiVersion ? `v${starknet.walletApiVersion}` : starknet.isConnected ? "Not reported" : "—"}</strong></div>
+          <div className="ready-account-row"><span>Private STRK</span><strong className={`privacy-status privacy-status--${starknet.privacyCapability}`}>{privacyStatus}</strong></div>
           <div className="ready-account-row"><span>Address</span><strong>{shortStarknetAddress(starknet.address)}</strong></div>
+          {starknet.isConnected && starknet.privacyMessage && <div className={`ready-inline-note ready-inline-note--${starknet.privacyCapability}`}>{starknet.privacyMessage}</div>}
+          {starknet.isConnected && starknet.isSepolia && (starknet.privacyCapability === "uninitialized" || starknet.privacyCapability === "zero" || starknet.privacyCapability === "error") && (
+            <button type="button" className="ready-privacy-action" disabled={shieldBusy} onClick={initializePrivacy}>
+              {shieldBusy ? <><LoaderCircle className="spin" size={14} /> {shieldTransaction?.stage === "wallet" ? "Approve in Ready" : "Confirming on Sepolia"}</> : <><ShieldCheck size={14} /> {starknet.privacyCapability === "uninitialized" ? "Initialize & shield 0.01 STRK" : starknet.privacyCapability === "error" ? "Try shielding 0.01 STRK" : "Shield 0.01 STRK"}</>}
+            </button>
+          )}
+          {shieldTransaction && (
+            <div className={`ready-shield-status ready-shield-status--${shieldTransaction.stage}`}>
+              <span>{shieldTransaction.stage === "confirmed" ? <Check size={14} /> : shieldTransaction.stage === "failed" ? <X size={14} /> : <LoaderCircle className="spin" size={14} />}{shieldTransaction.stage === "confirmed" ? shieldTransaction.balanceRefreshed ? "Shield confirmed · balance refreshed" : "Shield confirmed · refresh unavailable" : shieldTransaction.stage === "failed" ? "Shield failed" : shieldTransaction.stage === "wallet" ? "Waiting for Ready" : "Shield submitted"}</span>
+              {shieldTransaction.hash && <a href={`${STARKNET_SEPOLIA_EXPLORER}/tx/${shieldTransaction.hash}`} target="_blank" rel="noreferrer">Receipt <ExternalLink size={12} /></a>}
+            </div>
+          )}
           {starknet.address && <div className="ready-account-buttons"><button type="button" onClick={() => copyValue(starknet.address, "Starknet address")}>{copied === starknet.address ? <Check size={14} /> : <Copy size={14} />} Copy</button><a href={`${STARKNET_SEPOLIA_EXPLORER}/contract/${starknet.address}`} target="_blank" rel="noreferrer">Explorer <ExternalLink size={13} /></a></div>}
           {starknet.error && <div className="ready-inline-error">{starknet.error}</div>}
         </div>

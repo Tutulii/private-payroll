@@ -73,6 +73,27 @@ export default function PayrollPage() {
 
   const visibleRuns = filter === "All" ? runs : runs.filter((run) => run.status === filter);
   const busy = starknet.transaction?.stage === "wallet" || starknet.transaction?.stage === "confirming";
+  const privacyChecking = starknet.privacyCapability === "checking";
+  const privacyUnsupported = starknet.privacyCapability === "unsupported";
+  const canRunPayroll = starknet.privacyCapability === "available";
+  const treasuryLabel = starknet.privacyCapability === "uninitialized"
+    ? "Not initialized"
+    : privacyUnsupported
+      ? "API unsupported"
+      : privacyChecking
+        ? "Checking…"
+        : starknet.privacyCapability === "error"
+          ? "Balance unavailable"
+          : `${formatStrk(starknet.shieldedBalance)} STRK shielded`;
+  const treasuryHelp = starknet.privacyCapability === "uninitialized"
+    ? "The first shield registers this account and funds its private treasury."
+    : privacyUnsupported
+      ? "Update Ready to a STRK20-compatible Wallet API, then reconnect."
+      : starknet.privacyCapability === "zero"
+        ? "The private account is ready. Shield public STRK to fund it."
+        : starknet.privacyCapability === "error"
+          ? "The balance read failed, but you can retry it by shielding a small amount."
+          : "Shield public STRK before it can be sent privately.";
   const payrollTotal = useMemo(() => {
     try {
       return recipients.reduce((total, recipient) => total + parseStrkAmount(recipient.amount), 0n);
@@ -146,7 +167,7 @@ export default function PayrollPage() {
 
             <div className={`runner-step ${starknet.isConnected && starknet.isSepolia ? "runner-step--active" : ""}`}>
               <span className="runner-step-number">2</span>
-              <div><small>FUND PRIVATE TREASURY</small><strong>{formatStrk(starknet.shieldedBalance)} STRK shielded</strong><p>Shield public STRK before it can be sent privately.</p><label className="amount-field"><span>Amount</span><input inputMode="decimal" value={shieldAmount} onChange={(event) => setShieldAmount(event.target.value)} aria-label="STRK amount to shield" /><b>STRK</b></label><button type="button" className="button button--soft button--wide" disabled={!starknet.isConnected || !starknet.isSepolia || busy} onClick={shieldTreasury}>{starknet.transaction?.kind === "shield" && busy ? <><LoaderCircle className="spin" size={16} /> {starknet.transaction.stage === "wallet" ? "Approve in Ready" : "Confirming"}</> : <><ShieldCheck size={16} /> Shield treasury</>}</button></div>
+              <div><small>FUND PRIVATE TREASURY</small><strong>{treasuryLabel}</strong><p>{treasuryHelp}</p><label className="amount-field"><span>Amount</span><input inputMode="decimal" value={shieldAmount} onChange={(event) => setShieldAmount(event.target.value)} aria-label="STRK amount to shield" /><b>STRK</b></label><button type="button" className="button button--soft button--wide" disabled={!starknet.isConnected || !starknet.isSepolia || busy || privacyChecking || privacyUnsupported} onClick={shieldTreasury}>{starknet.transaction?.kind === "shield" && busy ? <><LoaderCircle className="spin" size={16} /> {starknet.transaction.stage === "wallet" ? "Approve in Ready" : "Confirming"}</> : <><ShieldCheck size={16} /> {starknet.privacyCapability === "uninitialized" ? "Initialize & shield" : "Shield treasury"}</>}</button></div>
             </div>
 
             <div className="runner-step runner-step--quiet">
@@ -174,7 +195,7 @@ export default function PayrollPage() {
 
             <div className="composer-summary">
               <div><small>Recipients</small><strong>{recipients.length}</strong></div><div><small>Private total</small><strong>{formatStrk(payrollTotal)} STRK</strong></div><div><small>Shielded treasury</small><strong>{formatStrk(starknet.shieldedBalance)} STRK</strong></div>
-              <button type="button" className="button button--ink" disabled={!starknet.isConnected || !starknet.isSepolia || busy || payrollTotal === null} onClick={submitPayroll}>{starknet.transaction?.kind === "payroll" && busy ? <><LoaderCircle className="spin" size={17} /> {starknet.transaction.stage === "wallet" ? "Approve in Ready" : "Confirming on Sepolia"}</> : <>Approve private payroll <ArrowRight size={17} /></>}</button>
+              <button type="button" className="button button--ink" disabled={!starknet.isConnected || !starknet.isSepolia || !canRunPayroll || busy || payrollTotal === null} onClick={submitPayroll}>{starknet.transaction?.kind === "payroll" && busy ? <><LoaderCircle className="spin" size={17} /> {starknet.transaction.stage === "wallet" ? "Approve in Ready" : "Confirming on Sepolia"}</> : <>Approve private payroll <ArrowRight size={17} /></>}</button>
             </div>
 
             {formError && <div className="runner-error"><X size={16} /><span>{formError}</span></div>}

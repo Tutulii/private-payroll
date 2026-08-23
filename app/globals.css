@@ -2982,6 +2982,21 @@ button:focus-visible {
 .ready-account-row > strong { max-width: 205px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace; font-size: 8px; }
 .ready-account-row .network-good { color: #4e7950; font-family: inherit; }
 .ready-account-row .network-warn { color: #a25742; font-family: inherit; }
+.ready-account-row .privacy-status { font-family: inherit; }
+.privacy-status--available, .privacy-status--zero { color: #4e7950; }
+.privacy-status--uninitialized { color: #98712f; }
+.privacy-status--error, .privacy-status--unsupported { color: #a25742; }
+.ready-inline-note { margin-top: 11px; padding: 9px; color: #586d7d; background: var(--blue-soft); border-radius: 8px; font-size: 8px; line-height: 1.45; }
+.ready-inline-note--available, .ready-inline-note--zero { color: #527150; background: var(--green-soft); }
+.ready-inline-note--uninitialized { color: #806729; background: var(--yellow-soft); }
+.ready-inline-note--error, .ready-inline-note--unsupported { color: #954d3d; background: var(--coral-soft); }
+.ready-privacy-action { width: 100%; min-height: 35px; margin-top: 10px; display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--ink); background: var(--yellow); border: 1px solid var(--ink); border-radius: 9px; box-shadow: 2px 2px 0 var(--ink); cursor: pointer; font-size: 8px; font-weight: 850; }
+.ready-privacy-action:disabled { opacity: .6; cursor: wait; }
+.ready-shield-status { margin-top: 9px; padding: 8px 9px; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #526f84; background: var(--blue-soft); border-radius: 8px; font-size: 8px; font-weight: 750; }
+.ready-shield-status > span, .ready-shield-status a { display: inline-flex; align-items: center; gap: 5px; }
+.ready-shield-status a { color: inherit; text-decoration: none; }
+.ready-shield-status--confirmed { color: #4f734e; background: var(--green-soft); }
+.ready-shield-status--failed { color: #934c3f; background: var(--coral-soft); }
 .ready-account-buttons { padding-top: 13px; display: flex; gap: 8px; }
 .ready-account-buttons button, .ready-account-buttons a { min-height: 29px; padding: 0 10px; display: inline-flex; align-items: center; gap: 5px; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; font-size: 8px; font-weight: 800; text-decoration: none; }
 .ready-inline-error { margin-top: 11px; padding: 9px; color: #954d3d; background: var(--coral-soft); border-radius: 8px; font-size: 8px; line-height: 1.45; }
