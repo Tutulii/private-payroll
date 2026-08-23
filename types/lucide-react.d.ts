@@ -28,7 +28,10 @@ declare module "lucide-react" {
   export const Filter: LucideIcon;
   export const KeyRound: LucideIcon;
   export const LayoutDashboard: LucideIcon;
+  export const Link2: LucideIcon;
+  export const LoaderCircle: LucideIcon;
   export const LockKeyhole: LucideIcon;
+  export const LogOut: LucideIcon;
   export const Mail: LucideIcon;
   export const Menu: LucideIcon;
   export const MoreHorizontal: LucideIcon;

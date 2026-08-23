@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   Sparkles,
   Users,
+  WalletCards,
   X,
 } from "lucide-react";
 import Link from "next/link";
@@ -26,6 +27,7 @@ const navItems = [
   { label: "Payroll", icon: Send, href: "/payroll" },
   { label: "People & agents", icon: Users, href: "/team" },
   { label: "Activity", icon: Clock3, href: "/activity" },
+  { label: "Connect wallet", icon: WalletCards, href: "/wallet" },
 ];
 
 const pageTitles: Record<string, { eyebrow: string; title: string }> = {
@@ -33,6 +35,7 @@ const pageTitles: Record<string, { eyebrow: string; title: string }> = {
   "/payroll": { eyebrow: "Payroll workspace", title: "Payday, made private" },
   "/team": { eyebrow: "Your organization", title: "People & agents" },
   "/activity": { eyebrow: "Private records", title: "Activity & receipts" },
+  "/wallet": { eyebrow: "Wallet & identity", title: "Connect your wallet" },
 };
 
 type AppShellContextValue = {

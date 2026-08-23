@@ -21,6 +21,7 @@ The current frontend is a responsive Next.js dashboard for a mixed human and AI-
 - Payroll (`/payroll`) — upcoming payroll review, funding readiness, status filters, payroll history, and schedule.
 - People & Agents (`/team`) — searchable recipient directory, compensation, privacy readiness, and scoped MCP access.
 - Activity (`/activity`) — private audit trail, onchain transaction references, privacy coverage, and selective-disclosure receipts.
+- Connect wallet (`/wallet`) — Privy authentication, supported external-wallet connection, wallet identity, and agent-wallet architecture guidance.
 - An MCP quick-connect surface for agent integrations.
 - An animated payroll review flow.
 
@@ -34,6 +35,18 @@ npm run dev
 ```
 
 Open `http://localhost:3000`.
+
+### Privy configuration
+
+Copy `.env.example` to `.env.local` and add the public Privy App ID:
+
+```bash
+NEXT_PUBLIC_PRIVY_APP_ID=your-privy-app-id
+```
+
+Privy app secrets are server credentials. Never expose one through a `NEXT_PUBLIC_` variable or commit it to the repository. Rotate any secret that has been shared outside a secure secret manager.
+
+Privy’s React external-wallet connector currently covers EVM and Solana wallets. The STRK20 transaction flow will use a Starknet-native signer, while policy-controlled Starknet wallets for AI agents can use Privy’s server APIs in a later backend integration.
 
 ### Verify
 
