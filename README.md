@@ -17,9 +17,10 @@ Private Payroll is being built for the STRK20 Private Sprint. Employers can prep
 
 The current frontend is a responsive Next.js dashboard for a mixed human and AI-agent team. It includes:
 
-- Private treasury and upcoming payroll summaries.
-- Human and AI-agent recipient roster.
-- Recent private payment activity.
+- Overview (`/`) — private treasury, next payday, team, activity, and MCP connection summary.
+- Payroll (`/payroll`) — upcoming payroll review, funding readiness, status filters, payroll history, and schedule.
+- People & Agents (`/team`) — searchable recipient directory, compensation, privacy readiness, and scoped MCP access.
+- Activity (`/activity`) — private audit trail, onchain transaction references, privacy coverage, and selective-disclosure receipts.
 - An MCP quick-connect surface for agent integrations.
 - An animated payroll review flow.
 
