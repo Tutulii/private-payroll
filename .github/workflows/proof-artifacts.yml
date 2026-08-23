@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install pinned Noir
         run: |
           curl -L https://raw.githubusercontent.com/noir-lang/noirup/main/install | bash
@@ -28,6 +28,10 @@ jobs:
           "$HOME/.bb/bbup" -v 3.0.0-nightly.20251104
       - name: Install pinned Garaga
         run: pipx install garaga==1.1.0
+      - name: Install pinned Scarb
+        uses: software-mansion/setup-scarb@v1
+        with:
+          scarb-version: 2.16.1
       - name: Test and build circuit
         working-directory: circuits/payroll_integrity
         run: |

@@ -31,14 +31,26 @@ import {
 } from "../starknet/starknet-wallet";
 import { useAppShell } from "../ui/app-shell";
 
+const privyAppId = process.env.NEXT_PUBLIC_PRIVY_APP_ID;
+
+type PrivyWalletState = {
+  configured: boolean;
+  ready: boolean;
+  authenticated: boolean;
+  identity: string;
+  wallets: Array<{ address: string }>;
+  walletsReady: boolean;
+  login: () => void;
+  connectExternalWallet: () => void;
+};
+
 function shortAddress(address?: string) {
   if (!address) return "Not connected";
   return `${address.slice(0, 7)}…${address.slice(-5)}`;
 }
 
-export default function WalletPage() {
+function PrivyWalletPage() {
   const { notify } = useAppShell();
-  const starknet = useStarknetWallet();
   const { ready, authenticated, user } = usePrivy();
   const { login } = useLogin({
     onComplete: () => notify("Signed in with Privy"),
@@ -49,11 +61,40 @@ export default function WalletPage() {
     onSuccess: ({ wallet }) => notify(`Connected ${shortAddress(wallet.address)}`),
     onError: () => notify("Wallet connection was not completed"),
   });
+  return <WalletPageView privy={{
+    configured: true,
+    ready,
+    authenticated,
+    identity: user?.email?.address ?? user?.wallet?.address ?? "Privy account",
+    wallets,
+    walletsReady,
+    login,
+    connectExternalWallet: () => {
+      connectWallet({
+        description: "Connect a wallet to your private payroll account",
+        walletChainType: "ethereum-only",
+      });
+    },
+  }} />;
+}
+
+function WalletPageView({ privy }: { privy: PrivyWalletState }) {
+  const { notify } = useAppShell();
+  const starknet = useStarknetWallet();
+  const {
+    configured,
+    ready,
+    authenticated,
+    identity,
+    wallets,
+    walletsReady,
+    login,
+    connectExternalWallet,
+  } = privy;
   const [copied, setCopied] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const primaryWallet = wallets[0];
-  const identity = user?.email?.address ?? user?.wallet?.address ?? "Privy account";
   const privacyStatus = {
     unknown: "—",
     checking: "Checking…",
@@ -175,12 +216,14 @@ export default function WalletPage() {
           <div className="connection-state"><span className={authenticated ? "connection-dot connection-dot--live" : "connection-dot"} />{authenticated ? "PRIVY IDENTITY CONNECTED" : "OPTIONAL IDENTITY LAYER"}</div>
           <h3>{authenticated ? "Your identity is connected." : "One friendly sign-in."}</h3>
           <p>{authenticated ? "Privy handles your Payo identity. Your Ready wallet remains the signer for all STRK20 payroll transactions." : "Use a wallet or email to create your Payo identity. This is separate from the Ready payroll signer above."}</p>
-          {!ready ? (
+          {!configured ? (
+            <button type="button" className="button button--ink" disabled>Privy not configured</button>
+          ) : !ready ? (
             <button type="button" className="button button--ink" disabled><LoaderCircle className="spin" size={17} /> Waking up Privy</button>
           ) : !authenticated ? (
             <button type="button" className="button button--ink" onClick={() => login()}>Connect with Privy <ArrowRight size={17} /></button>
           ) : !primaryWallet ? (
-            <button type="button" className="button button--ink" disabled={!walletsReady} onClick={() => connectWallet({ description: "Connect a wallet to your private payroll account", walletChainType: "ethereum-only" })}>
+            <button type="button" className="button button--ink" disabled={!walletsReady} onClick={connectExternalWallet}>
               <Plus size={17} /> Connect external wallet
             </button>
           ) : (
@@ -213,8 +256,8 @@ export default function WalletPage() {
 
       <section className="wallet-content-grid reveal reveal--four">
         <div className="wallet-list-card">
-          <div className="wallet-section-title"><div><span className="label">CONNECTED ACCOUNTS</span><h3>Your wallets</h3></div>{authenticated && <button type="button" className="circle-add" aria-label="Connect another wallet" onClick={() => connectWallet({ description: "Add another wallet to Payo", walletChainType: "ethereum-only" })}><Plus size={18} /></button>}</div>
-          {!ready || !walletsReady ? (
+          <div className="wallet-section-title"><div><span className="label">CONNECTED ACCOUNTS</span><h3>Your wallets</h3></div>{authenticated && <button type="button" className="circle-add" aria-label="Connect another wallet" onClick={connectExternalWallet}><Plus size={18} /></button>}</div>
+          {configured && (!ready || !walletsReady) ? (
             <div className="wallet-empty"><LoaderCircle className="spin" size={24} /><strong>Checking your wallets…</strong></div>
           ) : wallets.length > 0 ? (
             <div className="connected-wallets">
@@ -232,7 +275,7 @@ export default function WalletPage() {
               <span className="wallet-empty__icon"><Link2 size={23} /></span>
               <strong>No external wallet yet</strong>
               <p>Sign in, then connect a supported wallet to make it available to Payo.</p>
-              <button type="button" className="button button--soft" disabled={!authenticated} onClick={() => connectWallet({ description: "Connect a wallet to Payo", walletChainType: "ethereum-only" })}>Connect wallet</button>
+              <button type="button" className="button button--soft" disabled={!authenticated} onClick={connectExternalWallet}>Connect wallet</button>
             </div>
           )}
         </div>
@@ -281,4 +324,18 @@ export default function WalletPage() {
       )}
     </div>
   );
+}
+
+export default function WalletPage() {
+  if (privyAppId) return <PrivyWalletPage />;
+  return <WalletPageView privy={{
+    configured: false,
+    ready: true,
+    authenticated: false,
+    identity: "Privy not configured",
+    wallets: [],
+    walletsReady: true,
+    login: () => undefined,
+    connectExternalWallet: () => undefined,
+  }} />;
 }
