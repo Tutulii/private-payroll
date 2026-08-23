@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
   buildFixedMerkleRoot,
@@ -12,6 +12,7 @@ import {
   splitHashToU128,
 } from "../lib/crypto/commitments";
 import { toHex } from "../lib/crypto/encoding";
+import { encryptVaultRecord, generateVaultPrincipal } from "../lib/crypto/vault";
 import { buildFxSnapshot, fxSnapshotCommitment, toCircuitFxSnapshot } from "../lib/domain/fx";
 import { calculatePayrollLine } from "../lib/domain/payroll";
 import { compilePolicyPack, policyPackCommitment } from "../lib/policy/engine";
@@ -251,6 +252,28 @@ const output = `${Object.entries(prover).map(([key, value]) => `${key} = ${toml(
 const outputPath = resolve(process.cwd(), process.argv[2] ?? "circuits/payroll_integrity/Prover.toml");
 async function writeProofInput() {
   await writeFile(outputPath, output, { encoding: "utf8", mode: 0o600 });
+  if (process.env.PAYO_WRITE_BROWSER_PROOF_FIXTURE === "true") {
+    const fixtureDirectory = resolve(process.cwd(), "public/fixtures");
+    const fixturePath = resolve(fixtureDirectory, "encrypted-payroll-witness-v1.json");
+    const principal = generateVaultPrincipal("phase1-browser-prover");
+    const encryptedWitness = encryptVaultRecord(
+      { circuitInput: prover },
+      {
+        schemaVersion: 1,
+        organizationId: "phase1-proof-organization",
+        recordType: "payroll-proof-witness",
+        recordId: "phase1-browser-proof-witness",
+        revision: 1,
+      },
+      [principal],
+    );
+    await mkdir(fixtureDirectory, { recursive: true });
+    await writeFile(
+      fixturePath,
+      JSON.stringify({ syntheticFixture: true, principal, encryptedWitness }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+  }
   console.log(JSON.stringify({
     outputPath,
     publicInputs: {

@@ -9,3 +9,4 @@ target/
 .snfoundry_cache/
 .DS_Store
 circuits/payroll_integrity/Prover.toml
+public/fixtures/encrypted-payroll-witness-v1.json

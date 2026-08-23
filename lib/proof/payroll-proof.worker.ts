@@ -53,17 +53,19 @@ scope.addEventListener("message", async (event: MessageEvent<ProofWorkerRequest>
   }
 
   let backend: UltraHonkBackend | undefined;
+  let witnessToErase: Uint8Array | undefined;
   const startedAt = performance.now();
   try {
     const circuit = JSON.parse(circuitText) as CompiledCircuit;
     const noir = new Noir(circuit);
     progress(requestId, "executing");
     const { witness } = await noir.execute(encryptedPayload.circuitInput);
+    witnessToErase = witness;
     // Drop the only plaintext object reference before the expensive prover starts.
     encryptedPayload = { circuitInput: {} };
     progress(requestId, "proving");
     backend = new UltraHonkBackend(circuit.bytecode, {
-      threads: Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1)),
+      threads: crossOriginIsolated ? Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1)) : 1,
     });
     const proofData = await backend.generateProof(witness, { keccakZK: true });
     witness.fill(0);
@@ -86,6 +88,7 @@ scope.addEventListener("message", async (event: MessageEvent<ProofWorkerRequest>
   } catch {
     scope.postMessage(safeProofFailure(requestId, "PROVING_FAILED"));
   } finally {
+    witnessToErase?.fill(0);
     encryptedPayload = { circuitInput: {} };
     circuitText = "";
     await backend?.destroy();

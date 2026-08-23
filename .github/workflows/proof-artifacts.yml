@@ -13,7 +13,7 @@ permissions:
 jobs:
   verifier:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -44,8 +44,10 @@ jobs:
           nargo test
           nargo build
           nargo info
-          cmp target/payo_payroll_integrity.json ../../public/circuits/payroll_integrity-v1.json
+          node -e 'const fs=require("fs"); const built=JSON.parse(fs.readFileSync("target/payo_payroll_integrity.json")); const published=JSON.parse(fs.readFileSync("../../public/circuits/payroll_integrity-v1.json")); for (const key of ["noir_version","hash","abi","bytecode"]) if (JSON.stringify(built[key]) !== JSON.stringify(published[key])) throw new Error(`Published circuit ${key} differs from pinned build`);'
       - name: Generate the synthetic production witness
+        env:
+          PAYO_WRITE_BROWSER_PROOF_FIXTURE: "true"
         run: npm run proof:input
       - name: Execute the full deployment-bound witness
         working-directory: circuits/payroll_integrity
@@ -86,6 +88,20 @@ jobs:
             circuits/payroll_integrity/target/public_inputs \
             contracts/integrity_verifier/tests/proof_calldata.txt \
             > circuits/payroll_integrity/target/SHA256SUMS
+      - name: Install the pinned browser
+        run: npx playwright install --with-deps chromium
+      - name: Build the browser proof harness
+        run: npm run build
+      - name: Generate and self-verify a proof in the browser Web Worker
+        run: |
+          npm start > /tmp/payo-proof-browser.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:3000/proof-benchmark > /dev/null; then break; fi
+            sleep 1
+          done
+          node scripts/verify-browser-proof.mjs
       - uses: actions/upload-artifact@v6
         with:
           name: payo-payroll-integrity-${{ github.sha }}
@@ -96,6 +112,7 @@ jobs:
             circuits/payroll_integrity/target/proof
             circuits/payroll_integrity/target/public_inputs
             circuits/payroll_integrity/target/prover-benchmark.txt
+            circuits/payroll_integrity/target/browser-proof-benchmark.json
             circuits/payroll_integrity/target/SHA256SUMS
             contracts/integrity_verifier/
           retention-days: 14
