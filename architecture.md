@@ -178,16 +178,14 @@ Hash values crossing into Cairo are represented as two big-endian `u128` limbs. 
 
 ### Public inputs
 
-The currently compiled `v1-core` circuit exposes:
+The deployment-bound `v1` circuit exposes exactly 16 fields:
 
-- chain ID and Payroll Seal address;
-- proof version;
-- agreement Merkle root;
-- payroll-manifest Merkle root;
-- run nullifier;
-- validity start and expiry.
+- chain ID, Payroll Seal address, proof version, and schema version;
+- authoritative agreement, payroll-manifest, policy-catalog, and FX-snapshot roots, each as two big-endian `u128` limbs;
+- a circuit-derived run nullifier as two limbs; and
+- validity start and expiry, with a maximum one-hour window.
 
-The deployment-bound `v1` composition must additionally expose the schema version, policy-catalog root, and FX-snapshot root and verify their private membership paths. `v1-core` must not be deployed or described as statutory certification before that composition and its generated verifier are complete.
+The agreement root is not a list of opaque IDs. Each leaf canonically commits the agreement ID commitment, recipient commitment, earnings components, token, compiled policy commitment, schedule, due/expiry timestamps, classification inputs, final-pay requirements, FX floor/currency, and a random agreement salt. The circuit recomputes these leaves and requires each due payroll line to equal its authoritative private terms.
 
 ### Private witness
 
@@ -243,12 +241,19 @@ The STRK20 pool calls `privacy_invoke`. The contract accepts a mode and proof pa
 privacy_invoke(
   mode,
   proof_version,
-  run_nullifier_low,
-  run_nullifier_high,
-  manifest_root_low,
+  schema_version,
+  agreement_root_high,
+  agreement_root_low,
   manifest_root_high,
-  policy_root_low,
+  manifest_root_low,
   policy_root_high,
+  policy_root_low,
+  fx_root_high,
+  fx_root_low,
+  run_nullifier_high,
+  run_nullifier_low,
+  validity_start,
+  validity_expiry,
   proof_or_hash[]
 )
 ```

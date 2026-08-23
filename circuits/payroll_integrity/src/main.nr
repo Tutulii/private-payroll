@@ -9,6 +9,7 @@ global MAX_POLICIES: u32 = 4;
 global MAX_FX_SNAPSHOTS: u32 = 2;
 global CATALOG_DEPTH: u32 = 6;
 global BPS_DENOMINATOR: u128 = 10000;
+global MAX_VALIDITY_WINDOW_SECONDS: u64 = 3600;
 
 global EMPTY_LEAF: [u8; 32] = [
     124, 184, 142, 24, 181, 228, 45, 54, 9, 124, 167, 114, 226, 92, 164, 141, 83, 79, 196, 30, 45,
@@ -366,6 +367,7 @@ fn hash_agreement_terms(agreement: AgreementWitness) -> [u8; 32] {
 }
 
 fn evaluate_policy(program: PolicyProgram, gross: u128, earnings: [u128; MAX_COMPONENTS]) -> u128 {
+    assert(program.metadata_commitment != ZERO_BYTES, "policy metadata commitment is zero");
     assert(program.instruction_count > 0, "empty policy program");
     assert(program.instruction_count <= MAX_POLICY_STEPS, "policy program too long");
     assert((program.output_register as u32) < program.instruction_count, "invalid policy output");
@@ -676,6 +678,7 @@ fn validate_active_line(
     assert(snapshot.minimum_source_count > 0, "minimum FX sources is zero");
     assert(snapshot.source_count >= snapshot.minimum_source_count, "insufficient FX sources");
     assert(snapshot.observed_at <= validity_start, "FX snapshot is from the future");
+    assert(snapshot.maximum_age_seconds > 0, "maximum FX age is zero");
     assert(
         validity_start - snapshot.observed_at <= snapshot.maximum_age_seconds,
         "FX snapshot is stale",
@@ -829,6 +832,12 @@ fn main(
     assert(proof_version == 1, "unsupported proof version");
     assert(schema_version == 1, "unsupported schema version");
     assert(validity_expiry >= validity_start, "invalid proof validity window");
+    assert(
+        validity_expiry - validity_start <= MAX_VALIDITY_WINDOW_SECONDS,
+        "proof validity window is too long",
+    );
+    assert(organization_secret != ZERO_BYTES, "organization secret is zero");
+    assert(revision > 0, "revision is zero");
 
     let expected_nullifier =
         derive_run_nullifier_v1(organization_secret, cycle_id, cycle_id_len, revision);
@@ -1320,6 +1329,131 @@ fn rejects_recipient_not_bound_to_agreement() {
     );
 }
 
+#[test(should_fail_with = "earnings do not match agreement")]
+fn rejects_earnings_not_bound_to_agreement() {
+    let mut line = valid_line();
+    line.earnings[0] = 101;
+    let policy = valid_program();
+    let _ = validate_active_line(
+        line,
+        valid_agreement(),
+        policy,
+        hash_policy_program(policy),
+        valid_snapshot(),
+        100,
+    );
+}
+
+#[test(should_fail_with = "deductions exceed gross")]
+fn rejects_deductions_above_gross() {
+    let mut line = valid_line();
+    line.deductions[0] = 101;
+    let policy = valid_program();
+    let _ = validate_active_line(
+        line,
+        valid_agreement(),
+        policy,
+        hash_policy_program(policy),
+        valid_snapshot(),
+        100,
+    );
+}
+
+#[test]
+fn validates_contractor_classification_branch() {
+    let mut line = valid_line();
+    line.classification_declared = 2;
+    line.classification_treatment = 2;
+    line.classification_score = 2;
+    let mut agreement = valid_agreement();
+    agreement.classification_declared = 2;
+    agreement.classification_score = 2;
+    let policy = valid_program();
+    let leaf = validate_active_line(
+        line,
+        agreement,
+        policy,
+        hash_policy_program(policy),
+        valid_snapshot(),
+        100,
+    );
+    assert(leaf != ZERO_BYTES);
+}
+
+#[test]
+fn validates_complete_final_pay_components() {
+    let mut line = valid_line();
+    line.final_pay_mode = true;
+    line.final_required_mask = 3;
+    line.final_included_mask = 3;
+    line.final_components[0] = 70;
+    line.final_components[1] = 30;
+    let mut agreement = valid_agreement();
+    agreement.final_pay_mode = true;
+    agreement.final_required_mask = 3;
+    agreement.final_components[0] = 70;
+    agreement.final_components[1] = 30;
+    let policy = valid_program();
+    let leaf = validate_active_line(
+        line,
+        agreement,
+        policy,
+        hash_policy_program(policy),
+        valid_snapshot(),
+        100,
+    );
+    assert(leaf != ZERO_BYTES);
+}
+
+#[test]
+fn fx_conversion_uses_canonical_floor_rounding() {
+    let mut line = valid_line();
+    line.reference_value_atomic = 22;
+    let mut snapshot = valid_snapshot();
+    snapshot.price_numerator = 1;
+    snapshot.price_denominator = 4;
+    let policy = valid_program();
+    let leaf = validate_active_line(
+        line,
+        valid_agreement(),
+        policy,
+        hash_policy_program(policy),
+        snapshot,
+        100,
+    );
+    assert(leaf != ZERO_BYTES);
+}
+
+#[test(should_fail_with = "root high limb mismatch")]
+fn rejects_wrong_policy_catalog_root() {
+    let policy = valid_program();
+    let root = root_from_membership(hash_policy_program(policy), first_catalog_membership());
+    assert_root_limbs(root, 0, low_limb(root));
+}
+
+#[test(should_fail_with = "root low limb mismatch")]
+fn rejects_wrong_fx_catalog_root() {
+    let root = root_from_membership(
+        hash_fx_snapshot(valid_snapshot()),
+        first_catalog_membership(),
+    );
+    assert_root_limbs(root, high_limb(root), 0);
+}
+
+#[test(should_fail_with = "disabled agreement recipient must be zero")]
+fn rejects_noncanonical_agreement_padding() {
+    let mut agreement = empty_agreement();
+    agreement.recipient_commitment = [1; 32];
+    assert_disabled_agreement(agreement);
+}
+
+#[test(should_fail_with = "inactive token must be zero")]
+fn rejects_noncanonical_line_padding() {
+    let mut line = empty_line();
+    line.token = 1;
+    assert_inactive_line(line);
+}
+
 #[test]
 fn validates_committed_policy_fx_and_line() {
     let line = valid_line();
@@ -1420,6 +1554,7 @@ fn rejects_policy_deduction_mismatch() {
 #[test(should_fail_with = "policy subtraction underflow")]
 fn rejects_policy_underflow() {
     let mut program = empty_program();
+    program.metadata_commitment = [1; 32];
     program.instruction_count = 3;
     program.opcodes[0] = 1;
     program.immediate[0] = 1;

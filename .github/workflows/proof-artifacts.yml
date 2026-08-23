@@ -38,6 +38,13 @@ jobs:
         with:
           scarb-version: 2.16.1
           cache: false
+      - name: Reserve prover swap
+        run: |
+          sudo fallocate -l 10G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
       - name: Test and build circuit
         working-directory: circuits/payroll_integrity
         run: |
@@ -55,12 +62,15 @@ jobs:
       - name: Generate verification key
         working-directory: circuits/payroll_integrity
         env:
-          HARDWARE_CONCURRENCY: "2"
-        run: bb write_vk --scheme ultra_honk --oracle_hash keccak -b target/payo_payroll_integrity.json -o target
+          HARDWARE_CONCURRENCY: "1"
+        run: |
+          /usr/bin/time -v -o target/vk-benchmark.txt \
+            bb write_vk --scheme ultra_honk --oracle_hash keccak \
+              -b target/payo_payroll_integrity.json -o target
       - name: Generate and verify the zero-knowledge proof
         working-directory: circuits/payroll_integrity
         env:
-          HARDWARE_CONCURRENCY: "2"
+          HARDWARE_CONCURRENCY: "1"
         run: |
           /usr/bin/time -v -o target/prover-benchmark.txt \
             bb prove --scheme ultra_honk --oracle_hash keccak --zk \
@@ -111,6 +121,7 @@ jobs:
             circuits/payroll_integrity/target/vk
             circuits/payroll_integrity/target/proof
             circuits/payroll_integrity/target/public_inputs
+            circuits/payroll_integrity/target/vk-benchmark.txt
             circuits/payroll_integrity/target/prover-benchmark.txt
             circuits/payroll_integrity/target/browser-proof-benchmark.json
             circuits/payroll_integrity/target/SHA256SUMS
