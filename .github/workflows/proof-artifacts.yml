@@ -40,10 +40,11 @@ jobs:
           cache: false
       - name: Reserve prover swap
         run: |
-          sudo fallocate -l 10G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          swapon --show
+          sudo fallocate -l 10G /mnt/payo-prover.swap
+          sudo chmod 600 /mnt/payo-prover.swap
+          sudo mkswap /mnt/payo-prover.swap
+          sudo swapon /mnt/payo-prover.swap
           free -h
       - name: Test and build circuit
         working-directory: circuits/payroll_integrity
