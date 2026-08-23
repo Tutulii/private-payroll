@@ -22,9 +22,29 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import {
+  emptyTokenBalances,
+  assertPrivacyTokenEnabled,
+  formatTokenAmount,
+  parseTokenAmount,
+  PAYROLL_TOKEN_LIST,
+  PAYROLL_TOKENS,
+  PRIVACY_PAYROLL_TOKEN_LIST,
+  type PayrollTokenSymbol,
+  type TokenBalanceMap,
+} from "./tokens";
 
-export const STRK_TOKEN_ADDRESS =
-  "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d";
+export {
+  formatTokenAmount,
+  parseTokenAmount,
+  PAYROLL_TOKEN_LIST,
+  PAYROLL_TOKENS,
+  PRIVACY_PAYROLL_TOKEN_LIST,
+  STRK_TOKEN_ADDRESS,
+  USDC_TOKEN_ADDRESS,
+  type PayrollTokenSymbol,
+} from "./tokens";
+
 export const STRK20_MAINNET_POOL_ADDRESS =
   "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a";
 export const STRK20_SETUP_URL = "https://strk20.starknet.io/app";
@@ -38,6 +58,7 @@ const mainnetProvider = new RpcProvider({ nodeUrl: starknetRpcUrl });
 export type PayrollRecipient = {
   address: string;
   amount: string;
+  token: PayrollTokenSymbol;
 };
 
 export type WalletChoice = {
@@ -57,6 +78,8 @@ export type PrivateTransaction = {
   netAmount?: bigint;
   balanceRefreshed?: boolean;
   balanceRefreshError?: string;
+  token?: PayrollTokenSymbol;
+  totals?: Partial<Record<PayrollTokenSymbol, bigint>>;
 };
 
 export type PrivacyCapability =
@@ -83,6 +106,8 @@ type StarknetWalletContextValue = {
   walletApiVersion: string;
   privacyCapability: PrivacyCapability;
   privacyMessage: string;
+  shieldedBalances: TokenBalanceMap;
+  publicBalances: TokenBalanceMap;
   shieldedBalance: bigint | null;
   publicStrkBalance: bigint | null;
   isRefreshingPublicBalance: boolean;
@@ -99,6 +124,7 @@ type StarknetWalletContextValue = {
   refreshPublicBalance: () => Promise<bigint>;
   refreshPrivacyFee: () => Promise<bigint>;
   refreshBalance: () => Promise<void>;
+  shieldToken: (token: PayrollTokenSymbol, amount: string) => Promise<string>;
   shieldStrk: (amount: string) => Promise<string>;
   runPrivatePayroll: (recipients: PayrollRecipient[]) => Promise<string>;
   clearTransaction: () => void;
@@ -194,9 +220,12 @@ async function readMainnetPrivacyFee(): Promise<bigint> {
   return fee;
 }
 
-async function readMainnetPublicStrkBalance(address: string): Promise<bigint> {
+async function readMainnetPublicTokenBalance(
+  tokenAddress: string,
+  address: string,
+): Promise<bigint> {
   const result = await mainnetProvider.callContract({
-    contractAddress: STRK_TOKEN_ADDRESS,
+    contractAddress: tokenAddress,
     entrypoint: "balance_of",
     calldata: [address],
   });
@@ -232,23 +261,11 @@ function latestVersion(versions: string[]) {
 }
 
 export function parseStrkAmount(value: string): bigint {
-  const trimmed = value.trim();
-  if (!/^\d+(\.\d{0,18})?$/.test(trimmed)) {
-    throw new Error("Enter a valid STRK amount with no more than 18 decimals.");
-  }
-
-  const [whole, fraction = ""] = trimmed.split(".");
-  const amount = BigInt(whole) * 10n ** 18n + BigInt(fraction.padEnd(18, "0") || "0");
-  if (amount <= 0n) throw new Error("Amount must be greater than zero.");
-  return amount;
+  return parseTokenAmount(value, "STRK");
 }
 
 export function formatStrk(amount: bigint | null, maximumFractionDigits = 6) {
-  if (amount === null) return "—";
-  const whole = amount / 10n ** 18n;
-  const rawFraction = (amount % 10n ** 18n).toString().padStart(18, "0");
-  const fraction = rawFraction.slice(0, maximumFractionDigits).replace(/0+$/, "");
-  return fraction ? `${whole}.${fraction}` : whole.toString();
+  return formatTokenAmount(amount, "STRK", maximumFractionDigits);
 }
 
 export function shortStarknetAddress(address: string) {
@@ -268,6 +285,8 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
   const [isConnecting, setIsConnecting] = useState(false);
   const [shieldedBalance, setShieldedBalance] = useState<bigint | null>(null);
   const [publicStrkBalance, setPublicStrkBalance] = useState<bigint | null>(null);
+  const [shieldedBalances, setShieldedBalances] = useState<TokenBalanceMap>(emptyTokenBalances);
+  const [publicBalances, setPublicBalances] = useState<TokenBalanceMap>(emptyTokenBalances);
   const [isRefreshingPublicBalance, setIsRefreshingPublicBalance] = useState(false);
   const [publicBalanceError, setPublicBalanceError] = useState("");
   const [privacyFee, setPrivacyFee] = useState<bigint | null>(null);
@@ -329,12 +348,20 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     setIsRefreshingPublicBalance(true);
     setPublicBalanceError("");
     try {
-      const balance = await readMainnetPublicStrkBalance(walletAddress);
-      setPublicStrkBalance(balance);
-      return balance;
+      const entries = await Promise.all(
+        PAYROLL_TOKEN_LIST.map(async (token) => {
+          const balance = await readMainnetPublicTokenBalance(token.address, walletAddress);
+          return [token.symbol, balance] as const;
+        }),
+      );
+      const balances = Object.fromEntries(entries) as Record<PayrollTokenSymbol, bigint>;
+      setPublicBalances(balances);
+      setPublicStrkBalance(balances.STRK);
+      return balances;
     } catch (balanceError) {
       const message = describeError(balanceError);
       setPublicStrkBalance(null);
+      setPublicBalances(emptyTokenBalances());
       setPublicBalanceError(message);
       throw new Error(message);
     } finally {
@@ -352,7 +379,9 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     setSupportedSpecs([]);
     setWalletApiVersions([]);
     setShieldedBalance(null);
+    setShieldedBalances(emptyTokenBalances());
     setPublicStrkBalance(null);
+    setPublicBalances(emptyTokenBalances());
     setPublicBalanceError("");
     setPrivacyCapability("unknown");
     setPrivacyMessage("");
@@ -365,7 +394,8 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     if (chainId !== STARKNET_MAINNET_CHAIN_ID) {
       throw new Error("Switch Ready to Starknet Mainnet first.");
     }
-    return refreshPublicBalanceForAddress(address);
+    const balances = await refreshPublicBalanceForAddress(address);
+    return balances.STRK;
   }, [address, chainId, refreshPublicBalanceForAddress]);
 
   useEffect(() => {
@@ -381,25 +411,34 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     setPrivacyCapability("checking");
     setPrivacyMessage("");
     try {
-      const balances = await account.strk20Balances([STRK_TOKEN_ADDRESS]);
-      const strkEntry = balances.find((entry) => {
-        try {
-          return num.toBigInt(entry.token) === num.toBigInt(STRK_TOKEN_ADDRESS);
-        } catch {
-          return false;
-        }
-      });
-      const nextBalance = strkEntry ? num.toBigInt(strkEntry.balance) : 0n;
-      setShieldedBalance(nextBalance);
-      setPrivacyCapability(nextBalance > 0n ? "available" : "zero");
+      const balances = await account.strk20Balances(PRIVACY_PAYROLL_TOKEN_LIST.map((token) => token.address));
+      const nextBalances = PRIVACY_PAYROLL_TOKEN_LIST.reduce<Record<PayrollTokenSymbol, bigint>>(
+        (result, token) => {
+          const entry = balances.find((candidate) => {
+            try {
+              return num.toBigInt(candidate.token) === num.toBigInt(token.address);
+            } catch {
+              return false;
+            }
+          });
+          result[token.symbol] = entry ? num.toBigInt(entry.balance) : 0n;
+          return result;
+        },
+        { STRK: 0n, USDC: 0n },
+      );
+      const hasPrivateFunds = Object.values(nextBalances).some((balance) => balance > 0n);
+      setShieldedBalances(nextBalances);
+      setShieldedBalance(nextBalances.STRK);
+      setPrivacyCapability(hasPrivateFunds ? "available" : "zero");
       setPrivacyMessage(
-        nextBalance > 0n
-          ? "Your private STRK treasury is available for payroll."
-          : "Your STRK20 account is ready but its private STRK balance is zero.",
+        hasPrivateFunds
+          ? "Your enabled private treasury balances are available for payroll."
+          : "Your STRK20 account is ready but its private payroll balances are zero.",
       );
     } catch (balanceError) {
       const message = describeError(balanceError);
       setShieldedBalance(null);
+      setShieldedBalances(emptyTokenBalances());
       const poolRegistration = isNotRegisteredError(balanceError)
         ? false
         : await readMainnetPoolRegistration(account.address);
@@ -487,6 +526,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
               void refreshPublicBalanceForAddress(balanceAddress).catch(() => undefined);
             } else {
               setPublicStrkBalance(null);
+              setPublicBalances(emptyTokenBalances());
             }
           });
         });
@@ -506,6 +546,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
         if (!isPrivacyWallet || reportsUnsupportedApi) {
           const detectedApiVersion = latestVersion(apiVersions);
           setShieldedBalance(null);
+          setShieldedBalances(emptyTokenBalances());
           setPrivacyCapability("unsupported");
           setPrivacyMessage(
             !isPrivacyWallet
@@ -624,7 +665,10 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
       kind: "shield" | "payroll",
       label: string,
       actions: STRK20_ACTION[],
-      details: Pick<PrivateTransaction, "grossAmount" | "privacyFee" | "netAmount"> = {},
+      details: Pick<
+        PrivateTransaction,
+        "grossAmount" | "privacyFee" | "netAmount" | "token" | "totals"
+      > = {},
     ) => {
       if (!walletAccount || !address) throw new Error("Connect Ready wallet first.");
       if (chainId !== STARKNET_MAINNET_CHAIN_ID) {
@@ -675,6 +719,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
           : describeError(transactionError);
         if (notRegistered) {
           setShieldedBalance(null);
+          setShieldedBalances(emptyTokenBalances());
           setPrivacyCapability("uninitialized");
           setPrivacyMessage(
             "This account is not registered in the STRK20 pool. Ready Wallet API 0.10.3 cannot register it from a dapp; complete the one-time STRK20 setup, then refresh.",
@@ -688,32 +733,50 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     [address, chainId, confirmTransaction, privacyCapability, selectedWallet?.name, walletAccount],
   );
 
-  const shieldStrk = useCallback(
-    async (amount: string) => {
-      const grossAmount = parseStrkAmount(amount);
-      const [currentPrivacyFee, currentPublicBalance] = await Promise.all([
+  const shieldToken = useCallback(
+    async (tokenSymbol: PayrollTokenSymbol, amount: string) => {
+      if (!address) throw new Error("Connect Ready wallet first.");
+      const token = PAYROLL_TOKENS[tokenSymbol];
+      assertPrivacyTokenEnabled(tokenSymbol);
+      const grossAmount = parseTokenAmount(amount, token);
+      const [currentPrivacyFee, currentPublicBalances] = await Promise.all([
         refreshPrivacyFee(),
-        refreshPublicBalance(),
+        refreshPublicBalanceForAddress(address),
       ]);
-      if (grossAmount > currentPublicBalance) {
+      const currentTokenBalance = currentPublicBalances[tokenSymbol];
+      if (grossAmount > currentTokenBalance) {
         throw new Error(
-          `Insufficient public STRK balance. Available ${formatStrk(currentPublicBalance)} STRK; entered ${formatStrk(grossAmount)} STRK.`,
+          `Insufficient public ${token.symbol} balance. Available ${formatTokenAmount(currentTokenBalance, token)} ${token.symbol}; entered ${formatTokenAmount(grossAmount, token)} ${token.symbol}.`,
         );
       }
-      if (grossAmount <= currentPrivacyFee) {
+
+      let netAmount = grossAmount;
+      if (token.feeBehavior === "deduct-from-strk-shield") {
+        if (grossAmount <= currentPrivacyFee) {
+          throw new Error(
+            `Enter more than ${formatStrk(currentPrivacyFee)} STRK to cover the live STRK20 privacy fee.`,
+          );
+        }
+        netAmount = grossAmount - currentPrivacyFee;
+      } else if (currentPublicBalances.STRK < currentPrivacyFee) {
         throw new Error(
-          `Enter more than ${formatStrk(currentPrivacyFee)} STRK to cover the live STRK20 privacy fee.`,
+          `USDC shielding also needs ${formatStrk(currentPrivacyFee)} public STRK for the STRK20 privacy fee. Available ${formatStrk(currentPublicBalances.STRK)} STRK.`,
         );
       }
-      const netAmount = grossAmount - currentPrivacyFee;
+
       return submitPrivateActions(
         "shield",
-        `${formatStrk(netAmount)} STRK shielded`,
-        [{ type: "deposit", token: STRK_TOKEN_ADDRESS, amount: num.toHex(grossAmount) }],
-        { grossAmount, privacyFee: currentPrivacyFee, netAmount },
+        `${formatTokenAmount(netAmount, token)} ${token.symbol} shielded`,
+        [{ type: "deposit", token: token.address, amount: num.toHex(grossAmount) }],
+        { grossAmount, privacyFee: currentPrivacyFee, netAmount, token: token.symbol },
       );
     },
-    [refreshPrivacyFee, refreshPublicBalance, submitPrivateActions],
+    [address, refreshPrivacyFee, refreshPublicBalanceForAddress, submitPrivateActions],
+  );
+
+  const shieldStrk = useCallback(
+    (amount: string) => shieldToken("STRK", amount),
+    [shieldToken],
   );
 
   const runPrivatePayroll = useCallback(
@@ -721,7 +784,8 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
       if (recipients.length === 0) throw new Error("Add at least one recipient.");
       if (recipients.length > 50) throw new Error("A payroll can contain up to 50 recipients.");
 
-      const seenAddresses = new Set<string>();
+      const seenDestinations = new Set<string>();
+      const totals: Record<PayrollTokenSymbol, bigint> = { STRK: 0n, USDC: 0n };
       const actions: STRK20_ACTION[] = recipients.map((recipient, index) => {
         let parsedAddress: string;
         try {
@@ -729,27 +793,52 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
         } catch {
           throw new Error(`Recipient ${index + 1} has an invalid Starknet address.`);
         }
-        if (seenAddresses.has(parsedAddress)) {
-          throw new Error(`Recipient ${index + 1} is duplicated.`);
+        const token = PAYROLL_TOKENS[recipient.token];
+        if (!token) throw new Error(`Recipient ${index + 1} uses an unsupported payroll token.`);
+        assertPrivacyTokenEnabled(recipient.token);
+        const destinationKey = `${parsedAddress}:${token.symbol}`;
+        if (seenDestinations.has(destinationKey)) {
+          throw new Error(`Recipient ${index + 1} duplicates the same address and token.`);
         }
-        seenAddresses.add(parsedAddress);
+        seenDestinations.add(destinationKey);
 
-        const atomicAmount = parseStrkAmount(recipient.amount);
+        const atomicAmount = parseTokenAmount(recipient.amount, token);
+        totals[token.symbol] += atomicAmount;
         return {
           type: "transfer",
-          token: STRK_TOKEN_ADDRESS,
+          token: token.address,
           amount: num.toHex(atomicAmount),
           recipient: parsedAddress,
         };
       });
 
+      for (const token of PAYROLL_TOKEN_LIST) {
+        const balance = shieldedBalances[token.symbol];
+        if (totals[token.symbol] > 0n && (balance === null || totals[token.symbol] > balance)) {
+          throw new Error(
+            `The shielded ${token.symbol} treasury does not cover this payroll. Required ${formatTokenAmount(totals[token.symbol], token)} ${token.symbol}; available ${formatTokenAmount(balance, token)} ${token.symbol}.`,
+          );
+        }
+      }
+
+      const currentPublicBalances = address
+        ? await refreshPublicBalanceForAddress(address)
+        : null;
+      const currentFee = await refreshPrivacyFee();
+      if (!currentPublicBalances || currentPublicBalances.STRK < currentFee) {
+        throw new Error(
+          `Private payroll needs ${formatStrk(currentFee)} public STRK for the STRK20 privacy fee.`,
+        );
+      }
+
       return submitPrivateActions(
         "payroll",
         `${recipients.length} private ${recipients.length === 1 ? "payment" : "payments"}`,
         actions,
+        { totals },
       );
     },
-    [submitPrivateActions],
+    [address, refreshPrivacyFee, refreshPublicBalanceForAddress, shieldedBalances, submitPrivateActions],
   );
 
   const isConnected = Boolean(walletAccount && address);
@@ -788,6 +877,8 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     walletApiVersion,
     privacyCapability,
     privacyMessage,
+    shieldedBalances,
+    publicBalances,
     shieldedBalance,
     publicStrkBalance,
     isRefreshingPublicBalance,
@@ -804,6 +895,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     refreshPublicBalance,
     refreshPrivacyFee,
     refreshBalance,
+    shieldToken,
     shieldStrk,
     runPrivatePayroll,
     clearTransaction: () => setTransaction(null),

@@ -1,0 +1,23 @@
+{
+  "description": "PAYO v1 canonical commitment vector shared by TypeScript, Noir, and Cairo tests",
+  "input": {
+    "agreementId": "agreement-0001",
+    "recipientAddress": "0x123",
+    "token": "USDC",
+    "earningsAtomic": ["1000000", "250000"],
+    "deductionsAtomic": ["100000"],
+    "committedPolicyId": "us-reference-2026",
+    "scheduleCommitment": "0x1111111111111111111111111111111111111111111111111111111111111111",
+    "salt": "0x2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "organizationSecret": "0x3333333333333333333333333333333333333333333333333333333333333333",
+  "cycleId": "2026-08",
+  "revision": 1,
+  "expected": {
+    "leaf": "0xe394b47d5c724e6465a5e1a522d59c20f23aa7873dad33b2cac8b50272212601",
+    "root": "0x55da98eff253e037ce7bf03f8f94b12054798583aba812138ca6624d924f3285",
+    "nullifier": "0x3ede22d5b89481904d24ad09eae7666c741f14346daf50c5832a5b4aad4ab9ca",
+    "rootHighU128": "114119402293665809642259730819980767520",
+    "rootLowU128": "112286127558307344088131582462197183109"
+  }
+}

@@ -1,0 +1,53 @@
+name: PayrollIntegrity artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "circuits/**"
+      - ".github/workflows/proof-artifacts.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verifier:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Noir
+        run: |
+          curl -L https://raw.githubusercontent.com/noir-lang/noirup/main/install | bash
+          echo "$HOME/.nargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.nargo/bin/noirup" -v 1.0.0-beta.16
+      - name: Install pinned Barretenberg
+        run: |
+          curl -L https://raw.githubusercontent.com/AztecProtocol/aztec-packages/refs/heads/next/barretenberg/bbup/install | bash
+          echo "$HOME/.bb" >> "$GITHUB_PATH"
+          "$HOME/.bb/bbup" -v 3.0.0-nightly.20251104
+      - name: Install pinned Garaga
+        run: pipx install garaga==1.1.0
+      - name: Test and build circuit
+        working-directory: circuits/payroll_integrity
+        run: |
+          nargo test
+          nargo build
+          nargo info
+      - name: Generate verification key
+        working-directory: circuits/payroll_integrity
+        env:
+          HARDWARE_CONCURRENCY: "2"
+        run: bb write_vk --scheme ultra_honk --oracle_hash keccak -b target/payo_payroll_integrity.json -o target
+      - name: Generate Starknet verifier
+        working-directory: contracts
+        run: garaga gen --system ultra_keccak_zk_honk --vk ../circuits/payroll_integrity/target/vk --project-name integrity_verifier
+      - uses: actions/upload-artifact@v4
+        with:
+          name: payo-payroll-integrity-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            circuits/payroll_integrity/target/payo_payroll_integrity.json
+            circuits/payroll_integrity/target/vk
+            contracts/integrity_verifier/
+          retention-days: 14

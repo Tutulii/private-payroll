@@ -2975,6 +2975,7 @@ button:focus-visible {
 .ready-account-balance small { display: block; color: var(--muted); font-size: 8px; font-weight: 750; }
 .ready-account-balance strong { margin-top: 5px; display: block; font-family: Georgia, serif; font-size: 28px; letter-spacing: -1px; }
 .ready-account-balance strong span { font-family: inherit; font-size: 11px; letter-spacing: 0; }
+.ready-account-balance strong em { color: var(--muted); font-family: inherit; font-size: 13px; font-style: normal; }
 .ready-account-balance button { position: absolute; right: 0; bottom: 18px; padding: 4px 7px; display: flex; align-items: center; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); cursor: pointer; color: var(--muted); font-size: 7px; font-weight: 800; }
 .ready-account-balance button:disabled { cursor: not-allowed; opacity: .55; }
 .ready-account-row { min-height: 37px; display: flex; justify-content: space-between; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); font-size: 9px; }
@@ -3060,6 +3061,12 @@ button:focus-visible {
 .runner-step > div > strong { margin-top: 5px; display: block; font-size: 11px; }
 .runner-step > div > p { margin: 5px 0 10px; color: var(--muted); font-size: 8px; line-height: 1.5; }
 .runner-step .button { margin-top: 8px; min-height: 37px; font-size: 9px; text-decoration: none; }
+.token-switch { margin: 9px 0 8px; padding: 3px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px; background: rgba(255,255,255,.65); border: 1px solid #d8ca96; border-radius: 10px; }
+.token-switch__item { min-height: 32px; display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 7px; cursor: pointer; font-size: 8px; font-weight: 900; }
+.token-switch__item span { width: 17px; height: 17px; display: grid; place-items: center; color: var(--ink); background: var(--paper); border: 1px solid var(--ink); border-radius: 50%; font-family: Georgia, serif; font-size: 8px; }
+.token-switch__item--active { color: var(--ink); background: var(--white); border-color: var(--ink); box-shadow: 1px 1px 0 var(--ink); }
+.token-switch__item--active span { background: var(--yellow); }
+.token-switch__item:disabled { cursor: not-allowed; opacity: .55; }
 .amount-field { min-height: 42px; padding: 0 10px; display: grid; grid-template-columns: auto 1fr auto; gap: 7px; align-items: center; background: var(--white); border: 1px solid #d8ca96; border-radius: 10px; }
 .amount-field > span { color: var(--muted); font-size: 8px; }
 .amount-field input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; font-size: 11px; font-weight: 800; text-align: right; }
@@ -3095,7 +3102,7 @@ button:focus-visible {
 .recipient-address input { font-family: ui-monospace, monospace; font-size: 8px; }
 .recipient-amount { display: grid; grid-template-columns: 1fr auto; align-items: center; background: var(--paper); border-radius: 8px; }
 .recipient-amount input { padding-right: 3px; background: transparent; text-align: right; }
-.recipient-amount b { padding-right: 8px; font-size: 7px; }
+.recipient-amount select { height: 28px; margin-right: 4px; padding: 0 4px; color: var(--ink); background: var(--white); border: 1px solid var(--line); border-radius: 6px; outline: 0; font-size: 7px; font-weight: 850; }
 .recipient-remove { width: 26px; height: 26px; display: grid; place-items: center; color: var(--muted); background: transparent; border: 0; border-radius: 7px; cursor: pointer; }
 .recipient-remove:hover:not(:disabled) { color: #9c4435; background: var(--coral-soft); }
 .recipient-remove:disabled { opacity: .3; cursor: not-allowed; }

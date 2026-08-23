@@ -23,6 +23,7 @@ import {
 import { useState } from "react";
 import {
   formatStrk,
+  formatTokenAmount,
   shortStarknetAddress,
   STARKNET_MAINNET_EXPLORER,
   STRK20_SETUP_URL,
@@ -57,7 +58,7 @@ export default function WalletPage() {
     unknown: "—",
     checking: "Checking…",
     uninitialized: "Not initialized",
-    zero: "0 STRK",
+    zero: "0 private funds",
     available: "Available",
     error: "Balance error",
     unsupported: "API unsupported",
@@ -84,7 +85,7 @@ export default function WalletPage() {
   const refreshShieldedBalance = async () => {
     try {
       await Promise.all([starknet.refreshBalance(), starknet.refreshPublicBalance()]);
-      notify("Public and shielded STRK balances refreshed");
+      notify("Public and shielded STRK/USDC balances refreshed");
     } catch (balanceError) {
       notify(balanceError instanceof Error ? balanceError.message : "Balance check failed");
     }
@@ -114,7 +115,7 @@ export default function WalletPage() {
           <div className="connection-state"><span className={starknet.isConnected ? "connection-dot connection-dot--live" : "connection-dot"} />{starknet.isConnected ? "STARKNET SIGNER CONNECTED" : "PAYROLL SIGNER"}</div>
           <span className="ready-wordmark">ready<span>.</span></span>
           <h3>{starknet.isConnected ? "Private payments are within reach." : "Connect the wallet that understands privacy."}</h3>
-          <p>{starknet.isConnected ? "Payo can now ask Ready to shield STRK and approve a private payroll batch. You stay in control of every signature." : "STRK20 privacy actions use Starknet’s Wallet API. Ready supports that flow today; a normal EVM connection cannot sign it."}</p>
+          <p>{starknet.isConnected ? "Payo can now ask Ready to shield STRK or USDC and approve a private payroll batch. You stay in control of every signature." : "STRK20 privacy actions use Starknet’s Wallet API. Ready supports that flow today; a normal EVM connection cannot sign it."}</p>
           <div className="ready-wallet-actions">
             {!starknet.isConnected ? (
               <button type="button" className="button button--ink" disabled={!starknet.discoveryReady || starknet.isConnecting} onClick={() => setPickerOpen(true)}>
@@ -125,7 +126,7 @@ export default function WalletPage() {
             ) : (
               <a className="button button--ink" href="/payroll#private-payroll">Prepare private payroll <ArrowRight size={17} /></a>
             )}
-            <span><ShieldCheck size={15} /> Mainnet transaction guard is on · real STRK</span>
+            <span><ShieldCheck size={15} /> Mainnet transaction guard is on · real STRK and USDC</span>
           </div>
         </div>
 
@@ -135,11 +136,12 @@ export default function WalletPage() {
             <span><small>Starknet account</small><strong>{starknet.isConnected ? starknet.walletName : "Not connected"}</strong></span>
             <i className={starknet.isConnected ? "identity-light identity-light--live" : "identity-light"} />
           </div>
-          <div className="ready-account-balance"><small>Shielded treasury</small><strong>{formatStrk(starknet.shieldedBalance)} <span>STRK</span></strong><button type="button" disabled={!starknet.isConnected || starknet.isRefreshingBalance || starknet.privacyCapability === "unsupported"} onClick={refreshShieldedBalance}>{starknet.isRefreshingBalance ? <LoaderCircle className="spin" size={14} /> : "Refresh"}</button></div>
+          <div className="ready-account-balance"><small>Shielded treasury</small><strong>{formatTokenAmount(starknet.shieldedBalances.STRK, "STRK")} <span>STRK</span><em> · </em>{formatTokenAmount(starknet.shieldedBalances.USDC, "USDC")} <span>USDC</span></strong><button type="button" disabled={!starknet.isConnected || starknet.isRefreshingBalance || starknet.privacyCapability === "unsupported"} onClick={refreshShieldedBalance}>{starknet.isRefreshingBalance ? <LoaderCircle className="spin" size={14} /> : "Refresh"}</button></div>
           <div className="ready-account-row"><span>Network</span><strong className={starknet.isMainnet ? "network-good" : "network-warn"}>{starknet.networkName}</strong></div>
           <div className="ready-account-row"><span>Wallet API</span><strong>{starknet.walletApiVersion ? `v${starknet.walletApiVersion}` : starknet.isConnected ? "Not reported" : "—"}</strong></div>
           <div className="ready-account-row"><span>Public STRK</span><strong>{formatStrk(starknet.publicStrkBalance)} STRK</strong></div>
-          <div className="ready-account-row"><span>Private STRK</span><strong className={`privacy-status privacy-status--${starknet.privacyCapability}`}>{privacyStatus}</strong></div>
+          <div className="ready-account-row"><span>Public USDC</span><strong>{formatTokenAmount(starknet.publicBalances.USDC, "USDC")} USDC</strong></div>
+          <div className="ready-account-row"><span>Private balances</span><strong className={`privacy-status privacy-status--${starknet.privacyCapability}`}>{privacyStatus}</strong></div>
           <div className="ready-account-row"><span>Address</span><strong>{shortStarknetAddress(starknet.address)}</strong></div>
           {starknet.isConnected && starknet.privacyMessage && <div className={`ready-inline-note ready-inline-note--${starknet.privacyCapability}`}>{starknet.privacyMessage}</div>}
           {starknet.isConnected && starknet.isMainnet && starknet.privacyCapability === "uninitialized" && (
@@ -149,7 +151,7 @@ export default function WalletPage() {
           )}
           {starknet.isConnected && starknet.isMainnet && (starknet.privacyCapability === "zero" || starknet.privacyCapability === "available") && (
             <a className="ready-privacy-action" href="/payroll#private-payroll">
-              <ShieldCheck size={14} /> {starknet.privacyCapability === "zero" ? "Create live shield quote" : "Shield more STRK"}
+              <ShieldCheck size={14} /> {starknet.privacyCapability === "zero" ? "Create live shield quote" : "Shield STRK or USDC"}
             </a>
           )}
           {starknet.isConnected && starknet.isMainnet && starknet.privacyCapability === "error" && (
