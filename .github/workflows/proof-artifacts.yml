@@ -16,6 +16,11 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
       - name: Install pinned Noir
         run: |
           curl -L https://raw.githubusercontent.com/noir-lang/noirup/main/install | bash
@@ -39,17 +44,48 @@ jobs:
           nargo test
           nargo build
           nargo info
+          cmp target/payo_payroll_integrity.json ../../public/circuits/payroll_integrity-v1.json
+      - name: Generate the synthetic production witness
+        run: npm run proof:input
+      - name: Execute the full deployment-bound witness
+        working-directory: circuits/payroll_integrity
+        run: nargo execute witness
       - name: Generate verification key
         working-directory: circuits/payroll_integrity
         env:
           HARDWARE_CONCURRENCY: "2"
         run: bb write_vk --scheme ultra_honk --oracle_hash keccak -b target/payo_payroll_integrity.json -o target
+      - name: Generate and verify the zero-knowledge proof
+        working-directory: circuits/payroll_integrity
+        env:
+          HARDWARE_CONCURRENCY: "2"
+        run: |
+          /usr/bin/time -v -o target/prover-benchmark.txt \
+            bb prove --scheme ultra_honk --oracle_hash keccak --zk \
+              -b target/payo_payroll_integrity.json -w target/witness.gz -k target/vk -o target
+          bb verify --scheme ultra_honk --oracle_hash keccak --zk \
+            -k target/vk -p target/proof -i target/public_inputs
       - name: Generate Starknet verifier
         working-directory: contracts
         run: garaga gen --system ultra_keccak_zk_honk --vk ../circuits/payroll_integrity/target/vk --project-name integrity_verifier
       - name: Build generated Starknet verifier
         working-directory: contracts/integrity_verifier
         run: scarb build
+      - name: Generate Starknet proof calldata
+        working-directory: circuits/payroll_integrity
+        run: |
+          garaga calldata --system ultra_keccak_zk_honk \
+            --vk target/vk --proof target/proof --public-inputs target/public_inputs \
+            --format snforge --output-path ../../contracts/integrity_verifier/tests
+      - name: Record reproducible artifact hashes
+        run: |
+          sha256sum \
+            public/circuits/payroll_integrity-v1.json \
+            circuits/payroll_integrity/target/vk \
+            circuits/payroll_integrity/target/proof \
+            circuits/payroll_integrity/target/public_inputs \
+            contracts/integrity_verifier/tests/proof_calldata.txt \
+            > circuits/payroll_integrity/target/SHA256SUMS
       - uses: actions/upload-artifact@v6
         with:
           name: payo-payroll-integrity-${{ github.sha }}
@@ -57,5 +93,9 @@ jobs:
           path: |
             circuits/payroll_integrity/target/payo_payroll_integrity.json
             circuits/payroll_integrity/target/vk
+            circuits/payroll_integrity/target/proof
+            circuits/payroll_integrity/target/public_inputs
+            circuits/payroll_integrity/target/prover-benchmark.txt
+            circuits/payroll_integrity/target/SHA256SUMS
             contracts/integrity_verifier/
           retention-days: 14

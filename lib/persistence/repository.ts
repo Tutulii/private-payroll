@@ -1,6 +1,7 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { SignedCapability } from "@/lib/domain/capability";
 import { hashCapability } from "@/lib/domain/capability";
+import { assertOperationalMetadataSafe } from "@/lib/domain/privacy";
 import type { EncryptedRunCreate, PayrollRunState, ProofPackage } from "@/lib/domain/payroll";
 import { assertPayrollTransition } from "@/lib/domain/payroll";
 import type { AuthenticatedPrincipal } from "@/lib/server/auth";
@@ -20,6 +21,11 @@ type OrganizationRole = "admin" | "operator" | "reviewer";
 
 function eventId(): string {
   return crypto.randomUUID();
+}
+
+function auditMetadata<T extends Record<string, unknown>>(metadata: T): T {
+  assertOperationalMetadataSafe(metadata);
+  return metadata;
 }
 
 export async function requireOrganizationRole(
@@ -68,7 +74,7 @@ export async function createOrganization(input: {
       actorId: input.principal.principalId,
       action: "organization.created",
       subjectId: input.organizationId,
-      metadata: { sessionId: input.principal.sessionId },
+      metadata: auditMetadata({ sessionId: input.principal.sessionId }),
     });
     return organization;
   });
@@ -105,7 +111,7 @@ export async function createEncryptedRun(input: EncryptedRunCreate, principal: A
       actorId: principal.principalId,
       action: "payroll_run.created",
       subjectId: input.id,
-      metadata: { revision: input.revision },
+      metadata: auditMetadata({ revision: input.revision }),
     });
     return run;
   });
@@ -187,7 +193,7 @@ export async function transitionRun(input: {
       actorId: input.principal.principalId,
       action: "payroll_run.transitioned",
       subjectId: input.runId,
-      metadata: { from: existing.state, to: input.state },
+      metadata: auditMetadata({ from: existing.state, to: input.state }),
     });
     return run;
   });
@@ -247,7 +253,7 @@ export async function registerAgentCapability(
       actorId: principal.principalId,
       action: "agent_capability.registered",
       subjectId: capability.id,
-      metadata: { principalId: capability.principalId, capabilityHash: stored.capabilityHash },
+      metadata: auditMetadata({ principalId: capability.principalId, capabilityHash: stored.capabilityHash }),
     });
     return stored;
   });
@@ -292,7 +298,7 @@ export async function revokeAgentCapability(capabilityId: string, principal: Aut
       actorId: principal.principalId,
       action: "agent_capability.revoked",
       subjectId: capabilityId,
-      metadata: { capabilityHash: stored.capabilityHash },
+      metadata: auditMetadata({ capabilityHash: stored.capabilityHash }),
     });
     return revoked;
   });

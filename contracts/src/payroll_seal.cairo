@@ -22,10 +22,15 @@ pub trait IPayoPayrollSeal<TContractState> {
         ref self: TContractState,
         mode: u8,
         proof_version: u32,
+        schema_version: u32,
         agreement_root_high: u128,
         agreement_root_low: u128,
         manifest_root_high: u128,
         manifest_root_low: u128,
+        policy_root_high: u128,
+        policy_root_low: u128,
+        fx_root_high: u128,
+        fx_root_low: u128,
         run_nullifier_high: u128,
         run_nullifier_low: u128,
         validity_start: u64,
@@ -116,10 +121,15 @@ pub mod PayoPayrollSeal {
             ref self: ContractState,
             mode: u8,
             proof_version: u32,
+            schema_version: u32,
             agreement_root_high: u128,
             agreement_root_low: u128,
             manifest_root_high: u128,
             manifest_root_low: u128,
+            policy_root_high: u128,
+            policy_root_low: u128,
+            fx_root_high: u128,
+            fx_root_low: u128,
             run_nullifier_high: u128,
             run_nullifier_low: u128,
             validity_start: u64,
@@ -129,6 +139,7 @@ pub mod PayoPayrollSeal {
             assert(get_caller_address() == self.pool.read(), errors::BAD_POOL);
             assert(mode == MODE_PRECOMMIT, errors::BAD_MODE);
             assert(proof_version == 1, errors::BAD_VERSION);
+            assert(schema_version == 1, errors::BAD_VERSION);
             let now = get_block_info().unbox().block_timestamp;
             assert(validity_start <= now && now <= validity_expiry, errors::BAD_WINDOW);
 
@@ -139,20 +150,26 @@ pub mod PayoPayrollSeal {
             let public_inputs = verifier
                 .verify_ultra_keccak_zk_honk_proof(proof_calldata)
                 .expect(errors::PROOF_FAILED);
+            assert(public_inputs.len() == 16, errors::PUBLIC_INPUTS);
 
             // Public input order is fixed by circuits/payroll_integrity/src/main.nr.
             let seal_address: felt252 = get_contract_address().into();
             assert_public_input(public_inputs, 0, as_u256(self.chain_id.read()));
             assert_public_input(public_inputs, 1, as_u256(seal_address));
             assert_public_input(public_inputs, 2, as_u256(proof_version));
-            assert_public_input(public_inputs, 3, as_u256(agreement_root_high));
-            assert_public_input(public_inputs, 4, as_u256(agreement_root_low));
-            assert_public_input(public_inputs, 5, as_u256(manifest_root_high));
-            assert_public_input(public_inputs, 6, as_u256(manifest_root_low));
-            assert_public_input(public_inputs, 7, as_u256(run_nullifier_high));
-            assert_public_input(public_inputs, 8, as_u256(run_nullifier_low));
-            assert_public_input(public_inputs, 9, as_u256(validity_start));
-            assert_public_input(public_inputs, 10, as_u256(validity_expiry));
+            assert_public_input(public_inputs, 3, as_u256(schema_version));
+            assert_public_input(public_inputs, 4, as_u256(agreement_root_high));
+            assert_public_input(public_inputs, 5, as_u256(agreement_root_low));
+            assert_public_input(public_inputs, 6, as_u256(manifest_root_high));
+            assert_public_input(public_inputs, 7, as_u256(manifest_root_low));
+            assert_public_input(public_inputs, 8, as_u256(policy_root_high));
+            assert_public_input(public_inputs, 9, as_u256(policy_root_low));
+            assert_public_input(public_inputs, 10, as_u256(fx_root_high));
+            assert_public_input(public_inputs, 11, as_u256(fx_root_low));
+            assert_public_input(public_inputs, 12, as_u256(run_nullifier_high));
+            assert_public_input(public_inputs, 13, as_u256(run_nullifier_low));
+            assert_public_input(public_inputs, 14, as_u256(validity_start));
+            assert_public_input(public_inputs, 15, as_u256(validity_expiry));
 
             self.run_status.write(nullifier, STATUS_PROVEN);
             self.emit(PayrollProven {

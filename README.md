@@ -32,7 +32,7 @@ PAYO labels capabilities according to evidence, not intention.
 | Native USDC private payroll | Safety-gated | Full token path exists; UI disabled until live pool compatibility passes |
 | Encrypted persistent payroll vault | Built and tested locally | XChaCha20-Poly1305/X25519 envelopes, authenticated API, PostgreSQL migration |
 | PayrollIntegrity ZK proof core | Built and tested locally | Noir circuit and eight tests; generated Garaga verifier still pending |
-| PAYO payroll-seal contract | Built and tested locally | Cairo build and four Starknet Foundry tests; not deployed |
+| PAYO payroll-seal contract | Built and tested locally | Cairo build and five Starknet Foundry tests; verifier is mocked and contracts are not deployed |
 | Advanced obligation engine | Built and tested locally | Bounded policy DSL, multi-source FX snapshots, schedules, vesting, and offboarding tests |
 | Compliance proof export | Built and tested locally | Balanced journal and verifier-bound ZIP package |
 | MCP policy gateway | Built and tested locally | Signed capabilities and adversarial tests; generic wallet signing is prohibited |
@@ -71,7 +71,7 @@ Mainnet assets have real value. PAYO never requests or stores a recovery phrase,
 
 ## Master implementation roadmap
 
-The source now contains the complete foundation for Phases 0–4, with safety gates where an external dependency or Mainnet evidence is still required. “Built locally” is deliberately different from “deployed.” Garaga verifier generation, live native-USDC compatibility, the policy/oracle membership composition, durable chain indexing, a restricted Starknet session-key signer, and Mainnet evidence remain release work.
+The roadmap below is the target, not a completion claim. The evidence-backed status is tracked in [`docs/implementation-status.json`](./docs/implementation-status.json), and the strict execution and release gates are in [`MASTER_PLAN.md`](./MASTER_PLAN.md). Run `npm run verify:status` for the current count. “Built locally” is deliberately different from “deployed.”
 
 ### Phase 0 — Protocol and safety foundation
 
@@ -187,7 +187,10 @@ npm run typecheck
 npm test
 npm run lint
 npm run build
+npm run verify:status
 ```
+
+`npm run verify:completion` is the release gate. It intentionally fails while any roadmap or architecture requirement lacks integrated code, tests, deployment, or Mainnet evidence.
 
 Database migration:
 

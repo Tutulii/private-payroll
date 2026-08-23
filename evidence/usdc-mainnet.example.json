@@ -1,0 +1,30 @@
+{
+  "evidenceVersion": "payo-usdc-mainnet-v1",
+  "network": "SN_MAIN",
+  "wallet": {
+    "name": "Ready",
+    "walletApiVersion": "0.10.3",
+    "accountAddress": "0xREPLACE"
+  },
+  "token": {
+    "symbol": "USDC",
+    "address": "0x033068f6539f8e6e6b131e6b2b814e6c34a5224bc66947c47dab9dfee93b35fb",
+    "decimals": 6
+  },
+  "poolAddress": "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+  "shield": {
+    "transactionHash": "0xREPLACE",
+    "grossAtomic": "10000"
+  },
+  "privateTransfer": {
+    "transactionHash": "0xREPLACE",
+    "amountAtomic": "5000",
+    "attestation": {
+      "source": "ready_wallet_ui_and_user_confirmation",
+      "asset": "USDC",
+      "recipientRelationship": "cross-account",
+      "publicSettlementProof": "unavailable_by_design"
+    }
+  },
+  "observedAt": "2026-08-24T00:00:00.000Z"
+}

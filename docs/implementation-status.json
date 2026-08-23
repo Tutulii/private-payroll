@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-08-24",
+  "scoring": {
+    "complete": 1,
+    "partial": 0.5,
+    "missing": 0,
+    "blocked": 0
+  },
+  "roadmap": [
+    { "id": "P0-01", "phase": 0, "requirement": "Canonical encrypted schemas and cross-language commitment encoding", "status": "complete", "evidence": ["lib/domain/records.ts", "lib/crypto/vault.ts", "lib/crypto/commitments.ts", "circuits/payroll_integrity/src/main.nr", "contracts/src/commitments.cairo", "vectors/commitments-v1.json"], "tests": ["lib/domain/records.test.ts", "lib/crypto/vault.test.ts", "lib/crypto/commitments.test.ts", "nargo test", "snforge test"] },
+    { "id": "P0-02", "phase": 0, "requirement": "Roadmap and full architecture specification", "status": "complete", "evidence": ["README.md", "architecture.md", "MASTER_PLAN.md"], "tests": ["manual documentation audit"] },
+    { "id": "P0-03", "phase": 0, "requirement": "Pinned Starknet, Scarb, Noir, Barretenberg, and Garaga toolchains", "status": "complete", "evidence": ["toolchains.lock.json", "package.json", "package-lock.json", "contracts/Scarb.toml", ".github/workflows/proof-artifacts.yml"], "tests": ["npm ci", "scarb build", "nargo build"] },
+    { "id": "P0-04", "phase": 0, "requirement": "Explicit visible-versus-hidden privacy model", "status": "complete", "evidence": ["README.md", "architecture.md", "lib/domain/privacy.ts", "lib/persistence/repository.ts"], "tests": ["lib/domain/privacy.test.ts", "manual documentation audit"] },
+    { "id": "P0-05", "phase": 0, "requirement": "Native Circle USDC verified against Ready and live STRK20 pool before enablement", "status": "complete", "evidence": ["app/starknet/tokens.ts", "evidence/usdc-mainnet.json", "docs/usdc-mainnet-evidence.md", "scripts/verify-usdc-mainnet.mjs"], "tests": ["scripts/lib/usdc-evidence.test.mjs", "npm run verify:usdc"] },
+
+    { "id": "P1-01", "phase": 1, "requirement": "Fixed 64-leaf Noir circuit with at most 50 real recipients", "status": "complete", "evidence": ["circuits/payroll_integrity/src/main.nr"], "tests": ["nargo test", "nargo build"] },
+    { "id": "P1-02", "phase": 1, "requirement": "Completeness, uniqueness, arithmetic, policy, FX, schedule, and final-pay proofs", "status": "partial", "evidence": ["circuits/payroll_integrity/src/main.nr"], "tests": ["nargo test"] },
+    { "id": "P1-03", "phase": 1, "requirement": "Version-pinned Garaga verifier", "status": "partial", "evidence": [".github/workflows/proof-artifacts.yml"], "tests": ["GitHub PayrollIntegrity artifacts workflow"] },
+    { "id": "P1-04", "phase": 1, "requirement": "Browser-worker proof generation with minimal public outputs", "status": "missing", "evidence": [], "tests": [] },
+    { "id": "P1-05", "phase": 1, "requirement": "US and UK reference policy packs", "status": "missing", "evidence": ["lib/policy/engine.ts"], "tests": [] },
+
+    { "id": "P2-01", "phase": 2, "requirement": "STRK and native USDC descriptors with exact decimals", "status": "complete", "evidence": ["app/starknet/tokens.ts"], "tests": ["npm run typecheck"] },
+    { "id": "P2-02", "phase": 2, "requirement": "Single-token and mixed-token payroll batches", "status": "partial", "evidence": ["app/starknet/starknet-wallet.tsx"], "tests": [] },
+    { "id": "P2-03", "phase": 2, "requirement": "Encrypted organizations, agreements, runs, proof bundles, and receipts", "status": "partial", "evidence": ["lib/persistence/schema.ts", "lib/client/payo-client.ts"], "tests": ["lib/client/payo-client.test.ts"] },
+    { "id": "P2-04", "phase": 2, "requirement": "Durable idempotency, confirmation recovery, reorg handling, and indexing", "status": "partial", "evidence": ["lib/persistence/schema.ts", "app/starknet/starknet-wallet.tsx"], "tests": [] },
+    { "id": "P2-05", "phase": 2, "requirement": "Deployed seal, verifier, and policy-registry contracts", "status": "missing", "evidence": ["contracts/src/payroll_seal.cairo", "contracts/src/policy_registry.cairo"], "tests": ["snforge test"] },
+
+    { "id": "P3-01", "phase": 3, "requirement": "StatutoryCorrect proof", "status": "missing", "evidence": ["lib/policy/engine.ts"], "tests": [] },
+    { "id": "P3-02", "phase": 3, "requirement": "FXFloor proof", "status": "partial", "evidence": ["lib/domain/fx.ts", "circuits/payroll_integrity/src/main.nr"], "tests": ["lib/domain/fx.test.ts", "nargo test"] },
+    { "id": "P3-03", "phase": 3, "requirement": "ClassificationConsistency proof", "status": "partial", "evidence": ["circuits/payroll_integrity/src/main.nr"], "tests": ["nargo test"] },
+    { "id": "P3-04", "phase": 3, "requirement": "Batch, recurring, checkpoint stream, milestone, and private vesting plans", "status": "partial", "evidence": ["lib/domain/obligations.ts"], "tests": ["lib/domain/obligations.test.ts"] },
+    { "id": "P3-05", "phase": 3, "requirement": "OffboardingCorrect proof", "status": "partial", "evidence": ["lib/domain/obligations.ts", "circuits/payroll_integrity/src/main.nr"], "tests": ["lib/domain/obligations.test.ts", "nargo test"] },
+    { "id": "P3-06", "phase": 3, "requirement": "Private wage claims and remediation payments", "status": "missing", "evidence": [], "tests": [] },
+    { "id": "P3-07", "phase": 3, "requirement": "Encrypted accounting and auditor proof packages", "status": "partial", "evidence": ["lib/disclosure/export.ts"], "tests": ["lib/disclosure/export.test.ts"] },
+
+    { "id": "P4-01", "phase": 4, "requirement": "Structured MCP payroll tools", "status": "complete", "evidence": ["packages/mcp/src/server.ts"], "tests": ["npm run typecheck"] },
+    { "id": "P4-02", "phase": 4, "requirement": "Encrypted expiring scoped agent capabilities", "status": "partial", "evidence": ["lib/domain/capability.ts", "lib/persistence/schema.ts"], "tests": ["lib/domain/capability.test.ts"] },
+    { "id": "P4-03", "phase": 4, "requirement": "Human approval as default", "status": "partial", "evidence": ["lib/domain/capability.ts", "packages/mcp/src/server.ts"], "tests": ["lib/domain/capability.test.ts"] },
+    { "id": "P4-04", "phase": 4, "requirement": "Bounded structured-intent signing gateway", "status": "missing", "evidence": ["packages/mcp/src/server.ts"], "tests": [] },
+    { "id": "P4-05", "phase": 4, "requirement": "Direct Privacy SDK accounts with local viewing-key control", "status": "missing", "evidence": [], "tests": [] },
+
+    { "id": "P5-01", "phase": 5, "requirement": "Three successful Mainnet transactions touching STRK20 and PAYO contracts", "status": "missing", "evidence": ["strk20.json"], "tests": [] },
+    { "id": "P5-02", "phase": 5, "requirement": "STRK, USDC, and advanced obligation or agent demonstrations", "status": "missing", "evidence": [], "tests": [] },
+    { "id": "P5-03", "phase": 5, "requirement": "Addresses, class hashes, benchmarks, demo URL, and three-minute video", "status": "missing", "evidence": ["strk20.json"], "tests": [] },
+    { "id": "P5-04", "phase": 5, "requirement": "Complete strk20.json and deployment, recovery, security, and limitations runbooks", "status": "missing", "evidence": ["strk20.json"], "tests": [] }
+  ],
+  "architecture": [
+    { "id": "A01", "section": 1, "requirement": "Design principles enforced", "status": "partial", "evidence": ["architecture.md", "lib/crypto/vault.ts"] },
+    { "id": "A02", "section": 2, "requirement": "All system components integrated", "status": "partial", "evidence": ["app", "packages/mcp", "contracts", "circuits"] },
+    { "id": "A03", "section": 3, "requirement": "Trust and leakage boundaries enforced", "status": "partial", "evidence": ["README.md", "architecture.md"] },
+    { "id": "A04", "section": 4, "requirement": "Client-encrypted vault and recovery", "status": "partial", "evidence": ["lib/crypto/vault.ts", "lib/persistence/schema.ts"] },
+    { "id": "A05", "section": 5, "requirement": "Complete domain model and workflow", "status": "partial", "evidence": ["lib/domain", "lib/persistence/schema.ts"] },
+    { "id": "A06", "section": 6, "requirement": "Live dual-token model", "status": "partial", "evidence": ["app/starknet/tokens.ts"] },
+    { "id": "A07", "section": 7, "requirement": "Canonical commitments and three-language vectors", "status": "complete", "evidence": ["lib/crypto/commitments.ts", "circuits/payroll_integrity/src/main.nr", "contracts/src/commitments.cairo", "vectors/commitments-v1.json"] },
+    { "id": "A08", "section": 8, "requirement": "Deployment-bound PayrollIntegrity proof", "status": "partial", "evidence": ["circuits/payroll_integrity/src/main.nr"] },
+    { "id": "A09", "section": 9, "requirement": "SettlementMatch proof", "status": "missing", "evidence": [] },
+    { "id": "A10", "section": 10, "requirement": "Final Starknet contracts and real verifier", "status": "partial", "evidence": ["contracts/src"] },
+    { "id": "A11", "section": 11, "requirement": "FX and policy snapshots", "status": "partial", "evidence": ["lib/domain/fx.ts", "lib/policy/engine.ts"] },
+    { "id": "A12", "section": 12, "requirement": "Payment plans, claims, and remediation", "status": "partial", "evidence": ["lib/domain/obligations.ts"] },
+    { "id": "A13", "section": 13, "requirement": "Encrypted selective disclosure", "status": "partial", "evidence": ["lib/disclosure/export.ts"] },
+    { "id": "A14", "section": 14, "requirement": "MCP and bounded execution", "status": "partial", "evidence": ["packages/mcp/src/server.ts", "lib/domain/capability.ts"] },
+    { "id": "A15", "section": 15, "requirement": "All failure behavior implemented", "status": "partial", "evidence": ["app/starknet/starknet-wallet.tsx"] },
+    { "id": "A16", "section": 16, "requirement": "Full verification strategy", "status": "partial", "evidence": [".github/workflows", "lib", "circuits", "contracts/tests"] }
+  ]
+}

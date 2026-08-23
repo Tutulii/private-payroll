@@ -138,11 +138,11 @@ stateDiagram-v2
 | Token | Mainnet address | Decimals | Fee behavior |
 |---|---|---:|---|
 | STRK | `0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d` | 18 | STRK20 fee paid in public STRK |
-| Native USDC | `0x033068f6539f8e6e6b131e6b2b814e6c34a5224bc66947c47dab9dfee93b35fb` | 6 | STRK20 fee still paid in public STRK |
+| Native USDC | `0x033068f6539f8e6e6b131e6b2b814e6c34a5224bc66947c47dab9dfee93b35fb` | 6 | Ready deducts a dynamic USDC-denominated fee from the requested shield/private operation; quote by wallet simulation |
 
 Native USDC remains disabled until the live Ready/pool compatibility test passes. The application never substitutes bridged USDC silently.
 
-A payroll may mix STRK and USDC lines. Treasury validation groups totals by token, while the STRK fee reserve is checked separately.
+A payroll may mix STRK and USDC lines. Treasury validation groups totals and wallet-simulated fee reserves by token. Receipt-reported Starknet gas and Ready's token-denominated privacy-fee recovery are separate evidence and must not be collapsed into one guessed public-STRK debit.
 
 ## 7. Commitments and nullifiers
 

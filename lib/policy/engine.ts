@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { keccak_256 } from "@noble/hashes/sha3.js";
 import { hashTextCommitment } from "@/lib/crypto/commitments";
-import { stableJson, toHex } from "@/lib/crypto/encoding";
+import { concatBytes, encodeU32, encodeUint, normalizedHexBytes, stableJson, toHex, utf8 } from "@/lib/crypto/encoding";
 import { atomicAmountSchema } from "@/lib/domain/payroll";
 
 const registerSchema = z.string().regex(/^[a-z][a-z0-9_]{0,47}$/);
@@ -61,6 +62,176 @@ export const policyPackSchema = z.object({
   }
 });
 export type PolicyPack = z.infer<typeof policyPackSchema>;
+
+export const PAYO_MAX_POLICY_STEPS = 16;
+
+export type CompiledPolicyProgram = {
+  metadataCommitment: `0x${string}`;
+  instructionCount: number;
+  opcodes: readonly number[];
+  left: readonly number[];
+  right: readonly number[];
+  immediate: readonly string[];
+  numerator: readonly string[];
+  denominator: readonly string[];
+  outputRegister: number;
+};
+
+type CompiledStep = {
+  opcode: number;
+  left?: number;
+  right?: number;
+  immediate?: bigint;
+  numerator?: bigint;
+  denominator?: bigint;
+};
+
+function policyMetadataCommitment(pack: PolicyPack): `0x${string}` {
+  return toHex(hashTextCommitment("PAYO_POLICY_METADATA_V1", stableJson(pack)));
+}
+
+function assertU64(value: bigint, label: string): bigint {
+  if (value < 0n || value >= 1n << 64n) throw new Error(`${label} does not fit in u64.`);
+  return value;
+}
+
+/** Deterministically lowers the public policy DSL into the exact bounded Noir VM. */
+export function compilePolicyPack(packInput: PolicyPack): CompiledPolicyProgram {
+  const pack = policyPackSchema.parse(packInput);
+  const steps: CompiledStep[] = [];
+  const registers = new Map<string, number>();
+  const emit = (step: CompiledStep): number => {
+    if (steps.length >= PAYO_MAX_POLICY_STEPS) {
+      throw new Error(`Compiled policy exceeds ${PAYO_MAX_POLICY_STEPS} Noir steps.`);
+    }
+    steps.push(step);
+    return steps.length - 1;
+  };
+  const resolve = (name: string): number => {
+    const register = registers.get(name);
+    if (register === undefined) throw new Error(`Policy reads an unset register: ${name}.`);
+    return register;
+  };
+
+  for (const instruction of pack.instructions) {
+    let output: number;
+    switch (instruction.op) {
+      case "CONST":
+        output = emit({ opcode: 1, immediate: BigInt(instruction.value) });
+        break;
+      case "INPUT": {
+        if (instruction.key === "gross" || instruction.key === "taxable_gross") {
+          output = emit({ opcode: 2 });
+          break;
+        }
+        const earning = /^earning_([0-7])$/.exec(instruction.key);
+        if (!earning) throw new Error(`Unsupported circuit policy input: ${instruction.key}.`);
+        output = emit({ opcode: 3, left: Number(earning[1]) });
+        break;
+      }
+      case "ADD":
+        output = emit({ opcode: 4, left: resolve(instruction.left), right: resolve(instruction.right) });
+        break;
+      case "SUB":
+        output = emit({ opcode: 5, left: resolve(instruction.left), right: resolve(instruction.right) });
+        break;
+      case "MUL_DIV": {
+        const denominator = assertU64(BigInt(instruction.denominator), "Policy denominator");
+        if (denominator === 0n) throw new Error(`Policy division by zero at ${instruction.out}.`);
+        output = emit({
+          opcode: 6,
+          left: resolve(instruction.value),
+          numerator: assertU64(BigInt(instruction.numerator), "Policy numerator"),
+          denominator,
+        });
+        break;
+      }
+      case "MIN":
+        output = emit({ opcode: 7, left: resolve(instruction.left), right: resolve(instruction.right) });
+        break;
+      case "MAX":
+        output = emit({ opcode: 8, left: resolve(instruction.left), right: resolve(instruction.right) });
+        break;
+      case "BRACKET": {
+        const input = resolve(instruction.input);
+        let previousUpper = 0n;
+        let runningTotal: number | undefined;
+        let openEndedSeen = false;
+        for (const bracket of instruction.brackets) {
+          if (openEndedSeen) throw new Error("An open-ended bracket must be last.");
+          const upper = bracket.upperAtomic === undefined ? undefined : BigInt(bracket.upperAtomic);
+          if (upper !== undefined && upper <= previousUpper) throw new Error("Policy brackets must increase.");
+          let bandEnd = input;
+          if (upper !== undefined) {
+            const upperRegister = emit({ opcode: 1, immediate: upper });
+            bandEnd = emit({ opcode: 7, left: input, right: upperRegister });
+          } else {
+            openEndedSeen = true;
+          }
+          let taxable = bandEnd;
+          if (previousUpper > 0n) {
+            const lowerRegister = emit({ opcode: 1, immediate: previousUpper });
+            const flooredEnd = emit({ opcode: 8, left: bandEnd, right: lowerRegister });
+            taxable = emit({ opcode: 5, left: flooredEnd, right: lowerRegister });
+          }
+          const bandTax = emit({
+            opcode: 6,
+            left: taxable,
+            numerator: BigInt(bracket.rateBps),
+            denominator: 10_000n,
+          });
+          runningTotal = runningTotal === undefined
+            ? bandTax
+            : emit({ opcode: 4, left: runningTotal, right: bandTax });
+          if (upper !== undefined) previousUpper = upper;
+        }
+        if (!openEndedSeen) throw new Error("Policy brackets must end with an open band.");
+        output = runningTotal!;
+        break;
+      }
+    }
+    registers.set(instruction.out, output);
+  }
+
+  const statutoryOutput = pack.outputs.statutoryWithholding
+    ?? pack.outputs.statutoryDeduction
+    ?? Object.values(pack.outputs)[0];
+  if (!statutoryOutput) throw new Error("Policy has no circuit output.");
+  const outputRegister = resolve(statutoryOutput);
+  const padded = Array.from({ length: PAYO_MAX_POLICY_STEPS }, (_, index) => steps[index]);
+  return {
+    metadataCommitment: policyMetadataCommitment(pack),
+    instructionCount: steps.length,
+    opcodes: padded.map((step) => step?.opcode ?? 0),
+    left: padded.map((step) => step?.left ?? 0),
+    right: padded.map((step) => step?.right ?? 0),
+    immediate: padded.map((step) => (step?.immediate ?? 0n).toString()),
+    numerator: padded.map((step) => (step?.numerator ?? 0n).toString()),
+    denominator: padded.map((step) => (step?.denominator ?? 0n).toString()),
+    outputRegister,
+  };
+}
+
+export function compiledPolicyProgramCommitment(program: CompiledPolicyProgram): `0x${string}` {
+  if (program.instructionCount < 1 || program.instructionCount > PAYO_MAX_POLICY_STEPS) {
+    throw new Error("Invalid compiled policy instruction count.");
+  }
+  const chunks: Uint8Array[] = [
+    utf8("PAYO_POLICY_PROGRAM_V1"),
+    normalizedHexBytes(program.metadataCommitment, 32),
+    encodeU32(program.instructionCount),
+    Uint8Array.of(program.outputRegister),
+  ];
+  for (let index = 0; index < PAYO_MAX_POLICY_STEPS; index += 1) {
+    chunks.push(
+      Uint8Array.of(program.opcodes[index], program.left[index], program.right[index]),
+      encodeUint(BigInt(program.immediate[index]), 16),
+      encodeUint(BigInt(program.numerator[index]), 8),
+      encodeUint(BigInt(program.denominator[index]), 8),
+    );
+  }
+  return toHex(keccak_256(concatBytes(...chunks)));
+}
 
 function load(registers: Map<string, bigint>, name: string): bigint {
   const value = registers.get(name);
@@ -144,8 +315,7 @@ export function evaluatePolicyPack(
 }
 
 export function policyPackCommitment(pack: PolicyPack): `0x${string}` {
-  const parsed = policyPackSchema.parse(pack);
-  return toHex(hashTextCommitment("PAYO_POLICY_PACK_V1", stableJson(parsed)));
+  return compiledPolicyProgramCommitment(compilePolicyPack(pack));
 }
 
 /** Demonstration data only. It is intentionally not represented as current tax advice. */

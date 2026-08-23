@@ -8,3 +8,4 @@ out/
 target/
 .snfoundry_cache/
 .DS_Store
+circuits/payroll_integrity/Prover.toml

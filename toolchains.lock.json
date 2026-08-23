@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "runtime": {
+    "node": "24.17.0",
+    "npm": "12.0.2"
+  },
+  "starknet": {
+    "starknetJs": "10.4.0",
+    "privacySdk": "0.14.3-rc.5",
+    "privacySdkRegistry": "https://npm.pkg.github.com",
+    "privacySdkSource": "https://github.com/starkware-libs/starknet-privacy/tree/main/sdk",
+    "walletApiMinimum": "0.10.3",
+    "scarb": "2.16.1",
+    "cairo": "2.16.1",
+    "sierra": "1.7.0",
+    "starknetFoundry": "0.57.0"
+  },
+  "proof": {
+    "noir": "1.0.0-beta.16",
+    "noircCommit": "2d46fca7203545cbbfb31a0d0328de6c10a8db95",
+    "barretenberg": "3.0.0-nightly.20251104",
+    "garaga": "1.1.0",
+    "scheme": "ultra_keccak_zk_honk"
+  }
+}
