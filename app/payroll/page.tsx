@@ -25,7 +25,7 @@ import {
   formatStrk,
   parseStrkAmount,
   shortStarknetAddress,
-  STARKNET_SEPOLIA_EXPLORER,
+  STARKNET_MAINNET_EXPLORER,
   STRK20_SETUP_URL,
   useStarknetWallet,
 } from "../starknet/starknet-wallet";
@@ -67,7 +67,7 @@ export default function PayrollPage() {
   const { openPayroll, notify } = useAppShell();
   const starknet = useStarknetWallet();
   const [filter, setFilter] = useState<(typeof filters)[number]>("All");
-  const [shieldAmount, setShieldAmount] = useState("0.01");
+  const [shieldAmount, setShieldAmount] = useState("");
   const [recipients, setRecipients] = useState<DraftRecipient[]>([firstRecipient]);
   const [formError, setFormError] = useState("");
   const [nextRecipientId, setNextRecipientId] = useState(2);
@@ -104,6 +104,26 @@ export default function PayrollPage() {
       return null;
     }
   }, [recipients]);
+  const shieldQuote = useMemo(() => {
+    try {
+      const grossAmount = parseStrkAmount(shieldAmount);
+      const netAmount = starknet.privacyFee === null
+        ? null
+        : grossAmount - starknet.privacyFee;
+      const shortfall = starknet.publicStrkBalance !== null && grossAmount > starknet.publicStrkBalance
+        ? grossAmount - starknet.publicStrkBalance
+        : 0n;
+      return {
+        grossAmount,
+        netAmount,
+        shortfall,
+        hasSufficientBalance: starknet.publicStrkBalance !== null && shortfall === 0n,
+        isValid: netAmount !== null && netAmount > 0n && starknet.publicStrkBalance !== null && shortfall === 0n,
+      };
+    } catch {
+      return { grossAmount: null, netAmount: null, shortfall: 0n, hasSufficientBalance: false, isValid: false };
+    }
+  }, [shieldAmount, starknet.privacyFee, starknet.publicStrkBalance]);
 
   const updateRecipient = (id: number, field: keyof Omit<DraftRecipient, "id">, value: string) => {
     setRecipients((current) => current.map((recipient) => recipient.id === id ? { ...recipient, [field]: value } : recipient));
@@ -157,20 +177,46 @@ export default function PayrollPage() {
 
       <section className="private-payroll-runner reveal reveal--two" id="private-payroll">
         <div className="runner-heading">
-          <div><span className="sticker sticker--yellow">LIVE · SEPOLIA</span><h3>Private payroll runner</h3><p>Fund the shielded treasury, add Starknet recipients, then approve one STRK20 batch in Ready.</p></div>
-          <div className="runner-network"><span className={starknet.isConnected && starknet.isSepolia ? "connection-dot connection-dot--live" : "connection-dot"} /><span><small>Payroll signer</small><strong>{starknet.isConnected ? `${starknet.walletName} · ${starknet.networkName}` : "Ready not connected"}</strong></span></div>
+          <div><span className="sticker sticker--yellow">LIVE · MAINNET</span><h3>Private payroll runner</h3><p>Fund the shielded treasury, add Starknet recipients, then approve one STRK20 batch in Ready.</p></div>
+          <div className="runner-network"><span className={starknet.isConnected && starknet.isMainnet ? "connection-dot connection-dot--live" : "connection-dot"} /><span><small>Payroll signer</small><strong>{starknet.isConnected ? `${starknet.walletName} · ${starknet.networkName}` : "Ready not connected"}</strong></span></div>
         </div>
 
         <div className="runner-grid">
           <aside className="runner-setup">
             <div className={`runner-step ${starknet.isConnected ? "runner-step--done" : "runner-step--active"}`}>
               <span className="runner-step-number">1</span>
-              <div><small>CONNECT SIGNER</small><strong>{starknet.isConnected ? shortStarknetAddress(starknet.address) : "Connect Ready wallet"}</strong><p>Ready holds the STRK20 privacy keys and asks for every approval.</p>{!starknet.isConnected && <Link className="button button--ink button--wide" href="/wallet">Connect Ready <WalletCards size={16} /></Link>}{starknet.isConnected && !starknet.isSepolia && <button type="button" className="button button--ink button--wide" onClick={() => starknet.switchToSepolia().catch((switchError) => setFormError(switchError instanceof Error ? switchError.message : "Network switch failed"))}>Switch to Sepolia</button>}</div>
+              <div><small>CONNECT SIGNER</small><strong>{starknet.isConnected ? shortStarknetAddress(starknet.address) : "Connect Ready wallet"}</strong><p>Ready holds the STRK20 privacy keys and asks for every approval.</p>{!starknet.isConnected && <Link className="button button--ink button--wide" href="/wallet">Connect Ready <WalletCards size={16} /></Link>}{starknet.isConnected && !starknet.isMainnet && <button type="button" className="button button--ink button--wide" onClick={() => starknet.switchToMainnet().catch((switchError) => setFormError(switchError instanceof Error ? switchError.message : "Network switch failed"))}>Switch to Mainnet</button>}</div>
             </div>
 
-            <div className={`runner-step ${starknet.isConnected && starknet.isSepolia ? "runner-step--active" : ""}`}>
+            <div className={`runner-step ${starknet.isConnected && starknet.isMainnet ? "runner-step--active" : ""}`}>
               <span className="runner-step-number">2</span>
-              <div><small>FUND PRIVATE TREASURY</small><strong>{treasuryLabel}</strong><p>{treasuryHelp}</p>{registrationRequired ? <a className="button button--soft button--wide" href={STRK20_SETUP_URL} target="_blank" rel="noreferrer">Register STRK20 account <ExternalLink size={15} /></a> : balanceUnavailable ? <Link className="button button--soft button--wide" href="/wallet">Retry on Wallet page <ArrowRight size={15} /></Link> : <><label className="amount-field"><span>Amount</span><input inputMode="decimal" value={shieldAmount} onChange={(event) => setShieldAmount(event.target.value)} aria-label="STRK amount to shield" /><b>STRK</b></label><button type="button" className="button button--soft button--wide" disabled={!starknet.isConnected || !starknet.isSepolia || busy || privacyChecking || privacyUnsupported} onClick={shieldTreasury}>{starknet.transaction?.kind === "shield" && busy ? <><LoaderCircle className="spin" size={16} /> {starknet.transaction.stage === "wallet" ? "Approve in Ready" : "Confirming"}</> : <><ShieldCheck size={16} /> Shield treasury</>}</button></>}</div>
+              <div>
+                <small>FUND PRIVATE TREASURY</small>
+                <strong>{treasuryLabel}</strong>
+                <p>{treasuryHelp}</p>
+                {registrationRequired ? (
+                  <a className="button button--soft button--wide" href={STRK20_SETUP_URL} target="_blank" rel="noreferrer">Register STRK20 account <ExternalLink size={15} /></a>
+                ) : balanceUnavailable ? (
+                  <Link className="button button--soft button--wide" href="/wallet">Retry on Wallet page <ArrowRight size={15} /></Link>
+                ) : (
+                  <>
+                    <label className="amount-field">
+                      <span>Total</span>
+                      <input inputMode="decimal" value={shieldAmount} placeholder="e.g. 10" onChange={(event) => setShieldAmount(event.target.value)} aria-label="Total STRK to use for shielding" />
+                      <b>STRK</b>
+                    </label>
+                    <div className={`shield-quote ${shieldQuote.isValid ? "shield-quote--ready" : ""} ${shieldQuote.shortfall > 0n ? "shield-quote--insufficient" : ""}`}>
+                      <div className="shield-quote__heading"><span>LIVE SHIELD QUOTE</span><i>{starknet.isRefreshingPrivacyFee || starknet.isRefreshingPublicBalance ? "Refreshing…" : "Mainnet live"}</i></div>
+                      <div className="shield-quote__row"><span>Public wallet balance</span><strong>{formatStrk(starknet.publicStrkBalance)} STRK</strong></div>
+                      <div className="shield-quote__row"><span>Total from wallet</span><strong>{formatStrk(shieldQuote.grossAmount)} STRK</strong></div>
+                      <div className="shield-quote__row"><span>STRK20 privacy fee</span><strong>{starknet.privacyFee === null ? "—" : `− ${formatStrk(starknet.privacyFee)} STRK`}</strong></div>
+                      <div className="shield-quote__row shield-quote__row--net"><span>Arrives shielded</span><strong>{shieldQuote.netAmount !== null && shieldQuote.netAmount > 0n ? formatStrk(shieldQuote.netAmount) : "0"} STRK</strong></div>
+                      <p>{starknet.privacyFeeError ? <>Live fee unavailable. <button type="button" onClick={() => starknet.refreshPrivacyFee().catch((feeError) => setFormError(feeError instanceof Error ? feeError.message : "Fee refresh failed"))}>Retry</button></> : starknet.publicBalanceError ? <>Wallet balance unavailable. <button type="button" onClick={() => starknet.refreshPublicBalance().catch((balanceError) => setFormError(balanceError instanceof Error ? balanceError.message : "Balance refresh failed"))}>Retry</button></> : shieldQuote.shortfall > 0n ? `Insufficient balance · short by ${formatStrk(shieldQuote.shortfall)} STRK.` : starknet.privacyFee !== null && shieldQuote.grossAmount !== null && shieldQuote.grossAmount <= starknet.privacyFee ? `Enter more than ${formatStrk(starknet.privacyFee)} STRK.` : "Ready shows any separate network execution estimate before approval."}</p>
+                    </div>
+                    <button type="button" className="button button--soft button--wide" disabled={!starknet.isConnected || !starknet.isMainnet || !shieldQuote.isValid || starknet.privacyFee === null || starknet.publicStrkBalance === null || busy || privacyChecking || privacyUnsupported || starknet.isRefreshingPrivacyFee || starknet.isRefreshingPublicBalance} onClick={shieldTreasury}>{starknet.transaction?.kind === "shield" && busy ? <><LoaderCircle className="spin" size={16} /> {starknet.transaction.stage === "wallet" ? "Approve in Ready" : "Confirming"}</> : shieldQuote.shortfall > 0n ? <>Insufficient STRK balance</> : <><ShieldCheck size={16} /> Shield {shieldQuote.isValid ? `${formatStrk(shieldQuote.netAmount)} STRK` : "treasury"}</>}</button>
+                  </>
+                )}
+              </div>
             </div>
 
             <div className="runner-step runner-step--quiet">
@@ -198,15 +244,15 @@ export default function PayrollPage() {
 
             <div className="composer-summary">
               <div><small>Recipients</small><strong>{recipients.length}</strong></div><div><small>Private total</small><strong>{formatStrk(payrollTotal)} STRK</strong></div><div><small>Shielded treasury</small><strong>{formatStrk(starknet.shieldedBalance)} STRK</strong></div>
-              <button type="button" className="button button--ink" disabled={!starknet.isConnected || !starknet.isSepolia || !canRunPayroll || busy || payrollTotal === null} onClick={submitPayroll}>{starknet.transaction?.kind === "payroll" && busy ? <><LoaderCircle className="spin" size={17} /> {starknet.transaction.stage === "wallet" ? "Approve in Ready" : "Confirming on Sepolia"}</> : <>Approve private payroll <ArrowRight size={17} /></>}</button>
+              <button type="button" className="button button--ink" disabled={!starknet.isConnected || !starknet.isMainnet || !canRunPayroll || busy || payrollTotal === null} onClick={submitPayroll}>{starknet.transaction?.kind === "payroll" && busy ? <><LoaderCircle className="spin" size={17} /> {starknet.transaction.stage === "wallet" ? "Approve in Ready" : "Confirming on Mainnet"}</> : <>Approve private payroll <ArrowRight size={17} /></>}</button>
             </div>
 
             {formError && <div className="runner-error"><X size={16} /><span>{formError}</span></div>}
             {starknet.transaction && (
               <div className={`transaction-receipt transaction-receipt--${starknet.transaction.stage}`}>
                 <span className="transaction-receipt-icon">{starknet.transaction.stage === "confirmed" ? <CheckCircle2 size={20} /> : starknet.transaction.stage === "failed" ? <X size={19} /> : <LoaderCircle className="spin" size={19} />}</span>
-                <span><small>{starknet.transaction.stage === "wallet" ? "READY IS PREPARING THE PROOF" : starknet.transaction.stage === "confirming" ? "SUBMITTED TO SEPOLIA" : starknet.transaction.stage === "confirmed" ? "TRANSACTION CONFIRMED" : "TRANSACTION NEEDS ATTENTION"}</small><strong>{starknet.transaction.label}</strong>{starknet.transaction.error && <p>{starknet.transaction.error}</p>}</span>
-                {starknet.transaction.hash && <a href={`${STARKNET_SEPOLIA_EXPLORER}/tx/${starknet.transaction.hash}`} target="_blank" rel="noreferrer">View receipt <ExternalLink size={13} /></a>}
+                <span><small>{starknet.transaction.stage === "wallet" ? "READY IS PREPARING THE PROOF" : starknet.transaction.stage === "confirming" ? "SUBMITTED TO MAINNET" : starknet.transaction.stage === "confirmed" ? "TRANSACTION CONFIRMED" : "TRANSACTION NEEDS ATTENTION"}</small><strong>{starknet.transaction.label}</strong>{starknet.transaction.kind === "shield" && starknet.transaction.grossAmount !== undefined && starknet.transaction.privacyFee !== undefined && <p>{formatStrk(starknet.transaction.grossAmount)} STRK total − {formatStrk(starknet.transaction.privacyFee)} STRK privacy fee = {formatStrk(starknet.transaction.netAmount ?? null)} STRK shielded.</p>}{starknet.transaction.stage === "wallet" && <p>Payo sent one request. Reject any repeated Ready prompt for this same transaction.</p>}{starknet.transaction.error && <p>{starknet.transaction.error}</p>}</span>
+                {starknet.transaction.hash && <a href={`${STARKNET_MAINNET_EXPLORER}/tx/${starknet.transaction.hash}`} target="_blank" rel="noreferrer">View receipt <ExternalLink size={13} /></a>}
               </div>
             )}
           </div>

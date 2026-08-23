@@ -152,7 +152,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             </div>
             <div className="topbar-actions">
               <Link className="network-pill" href="/wallet" title={starknet.isConnected ? `Connected to ${starknet.networkName}` : "Connect Ready wallet"}>
-                <span className={starknet.isConnected && starknet.isSepolia ? "status-dot" : "status-dot status-dot--idle"} /> {starknet.networkName} <ChevronDown size={14} />
+                <span className={starknet.isConnected && starknet.isMainnet ? "status-dot" : "status-dot status-dot--idle"} /> {starknet.networkName} <ChevronDown size={14} />
               </Link>
               <button type="button" className="icon-button" aria-label="Notifications" onClick={() => setToast("You’re all caught up")}>
                 <span className="notification-dot" />

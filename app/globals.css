@@ -3064,6 +3064,20 @@ button:focus-visible {
 .amount-field > span { color: var(--muted); font-size: 8px; }
 .amount-field input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; font-size: 11px; font-weight: 800; text-align: right; }
 .amount-field b { font-size: 8px; }
+.shield-quote { margin-top: 8px; padding: 10px; background: rgba(255,255,255,.72); border: 1px solid #d8ca96; border-radius: 10px; }
+.shield-quote--ready { background: var(--green-soft); border-color: #a9c5a6; }
+.shield-quote--insufficient { background: var(--coral-soft); border-color: #e2aa9d; }
+.shield-quote--insufficient .shield-quote__heading i { color: #934c3f; }
+.shield-quote--insufficient .shield-quote__row--net strong { color: #934c3f; }
+.shield-quote__heading, .shield-quote__row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.shield-quote__heading { margin-bottom: 8px; color: var(--muted); font-size: 6.5px; font-weight: 900; letter-spacing: .08em; }
+.shield-quote__heading i { padding: 3px 5px; color: #50704f; background: rgba(255,255,255,.8); border-radius: 999px; font-style: normal; letter-spacing: 0; }
+.shield-quote__row { padding: 4px 0; color: var(--muted); font-size: 7.5px; }
+.shield-quote__row strong { margin: 0; color: var(--ink); font-size: 8px; }
+.shield-quote__row--net { margin-top: 5px; padding-top: 8px; color: var(--ink); border-top: 1px dashed #b8ae8a; font-weight: 850; }
+.shield-quote__row--net strong { color: #497149; font-family: Georgia, serif; font-size: 11px; }
+.runner-step .shield-quote > p { margin: 7px 0 0; font-size: 6.8px; line-height: 1.4; }
+.shield-quote p button { padding: 0; color: inherit; background: transparent; border: 0; cursor: pointer; font: inherit; font-weight: 900; text-decoration: underline; }
 
 .payroll-composer { min-width: 0; padding: 20px; background: #fbf8f1; border: 1.5px solid var(--ink); border-radius: 17px; box-shadow: 4px 4px 0 #d2cbc0; }
 .composer-top { display: flex; justify-content: space-between; align-items: flex-end; gap: 15px; }

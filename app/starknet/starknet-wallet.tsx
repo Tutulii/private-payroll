@@ -6,6 +6,7 @@ import {
   constants as starknetConstants,
   num,
   RpcProvider,
+  uint256,
   validateAndParseAddress,
   WalletAccountV6,
   walletV6,
@@ -24,15 +25,15 @@ import {
 
 export const STRK_TOKEN_ADDRESS =
   "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d";
-export const STRK20_SEPOLIA_POOL_ADDRESS =
-  "0x0254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91";
+export const STRK20_MAINNET_POOL_ADDRESS =
+  "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a";
 export const STRK20_SETUP_URL = "https://strk20.starknet.io/app";
-export const STARKNET_SEPOLIA_CHAIN_ID = starknetConstants.StarknetChainId.SN_SEPOLIA;
-export const STARKNET_SEPOLIA_EXPLORER = "https://sepolia.starkscan.co";
+export const STARKNET_MAINNET_CHAIN_ID = starknetConstants.StarknetChainId.SN_MAIN;
+export const STARKNET_MAINNET_EXPLORER = "https://starkscan.co";
 
 const starknetRpcUrl =
-  process.env.NEXT_PUBLIC_STARKNET_RPC_URL ?? "https://api.cartridge.gg/x/starknet/sepolia";
-const sepoliaProvider = new RpcProvider({ nodeUrl: starknetRpcUrl });
+  process.env.NEXT_PUBLIC_STARKNET_RPC_URL ?? "https://rpc.starknet.lava.build";
+const mainnetProvider = new RpcProvider({ nodeUrl: starknetRpcUrl });
 
 export type PayrollRecipient = {
   address: string;
@@ -51,6 +52,9 @@ export type PrivateTransaction = {
   label: string;
   hash?: string;
   error?: string;
+  grossAmount?: bigint;
+  privacyFee?: bigint;
+  netAmount?: bigint;
   balanceRefreshed?: boolean;
   balanceRefreshError?: string;
 };
@@ -73,19 +77,27 @@ type StarknetWalletContextValue = {
   address: string;
   chainId: string;
   networkName: string;
-  isSepolia: boolean;
+  isMainnet: boolean;
   supportedSpecs: string[];
   walletApiVersions: string[];
   walletApiVersion: string;
   privacyCapability: PrivacyCapability;
   privacyMessage: string;
   shieldedBalance: bigint | null;
+  publicStrkBalance: bigint | null;
+  isRefreshingPublicBalance: boolean;
+  publicBalanceError: string;
+  privacyFee: bigint | null;
+  isRefreshingPrivacyFee: boolean;
+  privacyFeeError: string;
   isRefreshingBalance: boolean;
   transaction: PrivateTransaction | null;
   error: string;
   connectWallet: (name: string) => Promise<void>;
   disconnectWallet: () => Promise<void>;
-  switchToSepolia: () => Promise<void>;
+  switchToMainnet: () => Promise<void>;
+  refreshPublicBalance: () => Promise<bigint>;
+  refreshPrivacyFee: () => Promise<bigint>;
   refreshBalance: () => Promise<void>;
   shieldStrk: (amount: string) => Promise<string>;
   runPrivatePayroll: (recipients: PayrollRecipient[]) => Promise<string>;
@@ -158,10 +170,10 @@ function isUnsupportedWalletApiError(error: unknown) {
   );
 }
 
-async function readSepoliaPoolRegistration(address: string): Promise<boolean | null> {
+async function readMainnetPoolRegistration(address: string): Promise<boolean | null> {
   try {
-    const result = await sepoliaProvider.callContract({
-      contractAddress: STRK20_SEPOLIA_POOL_ADDRESS,
+    const result = await mainnetProvider.callContract({
+      contractAddress: STRK20_MAINNET_POOL_ADDRESS,
       entrypoint: "get_public_key",
       calldata: [address],
     });
@@ -169,6 +181,29 @@ async function readSepoliaPoolRegistration(address: string): Promise<boolean | n
   } catch {
     return null;
   }
+}
+
+async function readMainnetPrivacyFee(): Promise<bigint> {
+  const result = await mainnetProvider.callContract({
+    contractAddress: STRK20_MAINNET_POOL_ADDRESS,
+    entrypoint: "get_fee_amount",
+    calldata: [],
+  });
+  const fee = num.toBigInt(result[0] ?? "0x0");
+  if (fee < 0n) throw new Error("The STRK20 pool returned an invalid privacy fee.");
+  return fee;
+}
+
+async function readMainnetPublicStrkBalance(address: string): Promise<bigint> {
+  const result = await mainnetProvider.callContract({
+    contractAddress: STRK_TOKEN_ADDRESS,
+    entrypoint: "balance_of",
+    calldata: [address],
+  });
+  return uint256.uint256ToBN({
+    low: result[0] ?? "0x0",
+    high: result[1] ?? "0x0",
+  });
 }
 
 function versionParts(version: string) {
@@ -232,12 +267,19 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
   const [walletApiVersions, setWalletApiVersions] = useState<string[]>([]);
   const [isConnecting, setIsConnecting] = useState(false);
   const [shieldedBalance, setShieldedBalance] = useState<bigint | null>(null);
+  const [publicStrkBalance, setPublicStrkBalance] = useState<bigint | null>(null);
+  const [isRefreshingPublicBalance, setIsRefreshingPublicBalance] = useState(false);
+  const [publicBalanceError, setPublicBalanceError] = useState("");
+  const [privacyFee, setPrivacyFee] = useState<bigint | null>(null);
+  const [isRefreshingPrivacyFee, setIsRefreshingPrivacyFee] = useState(false);
+  const [privacyFeeError, setPrivacyFeeError] = useState("");
   const [isRefreshingBalance, setIsRefreshingBalance] = useState(false);
   const [privacyCapability, setPrivacyCapability] = useState<PrivacyCapability>("unknown");
   const [privacyMessage, setPrivacyMessage] = useState("");
   const [transaction, setTransaction] = useState<PrivateTransaction | null>(null);
   const [error, setError] = useState("");
   const unsubscribeWalletRef = useRef<(() => void) | null>(null);
+  const privateActionLockRef = useRef<symbol | null>(null);
 
   useEffect(() => {
     const store: Store = createStore({ eip1193Adapters: [] });
@@ -253,6 +295,53 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     return unsubscribe;
   }, []);
 
+  const refreshPrivacyFee = useCallback(async () => {
+    setIsRefreshingPrivacyFee(true);
+    setPrivacyFeeError("");
+    try {
+      const fee = await readMainnetPrivacyFee();
+      setPrivacyFee(fee);
+      return fee;
+    } catch (feeError) {
+      const message = describeError(feeError);
+      setPrivacyFee(null);
+      setPrivacyFeeError(message);
+      throw new Error(message);
+    } finally {
+      setIsRefreshingPrivacyFee(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const initialRefresh = window.setTimeout(() => {
+      void refreshPrivacyFee().catch(() => undefined);
+    }, 0);
+    const interval = window.setInterval(() => {
+      void refreshPrivacyFee().catch(() => undefined);
+    }, 30_000);
+    return () => {
+      window.clearTimeout(initialRefresh);
+      window.clearInterval(interval);
+    };
+  }, [refreshPrivacyFee]);
+
+  const refreshPublicBalanceForAddress = useCallback(async (walletAddress: string) => {
+    setIsRefreshingPublicBalance(true);
+    setPublicBalanceError("");
+    try {
+      const balance = await readMainnetPublicStrkBalance(walletAddress);
+      setPublicStrkBalance(balance);
+      return balance;
+    } catch (balanceError) {
+      const message = describeError(balanceError);
+      setPublicStrkBalance(null);
+      setPublicBalanceError(message);
+      throw new Error(message);
+    } finally {
+      setIsRefreshingPublicBalance(false);
+    }
+  }, []);
+
   const clearConnection = useCallback(() => {
     unsubscribeWalletRef.current?.();
     unsubscribeWalletRef.current = null;
@@ -263,10 +352,29 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     setSupportedSpecs([]);
     setWalletApiVersions([]);
     setShieldedBalance(null);
+    setPublicStrkBalance(null);
+    setPublicBalanceError("");
     setPrivacyCapability("unknown");
     setPrivacyMessage("");
     setTransaction(null);
+    privateActionLockRef.current = null;
   }, []);
+
+  const refreshPublicBalance = useCallback(async () => {
+    if (!address) throw new Error("Connect Ready wallet first.");
+    if (chainId !== STARKNET_MAINNET_CHAIN_ID) {
+      throw new Error("Switch Ready to Starknet Mainnet first.");
+    }
+    return refreshPublicBalanceForAddress(address);
+  }, [address, chainId, refreshPublicBalanceForAddress]);
+
+  useEffect(() => {
+    if (!address || chainId !== STARKNET_MAINNET_CHAIN_ID) return;
+    const interval = window.setInterval(() => {
+      void refreshPublicBalanceForAddress(address).catch(() => undefined);
+    }, 30_000);
+    return () => window.clearInterval(interval);
+  }, [address, chainId, refreshPublicBalanceForAddress]);
 
   const refreshBalanceForAccount = useCallback(async (account: WalletAccountV6) => {
     setIsRefreshingBalance(true);
@@ -294,7 +402,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
       setShieldedBalance(null);
       const poolRegistration = isNotRegisteredError(balanceError)
         ? false
-        : await readSepoliaPoolRegistration(account.address);
+        : await readMainnetPoolRegistration(account.address);
       if (poolRegistration === false) {
         setPrivacyCapability("uninitialized");
         setPrivacyMessage(
@@ -334,7 +442,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
       setIsConnecting(true);
       setTransaction(null);
       try {
-        const account = await WalletAccountV6.connect(sepoliaProvider, wallet);
+        const account = await WalletAccountV6.connect(mainnetProvider, wallet);
         const accounts = await walletV6.requestAccounts(wallet);
         if (!Array.isArray(accounts) || !accounts[0]) {
           throw new Error("This wallet did not return a Starknet account.");
@@ -357,6 +465,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
 
         unsubscribeWalletRef.current?.();
         unsubscribeWalletRef.current = account.onChange((change) => {
+          let balanceAddress = account.address;
           if (change.accounts) {
             const nextAddress = change.accounts[0]?.address;
             if (!nextAddress) {
@@ -364,12 +473,22 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
               return;
             }
             try {
-              setAddress(validateAndParseAddress(nextAddress));
+              balanceAddress = validateAndParseAddress(nextAddress);
+              setAddress(balanceAddress);
             } catch {
+              balanceAddress = nextAddress;
               setAddress(nextAddress);
             }
           }
-          void walletV6.requestChainId(wallet).then((nextChainId) => setChainId(String(nextChainId)));
+          void walletV6.requestChainId(wallet).then((nextChainId) => {
+            const normalizedChainId = String(nextChainId);
+            setChainId(normalizedChainId);
+            if (normalizedChainId === STARKNET_MAINNET_CHAIN_ID) {
+              void refreshPublicBalanceForAddress(balanceAddress).catch(() => undefined);
+            } else {
+              setPublicStrkBalance(null);
+            }
+          });
         });
 
         setWalletAccount(account);
@@ -401,10 +520,15 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
         }
 
         if (
-          activeChainId === STARKNET_SEPOLIA_CHAIN_ID &&
+          activeChainId === STARKNET_MAINNET_CHAIN_ID &&
           isPrivacyWallet &&
           !reportsUnsupportedApi
         ) {
+          try {
+            await refreshPublicBalanceForAddress(connectedAddress);
+          } catch {
+            // Connection still succeeds; the shield quote explains the unavailable balance.
+          }
           try {
             await refreshBalanceForAccount(account);
           } catch {
@@ -420,7 +544,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
         setIsConnecting(false);
       }
     },
-    [clearConnection, discoveredWallets, refreshBalanceForAccount],
+    [clearConnection, discoveredWallets, refreshBalanceForAccount, refreshPublicBalanceForAddress],
   );
 
   const disconnectWallet = useCallback(async () => {
@@ -432,13 +556,18 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     }
   }, [clearConnection, selectedWallet]);
 
-  const switchToSepolia = useCallback(async () => {
+  const switchToMainnet = useCallback(async () => {
     if (!walletAccount) throw new Error("Connect Ready wallet first.");
     setError("");
     try {
-      const switched = await walletAccount.switchStarknetChain(STARKNET_SEPOLIA_CHAIN_ID);
-      if (!switched) throw new Error("Switch to Starknet Sepolia in Ready and try again.");
-      setChainId(STARKNET_SEPOLIA_CHAIN_ID);
+      const switched = await walletAccount.switchStarknetChain(STARKNET_MAINNET_CHAIN_ID);
+      if (!switched) throw new Error("Switch to Starknet Mainnet in Ready and try again.");
+      setChainId(STARKNET_MAINNET_CHAIN_ID);
+      try {
+        await refreshPublicBalanceForAddress(address);
+      } catch {
+        // Switching succeeds even when the public balance RPC is temporarily unavailable.
+      }
       if (privacyCapability !== "unsupported") {
         try {
           await refreshBalanceForAccount(walletAccount);
@@ -451,12 +580,12 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
       setError(message);
       throw new Error(message);
     }
-  }, [privacyCapability, refreshBalanceForAccount, walletAccount]);
+  }, [address, privacyCapability, refreshBalanceForAccount, refreshPublicBalanceForAddress, walletAccount]);
 
   const confirmTransaction = useCallback(
-    async (hash: string, pending: PrivateTransaction) => {
+    async (hash: string, pending: PrivateTransaction, requestToken: symbol) => {
       try {
-        await sepoliaProvider.waitForTransaction(hash, { retries: 400, retryInterval: 3000 });
+        await mainnetProvider.waitForTransaction(hash, { retries: 400, retryInterval: 3000 });
         let balanceRefreshed = false;
         let balanceRefreshError = "";
         if (walletAccount) {
@@ -481,16 +610,25 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
           hash,
           error: describeError(confirmationError),
         });
+      } finally {
+        if (privateActionLockRef.current === requestToken) {
+          privateActionLockRef.current = null;
+        }
       }
     },
     [refreshBalanceForAccount, walletAccount],
   );
 
   const submitPrivateActions = useCallback(
-    async (kind: "shield" | "payroll", label: string, actions: STRK20_ACTION[]) => {
+    async (
+      kind: "shield" | "payroll",
+      label: string,
+      actions: STRK20_ACTION[],
+      details: Pick<PrivateTransaction, "grossAmount" | "privacyFee" | "netAmount"> = {},
+    ) => {
       if (!walletAccount || !address) throw new Error("Connect Ready wallet first.");
-      if (chainId !== STARKNET_SEPOLIA_CHAIN_ID) {
-        throw new Error("Testing is locked to Starknet Sepolia. Switch network in Ready first.");
+      if (chainId !== STARKNET_MAINNET_CHAIN_ID) {
+        throw new Error("Payo is connected to Starknet Mainnet. Switch network in Ready first.");
       }
       if (!isReadyWallet(selectedWallet?.name ?? "")) {
         throw new Error("Ready wallet is currently required for STRK20 privacy actions.");
@@ -506,8 +644,15 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
           "Register this account in the STRK20 pool before shielding or running payroll.",
         );
       }
+      if (privateActionLockRef.current) {
+        throw new Error(
+          "A private Mainnet transaction is already active. Do not approve a repeated Ready request.",
+        );
+      }
 
-      const pending: PrivateTransaction = { kind, stage: "wallet", label };
+      const requestToken = Symbol(kind);
+      privateActionLockRef.current = requestToken;
+      const pending: PrivateTransaction = { kind, stage: "wallet", label, ...details };
       setError("");
       setTransaction(pending);
       try {
@@ -518,9 +663,12 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
           hash: result.transaction_hash,
         };
         setTransaction(confirming);
-        void confirmTransaction(result.transaction_hash, confirming);
+        void confirmTransaction(result.transaction_hash, confirming, requestToken);
         return result.transaction_hash;
       } catch (transactionError) {
+        if (privateActionLockRef.current === requestToken) {
+          privateActionLockRef.current = null;
+        }
         const notRegistered = isNotRegisteredError(transactionError);
         const message = notRegistered
           ? "Ready returned NOT_REGISTERED (118). Complete the one-time STRK20 registration before shielding."
@@ -542,12 +690,30 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
 
   const shieldStrk = useCallback(
     async (amount: string) => {
-      const atomicAmount = parseStrkAmount(amount);
-      return submitPrivateActions("shield", `${amount} STRK shield`, [
-        { type: "deposit", token: STRK_TOKEN_ADDRESS, amount: num.toHex(atomicAmount) },
+      const grossAmount = parseStrkAmount(amount);
+      const [currentPrivacyFee, currentPublicBalance] = await Promise.all([
+        refreshPrivacyFee(),
+        refreshPublicBalance(),
       ]);
+      if (grossAmount > currentPublicBalance) {
+        throw new Error(
+          `Insufficient public STRK balance. Available ${formatStrk(currentPublicBalance)} STRK; entered ${formatStrk(grossAmount)} STRK.`,
+        );
+      }
+      if (grossAmount <= currentPrivacyFee) {
+        throw new Error(
+          `Enter more than ${formatStrk(currentPrivacyFee)} STRK to cover the live STRK20 privacy fee.`,
+        );
+      }
+      const netAmount = grossAmount - currentPrivacyFee;
+      return submitPrivateActions(
+        "shield",
+        `${formatStrk(netAmount)} STRK shielded`,
+        [{ type: "deposit", token: STRK_TOKEN_ADDRESS, amount: num.toHex(grossAmount) }],
+        { grossAmount, privacyFee: currentPrivacyFee, netAmount },
+      );
     },
-    [submitPrivateActions],
+    [refreshPrivacyFee, refreshPublicBalance, submitPrivateActions],
   );
 
   const runPrivatePayroll = useCallback(
@@ -587,13 +753,13 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
   );
 
   const isConnected = Boolean(walletAccount && address);
-  const isSepolia = chainId === STARKNET_SEPOLIA_CHAIN_ID;
+  const isMainnet = chainId === STARKNET_MAINNET_CHAIN_ID;
   const networkName = !chainId
-    ? "Sepolia test"
-    : isSepolia
-      ? "Sepolia"
-      : chainId === starknetConstants.StarknetChainId.SN_MAIN
-        ? "Mainnet"
+    ? "Mainnet"
+    : isMainnet
+      ? "Mainnet"
+      : chainId === starknetConstants.StarknetChainId.SN_SEPOLIA
+        ? "Sepolia"
         : "Unsupported";
 
   const wallets = useMemo(
@@ -616,19 +782,27 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     address,
     chainId,
     networkName,
-    isSepolia,
+    isMainnet,
     supportedSpecs,
     walletApiVersions,
     walletApiVersion,
     privacyCapability,
     privacyMessage,
     shieldedBalance,
+    publicStrkBalance,
+    isRefreshingPublicBalance,
+    publicBalanceError,
+    privacyFee,
+    isRefreshingPrivacyFee,
+    privacyFeeError,
     isRefreshingBalance,
     transaction,
     error,
     connectWallet,
     disconnectWallet,
-    switchToSepolia,
+    switchToMainnet,
+    refreshPublicBalance,
+    refreshPrivacyFee,
     refreshBalance,
     shieldStrk,
     runPrivatePayroll,
