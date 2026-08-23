@@ -13,9 +13,33 @@ Private Payroll is being built for the STRK20 Private Sprint. Employers can prep
 - Export employee payment records for voluntary disclosure and accounting.
 - Document precisely what STRK20 hides and what remains visible onchain.
 
-## Status
+## Frontend
 
-Early development.
+The current frontend is a responsive Next.js dashboard for a mixed human and AI-agent team. It includes:
+
+- Private treasury and upcoming payroll summaries.
+- Human and AI-agent recipient roster.
+- Recent private payment activity.
+- An MCP quick-connect surface for agent integrations.
+- An animated payroll review flow.
+
+The visual system uses warm paper tones, flat illustrated shapes, strong outlines, and restrained 2D motion. It intentionally avoids the neon, glass, and sci-fi conventions common in crypto products.
+
+### Run locally
+
+```bash
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000`.
+
+### Verify
+
+```bash
+npm run lint
+npm run build
+```
 
 ## License
 
