@@ -4,24 +4,28 @@ Run payroll and treasury disbursements on Starknet without publicly exposing emp
 
 Private Payroll is being built for the STRK20 Private Sprint. Employers can prepare payroll batches and pay team members through STRK20 shielded transfers. Employees receive private balances while the application provides clear payment status and an optional path for selective disclosure.
 
-## Planned MVP
+## Working human-payroll MVP
 
-- Create and manage a payroll recipient list locally.
-- Prepare a payroll batch with individual token amounts.
-- Shield treasury funds and execute private employee payments through STRK20.
-- Show batch progress without publishing individual salaries in the application UI.
-- Export employee payment records for voluntary disclosure and accounting.
-- Document precisely what STRK20 hides and what remains visible onchain.
+- Discover and connect a Starknet Wallet API signer (Ready works today).
+- Read the connected account's STRK20 shielded STRK balance.
+- Shield public STRK into the private treasury from the payroll screen.
+- Build up to 50 recipient transfers and submit them as one STRK20 wallet request.
+- Track wallet approval, Sepolia confirmation, and the Starkscan receipt.
+- Validate Starknet addresses, amounts, duplicate recipients, network, and treasury coverage before submission.
+
+The browser flow is intentionally locked to Starknet Sepolia while it is being tested. Mainnet enablement comes after a successful end-to-end test with real Ready accounts.
+
+Next: persistent payroll records, selective-disclosure exports, Mainnet enablement, recurring payroll contracts, and backend policy wallets for AI agents.
 
 ## Frontend
 
 The current frontend is a responsive Next.js dashboard for a mixed human and AI-agent team. It includes:
 
 - Overview (`/`) — private treasury, next payday, team, activity, and MCP connection summary.
-- Payroll (`/payroll`) — upcoming payroll review, funding readiness, status filters, payroll history, and schedule.
+- Payroll (`/payroll`) — live STRK20 treasury shielding and private batch execution, plus payroll planning and history.
 - People & Agents (`/team`) — searchable recipient directory, compensation, privacy readiness, and scoped MCP access.
 - Activity (`/activity`) — private audit trail, onchain transaction references, privacy coverage, and selective-disclosure receipts.
-- Connect wallet (`/wallet`) — Privy authentication, supported external-wallet connection, wallet identity, and agent-wallet architecture guidance.
+- Connect wallet (`/wallet`) — Ready wallet discovery for STRK20 signing, shielded balance and capability status, plus optional Privy identity.
 - An MCP quick-connect surface for agent integrations.
 - An animated payroll review flow.
 
@@ -42,11 +46,22 @@ Copy `.env.example` to `.env.local` and add the public Privy App ID:
 
 ```bash
 NEXT_PUBLIC_PRIVY_APP_ID=your-privy-app-id
+NEXT_PUBLIC_STARKNET_RPC_URL=https://api.cartridge.gg/x/starknet/sepolia
 ```
 
 Privy app secrets are server credentials. Never expose one through a `NEXT_PUBLIC_` variable or commit it to the repository. Rotate any secret that has been shared outside a secure secret manager.
 
-Privy’s React external-wallet connector currently covers EVM and Solana wallets. The STRK20 transaction flow will use a Starknet-native signer, while policy-controlled Starknet wallets for AI agents can use Privy’s server APIs in a later backend integration.
+Privy is the identity layer; it is not the human STRK20 signer. Human privacy actions use `WalletAccountV6` through Ready. Policy-controlled Starknet wallets for AI agents remain a later backend integration because their authorization and app secret cannot safely live in the browser.
+
+### Try a private payroll
+
+1. Install Ready and select Starknet Sepolia in the wallet.
+2. Open `/wallet`, choose **Connect Ready**, and approve account access.
+3. Open `/payroll#private-payroll` and shield a small amount of test STRK.
+4. Add valid Starknet recipient addresses and amounts.
+5. Approve the private payroll request in Ready and follow the Sepolia receipt link.
+
+The application never requests or stores a recovery phrase, viewing key, or private key. Recipient names remain local component state in this frontend build; only addresses and atomic amounts are sent to Ready when the user explicitly approves the batch.
 
 ### Verify
 

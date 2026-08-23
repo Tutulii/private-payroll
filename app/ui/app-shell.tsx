@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  ArrowRight,
   Check,
   ChevronDown,
   CircleHelp,
@@ -16,11 +15,11 @@ import {
   Sparkles,
   Users,
   WalletCards,
-  X,
 } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { useStarknetWallet } from "../starknet/starknet-wallet";
 
 const navItems = [
   { label: "Overview", icon: LayoutDashboard, href: "/" },
@@ -63,14 +62,23 @@ function MiniLogo() {
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const [isPayrollOpen, setPayrollOpen] = useState(false);
+  const router = useRouter();
+  const starknet = useStarknetWallet();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [toast, setToast] = useState("");
 
   const title = pageTitles[pathname] ?? pageTitles["/"];
+  const openPayroll = useCallback(() => {
+    if (pathname === "/payroll") {
+      window.history.replaceState(null, "", "/payroll#private-payroll");
+      document.getElementById("private-payroll")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    router.push("/payroll#private-payroll");
+  }, [pathname, router]);
   const contextValue = useMemo(
-    () => ({ openPayroll: () => setPayrollOpen(true), notify: (message: string) => setToast(message) }),
-    [],
+    () => ({ openPayroll, notify: (message: string) => setToast(message) }),
+    [openPayroll],
   );
 
   useEffect(() => {
@@ -143,14 +151,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <h1>{title.title} {pathname === "/" && <span className="wave">👋</span>}</h1>
             </div>
             <div className="topbar-actions">
-              <button type="button" className="network-pill" onClick={() => setToast("Connected to Starknet Mainnet")}>
-                <span className="status-dot" /> Mainnet <ChevronDown size={14} />
-              </button>
+              <Link className="network-pill" href="/wallet" title={starknet.isConnected ? `Connected to ${starknet.networkName}` : "Connect Ready wallet"}>
+                <span className={starknet.isConnected && starknet.isSepolia ? "status-dot" : "status-dot status-dot--idle"} /> {starknet.networkName} <ChevronDown size={14} />
+              </Link>
               <button type="button" className="icon-button" aria-label="Notifications" onClick={() => setToast("You’re all caught up")}>
                 <span className="notification-dot" />
                 <Clock3 size={19} />
               </button>
-              <button type="button" className="button button--ink button--compact" onClick={() => setPayrollOpen(true)}>
+              <button type="button" className="button button--ink button--compact" onClick={openPayroll}>
                 <Plus size={18} /> <span>New payroll</span>
               </button>
             </div>
@@ -158,30 +166,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
           {children}
         </section>
-
-        {isPayrollOpen && (
-          <div className="modal-wrap" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setPayrollOpen(false)}>
-            <section className="payroll-modal" role="dialog" aria-modal="true" aria-labelledby="payroll-title">
-              <div className="modal-top">
-                <div className="modal-illustration"><span>PAY</span><ShieldCheck size={23} /></div>
-                <button type="button" className="modal-close" onClick={() => setPayrollOpen(false)} aria-label="Close payroll"><X size={20} /></button>
-              </div>
-              <span className="label">AUGUST 2026</span>
-              <h2 id="payroll-title">Ready to run payroll?</h2>
-              <p>Review the batch before anything is signed. Individual amounts and recipients are handled privately through STRK20.</p>
-              <div className="modal-summary">
-                <div><span>Recipients</span><strong>12 humans + 4 agents</strong></div>
-                <div><span>Total</span><strong>$12,640 USDC</strong></div>
-                <div><span>Payday</span><strong>August 27</strong></div>
-              </div>
-              <div className="privacy-callout"><ShieldCheck size={20} /><span><strong>Private payment batch</strong><br />Only you and each recipient can see their payment details.</span></div>
-              <button type="button" className="button button--ink button--wide" onClick={() => { setPayrollOpen(false); setToast("Payroll review opened"); }}>
-                Continue to review <ArrowRight size={18} />
-              </button>
-              <button type="button" className="modal-cancel" onClick={() => setPayrollOpen(false)}>I’ll do this later</button>
-            </section>
-          </div>
-        )}
 
         {toast && <div className="toast" role="status"><Check size={17} /> {toast}</div>}
       </main>

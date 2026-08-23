@@ -17,9 +17,16 @@ import {
   ShieldCheck,
   Sparkles,
   WalletCards,
+  X,
   Zap,
 } from "lucide-react";
 import { useState } from "react";
+import {
+  formatStrk,
+  shortStarknetAddress,
+  STARKNET_SEPOLIA_EXPLORER,
+  useStarknetWallet,
+} from "../starknet/starknet-wallet";
 import { useAppShell } from "../ui/app-shell";
 
 function shortAddress(address?: string) {
@@ -29,7 +36,8 @@ function shortAddress(address?: string) {
 
 export default function WalletPage() {
   const { notify } = useAppShell();
-  const { ready, authenticated, user, logout } = usePrivy();
+  const starknet = useStarknetWallet();
+  const { ready, authenticated, user } = usePrivy();
   const { login } = useLogin({
     onComplete: () => notify("Signed in with Privy"),
     onError: () => notify("Sign-in was not completed"),
@@ -40,6 +48,7 @@ export default function WalletPage() {
     onError: () => notify("Wallet connection was not completed"),
   });
   const [copied, setCopied] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const primaryWallet = wallets[0];
   const identity = user?.email?.address ?? user?.wallet?.address ?? "Privy account";
@@ -51,30 +60,84 @@ export default function WalletPage() {
     window.setTimeout(() => setCopied(""), 1700);
   };
 
+  const connectStarknetWallet = async (name: string) => {
+    try {
+      await starknet.connectWallet(name);
+      setPickerOpen(false);
+      notify(`${name} connected on ${starknet.networkName}`);
+    } catch (connectionError) {
+      notify(connectionError instanceof Error ? connectionError.message : "Wallet connection failed");
+    }
+  };
+
+  const refreshShieldedBalance = async () => {
+    try {
+      await starknet.refreshBalance();
+      notify("Shielded STRK balance refreshed");
+    } catch (balanceError) {
+      notify(balanceError instanceof Error ? balanceError.message : "Balance check failed");
+    }
+  };
+
   return (
     <div className="product-page wallet-page">
       <section className="page-heading reveal reveal--one">
         <div>
-          <span className="sticker sticker--blue">PRIVY CONNECTION</span>
-          <h2>Your wallet,<br /><em>your payday.</em></h2>
-          <p>Connect a wallet to manage identity and approvals. Sensitive payroll details remain separate from the public wallet trail.</p>
+          <span className="sticker sticker--blue">WALLETS &amp; IDENTITY</span>
+          <h2>Two keys.<br /><em>One simple desk.</em></h2>
+          <p>Ready signs private Starknet payroll transactions. Privy remains the friendly identity layer for humans and, later, policy-controlled agents.</p>
         </div>
         <div className="page-heading__actions">
-          {!ready ? (
-            <button type="button" className="button button--soft" disabled><LoaderCircle className="spin" size={17} /> Loading Privy</button>
-          ) : !authenticated ? (
-            <button type="button" className="button button--ink" onClick={() => login()}><WalletCards size={17} /> Sign in & connect</button>
+          {!starknet.discoveryReady ? (
+            <button type="button" className="button button--soft" disabled><LoaderCircle className="spin" size={17} /> Looking for Ready</button>
+          ) : !starknet.isConnected ? (
+            <button type="button" className="button button--ink" onClick={() => setPickerOpen(true)}><WalletCards size={17} /> Connect Ready</button>
           ) : (
-            <button type="button" className="button button--soft" onClick={() => logout()}><LogOut size={16} /> Sign out</button>
+            <button type="button" className="button button--soft" onClick={() => starknet.disconnectWallet()}><LogOut size={16} /> Disconnect Ready</button>
           )}
         </div>
       </section>
 
-      <section className={`wallet-hero-card reveal reveal--two ${authenticated ? "wallet-hero-card--connected" : ""}`}>
+      <section className={`ready-wallet-card reveal reveal--two ${starknet.isConnected ? "ready-wallet-card--connected" : ""}`}>
+        <div className="ready-wallet-copy">
+          <div className="connection-state"><span className={starknet.isConnected ? "connection-dot connection-dot--live" : "connection-dot"} />{starknet.isConnected ? "STARKNET SIGNER CONNECTED" : "PAYROLL SIGNER"}</div>
+          <span className="ready-wordmark">ready<span>.</span></span>
+          <h3>{starknet.isConnected ? "Private payments are within reach." : "Connect the wallet that understands privacy."}</h3>
+          <p>{starknet.isConnected ? "Payo can now ask Ready to shield STRK and approve a private payroll batch. You stay in control of every signature." : "STRK20 privacy actions use Starknet’s Wallet API. Ready supports that flow today; a normal EVM connection cannot sign it."}</p>
+          <div className="ready-wallet-actions">
+            {!starknet.isConnected ? (
+              <button type="button" className="button button--ink" disabled={!starknet.discoveryReady || starknet.isConnecting} onClick={() => setPickerOpen(true)}>
+                {starknet.isConnecting ? <><LoaderCircle className="spin" size={17} /> Waiting for wallet</> : <>Choose Starknet wallet <ArrowRight size={17} /></>}
+              </button>
+            ) : !starknet.isSepolia ? (
+              <button type="button" className="button button--ink" onClick={() => starknet.switchToSepolia().catch((switchError) => notify(switchError instanceof Error ? switchError.message : "Network switch failed"))}>Switch to Sepolia <ArrowRight size={17} /></button>
+            ) : (
+              <a className="button button--ink" href="/payroll#private-payroll">Prepare private payroll <ArrowRight size={17} /></a>
+            )}
+            <span><ShieldCheck size={15} /> Testnet-only transaction guard is on</span>
+          </div>
+        </div>
+
+        <div className="ready-account-card">
+          <div className="ready-account-top">
+            <span className="ready-account-icon"><WalletCards size={20} /></span>
+            <span><small>Starknet account</small><strong>{starknet.isConnected ? starknet.walletName : "Not connected"}</strong></span>
+            <i className={starknet.isConnected ? "identity-light identity-light--live" : "identity-light"} />
+          </div>
+          <div className="ready-account-balance"><small>Shielded treasury</small><strong>{formatStrk(starknet.shieldedBalance)} <span>STRK</span></strong><button type="button" disabled={!starknet.isConnected || starknet.isRefreshingBalance} onClick={refreshShieldedBalance}>{starknet.isRefreshingBalance ? <LoaderCircle className="spin" size={14} /> : "Refresh"}</button></div>
+          <div className="ready-account-row"><span>Network</span><strong className={starknet.isSepolia ? "network-good" : "network-warn"}>{starknet.networkName}</strong></div>
+          <div className="ready-account-row"><span>STRK20 API</span><strong>{starknet.privacyCapability === "ready" ? "Available" : starknet.privacyCapability === "unsupported" ? "Needs Ready" : starknet.isConnected ? "Checking…" : "—"}</strong></div>
+          <div className="ready-account-row"><span>Address</span><strong>{shortStarknetAddress(starknet.address)}</strong></div>
+          {starknet.address && <div className="ready-account-buttons"><button type="button" onClick={() => copyValue(starknet.address, "Starknet address")}>{copied === starknet.address ? <Check size={14} /> : <Copy size={14} />} Copy</button><a href={`${STARKNET_SEPOLIA_EXPLORER}/contract/${starknet.address}`} target="_blank" rel="noreferrer">Explorer <ExternalLink size={13} /></a></div>}
+          {starknet.error && <div className="ready-inline-error">{starknet.error}</div>}
+        </div>
+      </section>
+
+      <section className={`wallet-hero-card reveal reveal--three ${authenticated ? "wallet-hero-card--connected" : ""}`}>
         <div className="wallet-hero__copy">
-          <div className="connection-state"><span className={authenticated ? "connection-dot connection-dot--live" : "connection-dot"} />{authenticated ? "PRIVY ACCOUNT CONNECTED" : "READY WHEN YOU ARE"}</div>
-          <h3>{authenticated ? "You’re connected." : "One friendly doorway."}</h3>
-          <p>{authenticated ? "Your Payo identity is ready. Connect an external wallet below to use it for supported onchain actions." : "Use a wallet or email to create your Payo identity. Privy keeps the sign-in flow simple and secure."}</p>
+          <div className="connection-state"><span className={authenticated ? "connection-dot connection-dot--live" : "connection-dot"} />{authenticated ? "PRIVY IDENTITY CONNECTED" : "OPTIONAL IDENTITY LAYER"}</div>
+          <h3>{authenticated ? "Your identity is connected." : "One friendly sign-in."}</h3>
+          <p>{authenticated ? "Privy handles your Payo identity. Your Ready wallet remains the signer for all STRK20 payroll transactions." : "Use a wallet or email to create your Payo identity. This is separate from the Ready payroll signer above."}</p>
           {!ready ? (
             <button type="button" className="button button--ink" disabled><LoaderCircle className="spin" size={17} /> Waking up Privy</button>
           ) : !authenticated ? (
@@ -111,7 +174,7 @@ export default function WalletPage() {
         </div>
       </section>
 
-      <section className="wallet-content-grid reveal reveal--three">
+      <section className="wallet-content-grid reveal reveal--four">
         <div className="wallet-list-card">
           <div className="wallet-section-title"><div><span className="label">CONNECTED ACCOUNTS</span><h3>Your wallets</h3></div>{authenticated && <button type="button" className="circle-add" aria-label="Connect another wallet" onClick={() => connectWallet({ description: "Add another wallet to Payo", walletChainType: "ethereum-only" })}><Plus size={18} /></button>}</div>
           {!ready || !walletsReady ? (
@@ -141,19 +204,44 @@ export default function WalletPage() {
           <span className="label">GOOD TO KNOW</span>
           <h3>Private payroll needs two layers.</h3>
           <div className="layer-list">
-            <div><span className="layer-number">1</span><span><strong>Identity connection</strong><small>Privy signs you into Payo and connects supported external wallets.</small></span></div>
-            <div><span className="layer-number layer-number--dark">2</span><span><strong>Starknet payroll signer</strong><small>STRK20 transactions require a Starknet-native wallet integration.</small></span></div>
+            <div><span className="layer-number">1</span><span><strong>Ready payroll signer</strong><small>Approves shielding and private Starknet salary batches.</small></span></div>
+            <div><span className="layer-number layer-number--dark">2</span><span><strong>Privy identity</strong><small>Signs humans into Payo and later helps provision policy-controlled agent wallets.</small></span></div>
           </div>
           <div className="tier-note"><Sparkles size={17} /><span><strong>Privy supports Starknet server wallets</strong><small>Useful for policy-controlled AI agents; these must be created securely from the backend.</small></span></div>
           <a className="docs-link" href="https://docs.privy.io/wallets/overview/chains" target="_blank" rel="noreferrer">View Privy chain support <ExternalLink size={14} /></a>
         </aside>
       </section>
 
-      <section className="wallet-agent-strip reveal reveal--four">
+      <section className="wallet-agent-strip reveal reveal--five">
         <div className="agent-access__icon"><Bot size={25} /><Zap size={12} /></div>
         <div><span className="label">FOR AI AGENTS</span><h3>Policy-controlled wallets belong on the server.</h3><p>Agent wallets can be provisioned through Privy’s server APIs with spending policies. The rotated app secret must only be used in that backend flow.</p></div>
         <button type="button" className="button button--soft" onClick={() => notify("Agent wallet setup is planned for the backend phase")}>Plan agent wallet <ArrowRight size={16} /></button>
       </section>
+
+      {pickerOpen && (
+        <div className="modal-wrap" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !starknet.isConnecting && setPickerOpen(false)}>
+          <section className="wallet-picker" role="dialog" aria-modal="true" aria-labelledby="wallet-picker-title">
+            <div className="wallet-picker-top"><div><span className="label">STARKNET WALLET</span><h2 id="wallet-picker-title">Choose your signer</h2></div><button type="button" className="modal-close" disabled={starknet.isConnecting} onClick={() => setPickerOpen(false)} aria-label="Close wallet picker"><X size={19} /></button></div>
+            <p>Ready is recommended because it currently implements the STRK20 privacy Wallet API used by payroll.</p>
+            {starknet.wallets.length > 0 ? (
+              <div className="starknet-wallet-list">
+                {starknet.wallets.map((wallet) => (
+                  <button type="button" key={wallet.name} disabled={starknet.isConnecting || !wallet.privacyReady} onClick={() => connectStarknetWallet(wallet.name)}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={wallet.icon} alt="" />
+                    <span><strong>{wallet.name}</strong><small>{wallet.privacyReady ? "STRK20 privacy ready" : "Privacy API not available yet"}</small></span>
+                    <em>{wallet.privacyReady ? (starknet.isConnecting ? "…" : "Connect →") : "Unavailable"}</em>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="wallet-install-card"><span className="wallet-empty__icon"><WalletCards size={23} /></span><strong>Ready is not detected</strong><p>Install the Ready browser wallet, create or import a Starknet account, then reload Payo.</p><a className="button button--ink" href="https://www.ready.co/" target="_blank" rel="noreferrer">Get Ready wallet <ExternalLink size={15} /></a></div>
+            )}
+            {starknet.error && <div className="wallet-picker-error">{starknet.error}</div>}
+            <div className="wallet-picker-foot"><ShieldCheck size={15} /> Payo never sees your recovery phrase or STRK20 viewing key.</div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

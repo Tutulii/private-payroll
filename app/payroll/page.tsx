@@ -7,14 +7,27 @@ import {
   CircleDollarSign,
   Clock3,
   Download,
+  ExternalLink,
+  LoaderCircle,
   MoreHorizontal,
   PencilLine,
   Play,
+  Plus,
   ShieldCheck,
   Sparkles,
   Users,
+  WalletCards,
+  X,
 } from "lucide-react";
-import { useState } from "react";
+import Link from "next/link";
+import { useMemo, useState } from "react";
+import {
+  formatStrk,
+  parseStrkAmount,
+  shortStarknetAddress,
+  STARKNET_SEPOLIA_EXPLORER,
+  useStarknetWallet,
+} from "../starknet/starknet-wallet";
 import { useAppShell } from "../ui/app-shell";
 
 type PayrollStatus = "Ready" | "Completed" | "Draft";
@@ -35,11 +48,74 @@ const runs: Array<{
 
 const filters = ["All", "Ready", "Completed", "Draft"] as const;
 
+type DraftRecipient = {
+  id: number;
+  name: string;
+  address: string;
+  amount: string;
+};
+
+const firstRecipient: DraftRecipient = {
+  id: 1,
+  name: "",
+  address: "",
+  amount: "0.001",
+};
+
 export default function PayrollPage() {
   const { openPayroll, notify } = useAppShell();
+  const starknet = useStarknetWallet();
   const [filter, setFilter] = useState<(typeof filters)[number]>("All");
+  const [shieldAmount, setShieldAmount] = useState("0.01");
+  const [recipients, setRecipients] = useState<DraftRecipient[]>([firstRecipient]);
+  const [formError, setFormError] = useState("");
+  const [nextRecipientId, setNextRecipientId] = useState(2);
 
   const visibleRuns = filter === "All" ? runs : runs.filter((run) => run.status === filter);
+  const busy = starknet.transaction?.stage === "wallet" || starknet.transaction?.stage === "confirming";
+  const payrollTotal = useMemo(() => {
+    try {
+      return recipients.reduce((total, recipient) => total + parseStrkAmount(recipient.amount), 0n);
+    } catch {
+      return null;
+    }
+  }, [recipients]);
+
+  const updateRecipient = (id: number, field: keyof Omit<DraftRecipient, "id">, value: string) => {
+    setRecipients((current) => current.map((recipient) => recipient.id === id ? { ...recipient, [field]: value } : recipient));
+  };
+
+  const addRecipient = () => {
+    setRecipients((current) => [...current, { id: nextRecipientId, name: "", address: "", amount: "0.001" }]);
+    setNextRecipientId((current) => current + 1);
+  };
+
+  const removeRecipient = (id: number) => {
+    setRecipients((current) => current.filter((recipient) => recipient.id !== id));
+  };
+
+  const shieldTreasury = async () => {
+    setFormError("");
+    try {
+      const hash = await starknet.shieldStrk(shieldAmount);
+      notify(`Shield transaction submitted · ${hash.slice(0, 10)}…`);
+    } catch (shieldError) {
+      setFormError(shieldError instanceof Error ? shieldError.message : "Shielding was not completed.");
+    }
+  };
+
+  const submitPayroll = async () => {
+    setFormError("");
+    try {
+      if (payrollTotal !== null && starknet.shieldedBalance !== null && payrollTotal > starknet.shieldedBalance) {
+        throw new Error("The shielded treasury does not cover this payroll. Shield more STRK first.");
+      }
+      const hash = await starknet.runPrivatePayroll(recipients.map(({ address, amount }) => ({ address, amount })));
+      notify(`Private payroll submitted · ${hash.slice(0, 10)}…`);
+    } catch (payrollError) {
+      setFormError(payrollError instanceof Error ? payrollError.message : "Payroll was not submitted.");
+    }
+  };
 
   return (
     <div className="product-page payroll-page">
@@ -55,7 +131,65 @@ export default function PayrollPage() {
         </div>
       </section>
 
-      <section className="payroll-stage-card reveal reveal--two">
+      <section className="private-payroll-runner reveal reveal--two" id="private-payroll">
+        <div className="runner-heading">
+          <div><span className="sticker sticker--yellow">LIVE · SEPOLIA</span><h3>Private payroll runner</h3><p>Fund the shielded treasury, add Starknet recipients, then approve one STRK20 batch in Ready.</p></div>
+          <div className="runner-network"><span className={starknet.isConnected && starknet.isSepolia ? "connection-dot connection-dot--live" : "connection-dot"} /><span><small>Payroll signer</small><strong>{starknet.isConnected ? `${starknet.walletName} · ${starknet.networkName}` : "Ready not connected"}</strong></span></div>
+        </div>
+
+        <div className="runner-grid">
+          <aside className="runner-setup">
+            <div className={`runner-step ${starknet.isConnected ? "runner-step--done" : "runner-step--active"}`}>
+              <span className="runner-step-number">1</span>
+              <div><small>CONNECT SIGNER</small><strong>{starknet.isConnected ? shortStarknetAddress(starknet.address) : "Connect Ready wallet"}</strong><p>Ready holds the STRK20 privacy keys and asks for every approval.</p>{!starknet.isConnected && <Link className="button button--ink button--wide" href="/wallet">Connect Ready <WalletCards size={16} /></Link>}{starknet.isConnected && !starknet.isSepolia && <button type="button" className="button button--ink button--wide" onClick={() => starknet.switchToSepolia().catch((switchError) => setFormError(switchError instanceof Error ? switchError.message : "Network switch failed"))}>Switch to Sepolia</button>}</div>
+            </div>
+
+            <div className={`runner-step ${starknet.isConnected && starknet.isSepolia ? "runner-step--active" : ""}`}>
+              <span className="runner-step-number">2</span>
+              <div><small>FUND PRIVATE TREASURY</small><strong>{formatStrk(starknet.shieldedBalance)} STRK shielded</strong><p>Shield public STRK before it can be sent privately.</p><label className="amount-field"><span>Amount</span><input inputMode="decimal" value={shieldAmount} onChange={(event) => setShieldAmount(event.target.value)} aria-label="STRK amount to shield" /><b>STRK</b></label><button type="button" className="button button--soft button--wide" disabled={!starknet.isConnected || !starknet.isSepolia || busy} onClick={shieldTreasury}>{starknet.transaction?.kind === "shield" && busy ? <><LoaderCircle className="spin" size={16} /> {starknet.transaction.stage === "wallet" ? "Approve in Ready" : "Confirming"}</> : <><ShieldCheck size={16} /> Shield treasury</>}</button></div>
+            </div>
+
+            <div className="runner-step runner-step--quiet">
+              <span className="runner-step-number">3</span>
+              <div><small>PRIVATE BATCH</small><strong>One wallet request</strong><p>Recipient addresses and amounts become STRK20 transfer actions inside one payroll request.</p></div>
+            </div>
+          </aside>
+
+          <div className="payroll-composer">
+            <div className="composer-top"><div><span className="label">RECIPIENTS</span><h4>Who gets paid?</h4></div><button type="button" className="button button--soft" onClick={addRecipient} disabled={recipients.length >= 50 || busy}><Plus size={15} /> Add recipient</button></div>
+            <div className="recipient-labels"><span>Recipient</span><span>Starknet address</span><span>Private amount</span><span /></div>
+            <div className="recipient-list">
+              {recipients.map((recipient, index) => (
+                <div className="recipient-editor" key={recipient.id}>
+                  <span className="recipient-index">{index + 1}</span>
+                  <label><span>Name / label</span><input value={recipient.name} placeholder={index === 0 ? "e.g. Maya Chen" : "Recipient name"} onChange={(event) => updateRecipient(recipient.id, "name", event.target.value)} /></label>
+                  <label className="recipient-address"><span>Starknet address</span><input value={recipient.address} placeholder="0x…" spellCheck={false} onChange={(event) => updateRecipient(recipient.id, "address", event.target.value)} /></label>
+                  <label className="recipient-amount"><span>Amount</span><input inputMode="decimal" value={recipient.amount} onChange={(event) => updateRecipient(recipient.id, "amount", event.target.value)} /><b>STRK</b></label>
+                  <button type="button" className="recipient-remove" aria-label={`Remove recipient ${index + 1}`} disabled={recipients.length === 1 || busy} onClick={() => removeRecipient(recipient.id)}><X size={15} /></button>
+                </div>
+              ))}
+            </div>
+
+            <div className="recipient-note"><ShieldCheck size={17} /><span><strong>Before payday</strong><small>Each destination must be a valid Starknet account accepted by STRK20. Ready will reject an ineligible recipient before signing.</small></span></div>
+
+            <div className="composer-summary">
+              <div><small>Recipients</small><strong>{recipients.length}</strong></div><div><small>Private total</small><strong>{formatStrk(payrollTotal)} STRK</strong></div><div><small>Shielded treasury</small><strong>{formatStrk(starknet.shieldedBalance)} STRK</strong></div>
+              <button type="button" className="button button--ink" disabled={!starknet.isConnected || !starknet.isSepolia || busy || payrollTotal === null} onClick={submitPayroll}>{starknet.transaction?.kind === "payroll" && busy ? <><LoaderCircle className="spin" size={17} /> {starknet.transaction.stage === "wallet" ? "Approve in Ready" : "Confirming on Sepolia"}</> : <>Approve private payroll <ArrowRight size={17} /></>}</button>
+            </div>
+
+            {formError && <div className="runner-error"><X size={16} /><span>{formError}</span></div>}
+            {starknet.transaction && (
+              <div className={`transaction-receipt transaction-receipt--${starknet.transaction.stage}`}>
+                <span className="transaction-receipt-icon">{starknet.transaction.stage === "confirmed" ? <CheckCircle2 size={20} /> : starknet.transaction.stage === "failed" ? <X size={19} /> : <LoaderCircle className="spin" size={19} />}</span>
+                <span><small>{starknet.transaction.stage === "wallet" ? "READY IS PREPARING THE PROOF" : starknet.transaction.stage === "confirming" ? "SUBMITTED TO SEPOLIA" : starknet.transaction.stage === "confirmed" ? "TRANSACTION CONFIRMED" : "TRANSACTION NEEDS ATTENTION"}</small><strong>{starknet.transaction.label}</strong>{starknet.transaction.error && <p>{starknet.transaction.error}</p>}</span>
+                {starknet.transaction.hash && <a href={`${STARKNET_SEPOLIA_EXPLORER}/tx/${starknet.transaction.hash}`} target="_blank" rel="noreferrer">View receipt <ExternalLink size={13} /></a>}
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className="payroll-stage-card reveal reveal--three">
         <div className="payroll-stage__copy">
           <div className="stage-status"><span /> READY TO REVIEW</div>
           <h3>August payroll</h3>
@@ -81,7 +215,7 @@ export default function PayrollPage() {
         </div>
 
         <div className="payroll-stage__summary">
-          <div><span>Total payroll</span><strong>$12,640.00</strong><small>USDC · Shielded balance</small></div>
+          <div><span>Total payroll</span><strong>$12,640.00</strong><small>Illustrative monthly plan</small></div>
           <div className="stage-summary-row"><span><Users size={15} /> Recipients</span><b>16</b></div>
           <div className="stage-summary-row"><span><CircleDollarSign size={15} /> Average payment</span><b>$790</b></div>
           <div className="stage-summary-row"><span><CalendarDays size={15} /> Scheduled</span><b>Aug 27</b></div>
@@ -89,7 +223,7 @@ export default function PayrollPage() {
         </div>
       </section>
 
-      <section className="payroll-stats reveal reveal--three">
+      <section className="payroll-stats reveal reveal--four">
         <article className="mini-stat mini-stat--yellow">
           <span className="mini-stat__icon"><CircleDollarSign size={18} /></span>
           <div><small>Paid this year</small><strong>$84,390</strong><em>7 private runs</em></div>
@@ -104,7 +238,7 @@ export default function PayrollPage() {
         </article>
       </section>
 
-      <section className="runs-section reveal reveal--four">
+      <section className="runs-section reveal reveal--five">
         <div className="section-heading">
           <div><span className="label">THE PAPER TRAIL</span><h3>Payroll runs</h3></div>
           <div className="filter-tabs" role="tablist" aria-label="Filter payroll runs">

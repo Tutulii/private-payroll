@@ -10,10 +10,13 @@
   },
   "dependencies": {
     "@privy-io/react-auth": "^3.37.4",
+    "@starknet-io/get-starknet-discovery": "^6.0.2",
+    "@starknet-io/get-starknet-wallet-standard": "^6.0.2",
     "lucide-react": "^0.468.0",
     "next": "^16.1.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "starknet": "^10.4.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

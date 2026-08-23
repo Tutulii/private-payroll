@@ -1,12 +1,15 @@
 "use client";
 
 import { PrivyProvider } from "@privy-io/react-auth";
+import { StarknetWalletProvider } from "./starknet/starknet-wallet";
 
 const privyAppId = process.env.NEXT_PUBLIC_PRIVY_APP_ID;
 
 export default function Providers({ children }: { children: React.ReactNode }) {
+  const content = <StarknetWalletProvider>{children}</StarknetWalletProvider>;
+
   if (!privyAppId) {
-    return <>{children}</>;
+    return content;
   }
 
   return (
@@ -22,7 +25,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
         },
       }}
     >
-      {children}
+      {content}
     </PrivyProvider>
   );
 }
