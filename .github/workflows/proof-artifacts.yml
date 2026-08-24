@@ -74,9 +74,9 @@ jobs:
           HARDWARE_CONCURRENCY: "1"
         run: |
           /usr/bin/time -v -o target/prover-benchmark.txt \
-            bb prove --scheme ultra_honk --oracle_hash keccak --zk \
+            bb prove --scheme ultra_honk --oracle_hash keccak --slow_low_memory \
               -b target/payo_payroll_integrity.json -w target/witness.gz -k target/vk -o target
-          bb verify --scheme ultra_honk --oracle_hash keccak --zk \
+          bb verify --scheme ultra_honk --oracle_hash keccak \
             -k target/vk -p target/proof -i target/public_inputs
       - name: Generate Starknet verifier
         working-directory: contracts

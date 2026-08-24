@@ -80,6 +80,7 @@ struct FxSnapshot {
     token: u8,
     token_decimals: u8,
     reference_currency: u8,
+    quote_decimals: u8,
     feed_commitment: [u8; 32],
     sources_commitment: [u8; 32],
     price_numerator: u128,
@@ -431,7 +432,7 @@ fn evaluate_policy(program: PolicyProgram, gross: u128, earnings: [u128; MAX_COM
 
 fn hash_fx_snapshot(snapshot: FxSnapshot) -> [u8; 32] {
     let domain = "PAYO_FX_SNAPSHOT_V1".as_bytes();
-    let mut message: [u8; 160] = [0; 160];
+    let mut message: [u8; 161] = [0; 161];
     let mut cursor: u32 = domain.len();
     for index in 0..domain.len() {
         message[index] = domain[index];
@@ -439,7 +440,8 @@ fn hash_fx_snapshot(snapshot: FxSnapshot) -> [u8; 32] {
     message[cursor] = snapshot.token;
     message[cursor + 1] = snapshot.token_decimals;
     message[cursor + 2] = snapshot.reference_currency;
-    cursor += 3;
+    message[cursor + 3] = snapshot.quote_decimals;
+    cursor += 4;
     for index in 0..32 {
         message[cursor + index] = snapshot.feed_commitment[index];
         message[cursor + 32 + index] = snapshot.sources_commitment[index];
@@ -668,6 +670,7 @@ fn validate_active_line(
     let expected_decimals: u8 = if line.token == 0 { 18 } else { 6 };
     assert(snapshot.token_decimals == expected_decimals, "token decimals mismatch");
     assert(snapshot.reference_currency <= 1, "unsupported reference currency");
+    assert(snapshot.quote_decimals == 6, "FX quote decimals mismatch");
     assert(
         snapshot.reference_currency == agreement.reference_currency,
         "FX currency does not match agreement",
@@ -755,6 +758,7 @@ fn assert_disabled_fx(slot: FxSlot) {
     assert(slot.snapshot.token == 0, "disabled FX token must be zero");
     assert(slot.snapshot.token_decimals == 0, "disabled FX decimals must be zero");
     assert(slot.snapshot.reference_currency == 0, "disabled FX currency must be zero");
+    assert(slot.snapshot.quote_decimals == 0, "disabled FX quote decimals must be zero");
     assert(slot.snapshot.feed_commitment == ZERO_BYTES, "disabled FX feed must be zero");
     assert(slot.snapshot.sources_commitment == ZERO_BYTES, "disabled FX sources must be zero");
     assert(slot.snapshot.price_numerator == 0, "disabled FX numerator must be zero");
@@ -1010,6 +1014,7 @@ fn empty_snapshot() -> FxSnapshot {
         token: 0,
         token_decimals: 0,
         reference_currency: 0,
+        quote_decimals: 0,
         feed_commitment: ZERO_BYTES,
         sources_commitment: ZERO_BYTES,
         price_numerator: 0,
@@ -1027,6 +1032,7 @@ fn valid_snapshot() -> FxSnapshot {
         token: 0,
         token_decimals: 18,
         reference_currency: 0,
+        quote_decimals: 6,
         feed_commitment: [8; 32],
         sources_commitment: [9; 32],
         price_numerator: 1,
@@ -1513,6 +1519,7 @@ fn fx_snapshot_matches_typescript_golden_vector() {
         token: 0,
         token_decimals: 18,
         reference_currency: 0,
+        quote_decimals: 6,
         feed_commitment: [
             241, 149, 156, 106, 86, 57, 133, 154, 227, 183, 226, 234, 102, 114, 1, 25, 148, 162,
             200, 44, 48, 116, 180, 13, 162, 234, 184, 246, 253, 45, 0, 120,
@@ -1530,8 +1537,8 @@ fn fx_snapshot_matches_typescript_golden_vector() {
         haircut_bps: 500,
     };
     let expected = [
-        213, 189, 194, 49, 84, 82, 26, 104, 19, 240, 106, 116, 8, 156, 87, 76, 149, 8, 0, 50, 97,
-        159, 206, 101, 173, 153, 76, 220, 23, 210, 81, 183,
+        174, 15, 215, 33, 128, 120, 15, 40, 155, 252, 81, 152, 219, 56, 245, 5, 14, 235, 199, 66,
+        174, 150, 30, 213, 96, 55, 239, 46, 88, 64, 190, 24,
     ];
     assert(hash_fx_snapshot(snapshot) == expected);
 }
@@ -1647,6 +1654,21 @@ fn rejects_incorrect_final_component_total() {
 fn rejects_wrong_token_decimals() {
     let mut snapshot = valid_snapshot();
     snapshot.token_decimals = 6;
+    let policy = valid_program();
+    let _ = validate_active_line(
+        valid_line(),
+        valid_agreement(),
+        policy,
+        hash_policy_program(policy),
+        snapshot,
+        100,
+    );
+}
+
+#[test(should_fail_with = "FX quote decimals mismatch")]
+fn rejects_wrong_quote_decimals() {
+    let mut snapshot = valid_snapshot();
+    snapshot.quote_decimals = 18;
     let policy = valid_program();
     let _ = validate_active_line(
         valid_line(),

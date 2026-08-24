@@ -74,6 +74,7 @@ export type CircuitFxSnapshot = {
   token: 0 | 1;
   tokenDecimals: 18 | 6;
   referenceCurrency: 0 | 1;
+  quoteDecimals: 6;
   feedCommitment: `0x${string}`;
   sourcesCommitment: `0x${string}`;
   priceNumerator: string;
@@ -87,6 +88,9 @@ export type CircuitFxSnapshot = {
 
 export function toCircuitFxSnapshot(snapshotInput: FxSnapshot): CircuitFxSnapshot {
   const snapshot = fxSnapshotSchema.parse(snapshotInput);
+  if (snapshot.quoteDecimals !== 6) {
+    throw new Error("PayrollIntegrity v1 requires 6-decimal USD/GBP reference values.");
+  }
   const referenceCurrency = snapshot.referenceCurrency === "USD"
     ? 0
     : snapshot.referenceCurrency === "GBP"
@@ -100,6 +104,7 @@ export function toCircuitFxSnapshot(snapshotInput: FxSnapshot): CircuitFxSnapsho
     token: snapshot.baseToken === "STRK" ? 0 : 1,
     tokenDecimals: snapshot.baseToken === "STRK" ? 18 : 6,
     referenceCurrency,
+    quoteDecimals: 6,
     feedCommitment: toHex(hashTextCommitment("PAYO_FX_FEED_V1", snapshot.feedId)),
     sourcesCommitment: toHex(hashTextCommitment("PAYO_FX_SOURCES_V1", stableJson(sortedSources))),
     priceNumerator: snapshot.medianPriceAtomic,
@@ -116,7 +121,12 @@ export function fxSnapshotCommitment(snapshot: FxSnapshot): `0x${string}` {
   const compiled = toCircuitFxSnapshot(snapshot);
   return toHex(keccak_256(concatBytes(
     utf8("PAYO_FX_SNAPSHOT_V1"),
-    Uint8Array.of(compiled.token, compiled.tokenDecimals, compiled.referenceCurrency),
+    Uint8Array.of(
+      compiled.token,
+      compiled.tokenDecimals,
+      compiled.referenceCurrency,
+      compiled.quoteDecimals,
+    ),
     normalizedHexBytes(compiled.feedCommitment, 32),
     normalizedHexBytes(compiled.sourcesCommitment, 32),
     encodeUint(BigInt(compiled.priceNumerator), 16),

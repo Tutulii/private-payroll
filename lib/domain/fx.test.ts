@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildFxSnapshot, fxSnapshotCommitment } from "./fx";
+import { buildFxSnapshot, fxSnapshotCommitment, toCircuitFxSnapshot } from "./fx";
 
 const now = new Date("2026-08-23T10:00:00.000Z");
 const quotes = [
@@ -38,5 +38,20 @@ describe("FX snapshots", () => {
       baseToken: "STRK", referenceCurrency: "USD", quoteDecimals: 6, haircutBps: 0,
       maximumAgeSeconds: 60, minimumSources: 3, quotes: quotes.slice(0, 2), now,
     })).toThrow("too few");
+  });
+
+  it("rejects an ambiguous reference-currency scale", () => {
+    const snapshot = buildFxSnapshot({
+      baseToken: "USDC",
+      referenceCurrency: "USD",
+      quoteDecimals: 18,
+      haircutBps: 0,
+      maximumAgeSeconds: 60,
+      minimumSources: 3,
+      quotes,
+      now,
+    });
+    expect(() => toCircuitFxSnapshot(snapshot)).toThrow("requires 6-decimal");
+    expect(() => fxSnapshotCommitment(snapshot)).toThrow("requires 6-decimal");
   });
 });

@@ -201,7 +201,8 @@ const policyProgram = {
 };
 const circuitSnapshot = {
   token: u128(circuitFx.token), token_decimals: u128(circuitFx.tokenDecimals),
-  reference_currency: u128(circuitFx.referenceCurrency), feed_commitment: byteArray(circuitFx.feedCommitment),
+  reference_currency: u128(circuitFx.referenceCurrency), quote_decimals: u128(circuitFx.quoteDecimals),
+  feed_commitment: byteArray(circuitFx.feedCommitment),
   sources_commitment: byteArray(circuitFx.sourcesCommitment), price_numerator: circuitFx.priceNumerator,
   price_denominator: circuitFx.priceDenominator, observed_at: circuitFx.observedAt,
   source_count: u128(circuitFx.sourceCount), minimum_source_count: u128(circuitFx.minimumSourceCount),
@@ -209,7 +210,8 @@ const circuitSnapshot = {
 };
 const emptyMembership = { siblings: Array.from({ length: 6 }, () => byteArray(ZERO)), path_bits: Array(6).fill(false) };
 const emptySnapshot = {
-  token: "0", token_decimals: "0", reference_currency: "0", feed_commitment: byteArray(ZERO),
+  token: "0", token_decimals: "0", reference_currency: "0", quote_decimals: "0",
+  feed_commitment: byteArray(ZERO),
   sources_commitment: byteArray(ZERO), price_numerator: "0", price_denominator: "0", observed_at: "0",
   source_count: "0", minimum_source_count: "0", maximum_age_seconds: "0", haircut_bps: "0",
 };

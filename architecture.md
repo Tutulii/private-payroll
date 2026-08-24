@@ -279,7 +279,7 @@ Stores valid policy-catalog roots and verifier versions. Changes are delayed and
 
 ## 11. FX and policy snapshots
 
-The initial settlement assets are STRK and USDC. An FX snapshot commits prices, decimals, source, timestamp, and source count for every allowlisted token/reference pair. The circuit selects the applicable pair privately.
+The initial settlement assets are STRK and USDC. An FX snapshot commits prices, base-token decimals, reference-currency quote decimals, source, timestamp, and source count for every allowlisted token/reference pair. The circuit selects the applicable pair privately. PayrollIntegrity v1 uses six-decimal USD/GBP reference values and fails closed on any other quote scale.
 
 The initial oracle adapter targets Pragma median or TWAP data with:
 
