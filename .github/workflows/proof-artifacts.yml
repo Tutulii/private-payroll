@@ -113,17 +113,27 @@ jobs:
             "$GITHUB_WORKSPACE/contracts/integrity_verifier/src" \
             integrity_verifier/src
 
-      - name: Confirm committed Starknet calldata matches both proofs
+      - name: Validate freshly generated Starknet calldata
         run: |
-          cmp circuits/payroll_integrity/target/proof_calldata-shard-0.txt \
-            contracts/integrity_verifier/tests/proof_calldata-shard-0.txt
-          cmp circuits/payroll_integrity/target/proof_calldata-shard-1.txt \
-            contracts/integrity_verifier/tests/proof_calldata-shard-1.txt
+          node -e 'const fs=require("fs"); for (const shard of [0,1]) { const manifest=JSON.parse(fs.readFileSync(`circuits/payroll_integrity/target/prover-benchmark-shard-${shard}.json`)); for (const prefix of ["circuits/payroll_integrity/target", "contracts/integrity_verifier/tests"]) { const path=`${prefix}/proof_calldata-shard-${shard}.txt`; const values=fs.readFileSync(path,"utf8").trim().split(/\s+/); if (values.length !== manifest.calldataFelts) throw new Error(`${path} has ${values.length} felts; expected ${manifest.calldataFelts}`); if (values.some((value) => !/^0x[0-9a-f]+$/i.test(value))) throw new Error(`${path} contains malformed calldata`); } }'
 
-      - name: Build and test both real proofs in the generated Cairo verifier
+      - name: Build and test committed real proof fixtures in Cairo
         working-directory: contracts/integrity_verifier
         run: |
           scarb build
+          snforge test
+
+      # UltraHonk ZK proofs include prover randomness, so a newly generated
+      # valid proof must not be byte-compared with a committed valid fixture.
+      # Instead, stage this run's proofs and verify them through the generated
+      # Cairo verifier, linked bundle, and Payroll Seal integration test.
+      - name: Test both freshly generated proofs through the real Cairo integration
+        run: |
+          cp circuits/payroll_integrity/target/proof_calldata-shard-0.txt \
+            contracts/integrity_verifier/tests/proof_calldata-shard-0.txt
+          cp circuits/payroll_integrity/target/proof_calldata-shard-1.txt \
+            contracts/integrity_verifier/tests/proof_calldata-shard-1.txt
+          cd contracts/integrity_verifier
           snforge test
 
       - name: Build and test the Payroll Seal proof bundle
