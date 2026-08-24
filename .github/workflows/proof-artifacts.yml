@@ -56,9 +56,12 @@ jobs:
           scarb-version: 2.16.1
           cache: false
       - name: Install pinned Starknet Foundry
-        uses: foundry-rs/setup-snfoundry@v4
+        uses: foundry-rs/setup-snfoundry@v6
         with:
           starknet-foundry-version: 0.57.0
+      - name: Enforce pinned Starknet Foundry
+        run: |
+          test "$(snforge --version)" = "snforge 0.57.0"
 
       - name: Reserve low-memory prover swap
         run: |
