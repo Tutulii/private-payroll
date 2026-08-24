@@ -35,6 +35,8 @@ Gate: schemas and privacy boundaries are tested, every cross-language vector mat
 
 Gate: final public inputs and private memberships match the architecture, all negative tests pass, real verifier calldata is accepted, and verifier/VK/circuit hashes and benchmarks are recorded.
 
+Phase 1 gate evidence: **passed on 2026-08-24** at commit `1792cc2e5897a14c1e36edd6bfc7910574be227e`. The reproducible hashes, native/browser benchmarks, real-verifier gas, test counts, and green workflow are recorded in [`docs/phase1-evidence.md`](./docs/phase1-evidence.md). This is implementation evidence, not a Mainnet deployment claim.
+
 ## Phase 2 — Durable encrypted settlement
 
 1. Integrate client-encrypted organizations, principals, payees, agreements, runs, proof bundles, settlements, receipts, disclosures, capabilities, claims, remediation, and audit events into the real UI/API.

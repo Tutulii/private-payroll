@@ -31,7 +31,7 @@ PAYO labels capabilities according to evidence, not intention.
 | Confirmation tracking and shielded-balance refresh | Working | Starknet receipt |
 | Native USDC private payroll | Safety-gated | Full token path exists; UI disabled until live pool compatibility passes |
 | Encrypted persistent payroll vault | Built and tested locally | XChaCha20-Poly1305/X25519 envelopes, authenticated API, PostgreSQL migration |
-| PayrollIntegrity ZK proof core | Built; browser CI gate pending | 45 Noir tests, two linked native ZK proofs, proof-bound Garaga verifier, and two real Cairo proof checks |
+| PayrollIntegrity ZK proof core | Phase 1 complete; not deployed | [Green Phase 1 evidence](./docs/phase1-evidence.md): 45 Noir tests, two linked native and browser ZK proofs, reproducible Garaga verifier, and real Cairo verifier → bundle → seal checks |
 | PAYO payroll-seal contract | Built and tested locally | Real two-proof verifier → bundle → seal integration passes; contracts are not deployed |
 | Advanced obligation engine | Built and tested locally | Bounded policy DSL, multi-source FX snapshots, schedules, vesting, and offboarding tests |
 | Compliance proof export | Built and tested locally | Balanced journal and verifier-bound ZIP package |
