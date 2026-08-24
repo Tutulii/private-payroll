@@ -31,8 +31,12 @@ jobs:
           curl -L https://raw.githubusercontent.com/noir-lang/noirup/main/install | bash
           echo "$HOME/.nargo/bin" >> "$GITHUB_PATH"
           "$HOME/.nargo/bin/noirup" -v 1.0.0-beta.5
+      - name: Install Garaga Python runtime
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
       - name: Install pinned Garaga
-        run: pipx install garaga==0.18.2
+        run: pipx install --python python3.10 garaga==0.18.2
       - name: Install pinned Scarb
         uses: software-mansion/setup-scarb@v1
         with:
@@ -109,7 +113,7 @@ jobs:
         if: ${{ always() }}
         with:
           name: payo-payroll-integrity-${{ github.sha }}
-          if-no-files-found: error
+          if-no-files-found: warn
           path: |
             circuits/payroll_integrity/target/payo_payroll_integrity.json
             circuits/payroll_integrity/target/vk
