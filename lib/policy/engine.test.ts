@@ -14,7 +14,7 @@ describe("bounded policy engine", () => {
   it("commits every instruction and policy version", () => {
     const original = policyPackCommitment(DEMO_PROGRESSIVE_POLICY);
     const changed = policyPackCommitment({ ...DEMO_PROGRESSIVE_POLICY, revision: 2 });
-    expect(original).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(original).toBe("0x87dfb3dc6631fd53810103f6a9e2de6a20dc53a307ed6a640bd363fdbc6899ed");
     expect(changed).not.toBe(original);
   });
 

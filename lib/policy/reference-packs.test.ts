@@ -22,11 +22,15 @@ describe("official-source reference policy releases", () => {
   it("evaluates the narrow US supplemental-wage example", () => {
     expect(evaluatePolicyPack(US_2026_SUPPLEMENTAL_FLAT.pack, { gross: "10000" }))
       .toEqual({ statutoryWithholding: "2200" });
+    expect(policyPackCommitment(US_2026_SUPPLEMENTAL_FLAT.pack))
+      .toBe("0x325087e383de44739727f5614ebeb57356b9208d54ca87c7cc41ffdfd61c917e");
   });
 
   it("evaluates UK category-A monthly employee NI across both paid bands", () => {
     expect(evaluatePolicyPack(UK_2026_27_MONTHLY_NI_CATEGORY_A.pack, { gross: "500000" }))
       .toEqual({ statutoryDeduction: "26750" });
     expect(compilePolicyPack(UK_2026_27_MONTHLY_NI_CATEGORY_A.pack).instructionCount).toBe(16);
+    expect(policyPackCommitment(UK_2026_27_MONTHLY_NI_CATEGORY_A.pack))
+      .toBe("0x213b26fd90e85e4c6d75edf40b5c0cb641cdd4a4a03459d129b345c01328dc14");
   });
 });

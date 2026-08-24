@@ -13,6 +13,7 @@ describe("FX snapshots", () => {
     const snapshot = buildFxSnapshot({
       baseToken: "STRK",
       referenceCurrency: "USD",
+      feedId: "pragma:STRK/USD:median",
       quoteDecimals: 6,
       haircutBps: 500,
       maximumAgeSeconds: 60,
@@ -22,7 +23,8 @@ describe("FX snapshots", () => {
     });
     expect(snapshot.medianPriceAtomic).toBe("1000000");
     expect(snapshot.conservativePriceAtomic).toBe("950000");
-    expect(fxSnapshotCommitment(snapshot)).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(fxSnapshotCommitment(snapshot))
+      .toBe("0xae0fd72180780f289bfc5198db38f5050eebc742ae961ed56037ef2e5840be18");
   });
 
   it("rejects stale, duplicate, and insufficient sources", () => {
