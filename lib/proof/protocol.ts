@@ -3,7 +3,7 @@ import type { EncryptedVaultRecord, VaultPrincipalKeyPair } from "@/lib/crypto/v
 
 export const PAYROLL_INTEGRITY_CIRCUIT_URL = "/circuits/payroll_integrity-v1.json";
 export const PAYROLL_INTEGRITY_CIRCUIT_SHA256 =
-  "0x7e2a91ad918059b72e8c4e211be8dfabcfad8e58b130857092b0677572ad78fd";
+  "0x97b70d6cd99d782501983a849c4996d366d48a51bddbd771c91dba388639d489";
 export const PAYROLL_INTEGRITY_PUBLIC_INPUT_COUNT = 16;
 
 export type EncryptedPayrollWitness = {
@@ -48,7 +48,7 @@ export type ProofWorkerSuccess = {
   version: 1;
   type: "proof-complete";
   requestId: string;
-  scheme: "ultra_keccak_zk_honk";
+  scheme: "ultra_starknet_zk_honk";
   proof: Uint8Array;
   publicInputs: PayrollIntegrityPublicInputs;
   circuitSha256: string;

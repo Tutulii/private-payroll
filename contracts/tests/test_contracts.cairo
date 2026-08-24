@@ -103,7 +103,7 @@ fn pool_can_seal_a_valid_proof_and_nullifier() {
     let inputs = valid_public_inputs(seal, chain_id);
     start_mock_call(
         verifier,
-        selector!("verify_ultra_keccak_zk_honk_proof"),
+        selector!("verify_ultra_starknet_zk_honk_proof"),
         Result::<Span<u256>, felt252>::Ok(inputs.span()),
     );
     start_cheat_caller_address(seal, pool);
@@ -117,6 +117,76 @@ fn pool_can_seal_a_valid_proof_and_nullifier() {
 
     assert(deposits.is_empty(), 'seal must not custody');
     assert(dispatcher.get_run_status(31, 32) == 1, 'run not proven');
+}
+
+#[test]
+#[should_panic(expected: ('PAYO_PUBLIC_INPUTS',))]
+fn rejects_proof_with_mismatched_public_inputs() {
+    let pool = address(1000);
+    let verifier = address(2000);
+    let chain_id = 'SN_MAIN';
+    let seal = deploy_seal(pool, verifier, chain_id);
+    let valid_inputs = valid_public_inputs(seal, chain_id);
+    let mut inputs: Array<u256> = array![];
+    for index in 0..valid_inputs.len() {
+        inputs.append(if index == 6 { 999_u256 } else { *valid_inputs.at(index) });
+    }
+    start_mock_call(
+        verifier,
+        selector!("verify_ultra_starknet_zk_honk_proof"),
+        Result::<Span<u256>, felt252>::Ok(inputs.span()),
+    );
+    start_cheat_caller_address(seal, pool);
+    start_cheat_block_timestamp(seal, 150);
+
+    let dispatcher = IPayoPayrollSealDispatcher { contract_address: seal };
+    let proof: Array<felt252> = array![];
+    dispatcher.privacy_invoke(
+        0, 1, 1, 11, 12, 21, 22, 41, 42, 51, 52, 31, 32, 100, 200, proof.span(),
+    );
+}
+
+#[test]
+#[should_panic(expected: ('PAYO_PUBLIC_INPUTS',))]
+fn rejects_proof_with_wrong_public_input_count() {
+    let pool = address(1000);
+    let verifier = address(2000);
+    let seal = deploy_seal(pool, verifier, 'SN_MAIN');
+    let short_inputs: Array<u256> = array![1_u256];
+    start_mock_call(
+        verifier,
+        selector!("verify_ultra_starknet_zk_honk_proof"),
+        Result::<Span<u256>, felt252>::Ok(short_inputs.span()),
+    );
+    start_cheat_caller_address(seal, pool);
+    start_cheat_block_timestamp(seal, 150);
+
+    let dispatcher = IPayoPayrollSealDispatcher { contract_address: seal };
+    let proof: Array<felt252> = array![];
+    dispatcher.privacy_invoke(
+        0, 1, 1, 11, 12, 21, 22, 41, 42, 51, 52, 31, 32, 100, 200, proof.span(),
+    );
+}
+
+#[test]
+#[should_panic(expected: ('PAYO_PROOF_FAILED',))]
+fn rejects_verifier_failure() {
+    let pool = address(1000);
+    let verifier = address(2000);
+    let seal = deploy_seal(pool, verifier, 'SN_MAIN');
+    start_mock_call(
+        verifier,
+        selector!("verify_ultra_starknet_zk_honk_proof"),
+        Result::<Span<u256>, felt252>::Err('INVALID_PROOF'),
+    );
+    start_cheat_caller_address(seal, pool);
+    start_cheat_block_timestamp(seal, 150);
+
+    let dispatcher = IPayoPayrollSealDispatcher { contract_address: seal };
+    let proof: Array<felt252> = array![];
+    dispatcher.privacy_invoke(
+        0, 1, 1, 11, 12, 21, 22, 41, 42, 51, 52, 31, 32, 100, 200, proof.span(),
+    );
 }
 
 #[test]
@@ -144,7 +214,7 @@ fn rejects_replayed_run_nullifiers() {
     let inputs = valid_public_inputs(seal, chain_id);
     start_mock_call(
         verifier,
-        selector!("verify_ultra_keccak_zk_honk_proof"),
+        selector!("verify_ultra_starknet_zk_honk_proof"),
         Result::<Span<u256>, felt252>::Ok(inputs.span()),
     );
     start_cheat_caller_address(seal, pool);

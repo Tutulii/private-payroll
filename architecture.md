@@ -146,7 +146,7 @@ A payroll may mix STRK and USDC lines. Treasury validation groups totals and wal
 
 ## 7. Commitments and nullifiers
 
-Cross-language commitments use canonical byte encoding and Keccak-256.
+Externally disclosed v1 identity, policy-ID, receipt, and nullifier commitments use canonical byte encoding and Keccak-256. PayrollIntegrity additionally derives circuit-internal agreement leaves, payroll leaves, and fixed-tree nodes with a domain-separated BN254 Poseidon2 sponge. This proof-root layer is reproduced byte-for-byte by the browser input builder and exists to keep the 64-leaf circuit provable with the Starknet-compatible backend; it never replaces a disclosed v1 commitment silently.
 
 ```text
 leaf = keccak256(
@@ -164,7 +164,7 @@ leaf = keccak256(
 )
 ```
 
-Merkle trees are fixed at 64 leaves. Empty leaves use a domain-separated constant. A run nullifier prevents replay:
+Both proof trees are fixed at 64 leaves and permit no more than 50 real leaves. Circuit-internal empty leaves use a versioned Poseidon2 constant. A canonical Keccak run nullifier prevents replay:
 
 ```text
 run_nullifier = keccak256(
@@ -172,7 +172,7 @@ run_nullifier = keccak256(
 )
 ```
 
-Hash values crossing into Cairo are represented as two big-endian `u128` limbs. Golden vectors are mandatory for TypeScript, Noir, and Cairo.
+Hash and proof-root values crossing into Cairo are represented as two big-endian `u128` limbs. Keccak commitment vectors remain mandatory for TypeScript, Noir, and Cairo; proof-root Poseidon2 vectors are mandatory for TypeScript and Noir because Cairo consumes, but does not recompute, those roots.
 
 ## 8. PayrollIntegrity proof
 

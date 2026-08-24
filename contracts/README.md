@@ -1,6 +1,6 @@
 # PAYO Starknet contracts
 
-- `PayoPayrollSeal` is a non-custodial STRK20 `privacy_invoke` helper. Only the configured pool may call it. It verifies a Garaga UltraKeccakZKHonk proof, checks every returned public input, consumes the run nullifier, emits a proof receipt, and returns no token deposit.
+- `PayoPayrollSeal` is a non-custodial STRK20 `privacy_invoke` helper. Only the configured pool may call it. It verifies a Garaga UltraStarknetZKHonk proof, checks every returned public input, consumes the run nullifier, emits a proof receipt, and returns no token deposit.
 - `PayoPolicyRegistry` timelocks versioned policy roots and supports emergency revocation. Production ownership must be transferred to a multisig.
 
 The seal currently implements only `PRECOMMIT` (`mode = 0`). SettlementMatch, claims, and remediation are intentionally rejected until their independent circuits and viewing-key evidence exist.

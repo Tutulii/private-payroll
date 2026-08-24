@@ -10,7 +10,7 @@ pub struct OpenNoteDeposit {
 
 #[starknet::interface]
 pub trait IIntegrityVerifier<TContractState> {
-    fn verify_ultra_keccak_zk_honk_proof(
+    fn verify_ultra_starknet_zk_honk_proof(
         self: @TContractState, full_proof_with_hints: Span<felt252>,
     ) -> Result<Span<u256>, felt252>;
 }
@@ -148,7 +148,7 @@ pub mod PayoPayrollSeal {
 
             let verifier = IIntegrityVerifierDispatcher { contract_address: self.verifier.read() };
             let public_inputs = verifier
-                .verify_ultra_keccak_zk_honk_proof(proof_calldata)
+                .verify_ultra_starknet_zk_honk_proof(proof_calldata)
                 .expect(errors::PROOF_FAILED);
             assert(public_inputs.len() == 16, errors::PUBLIC_INPUTS);
 

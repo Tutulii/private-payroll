@@ -13,7 +13,7 @@ The circuit is deliberately a consistency proof, not a legal opinion. A policy c
 
 ## Pinned proof pipeline
 
-The exact compatibility set is Noir `1.0.0-beta.16`, Barretenberg `3.0.0-nightly.20251104`, Garaga `1.1.0`, Scarb/Cairo `2.16.1`, and Starknet Foundry `0.57.0`. `toolchains.lock.json`, exact npm versions, and `.github/workflows/proof-artifacts.yml` are authoritative; never mix proof, calldata, VK, or verifier outputs from another set.
+The exact compatibility set is Noir `1.0.0-beta.5`, Barretenberg/bb.js `0.87.4-starknet.1`, Garaga `0.18.2`, Scarb/Cairo `2.16.1`, and Starknet Foundry `0.57.0`. It uses the `UltraStarknetZKHonk` flavor supported by that Garaga release. `toolchains.lock.json`, exact npm versions, and `.github/workflows/proof-artifacts.yml` are authoritative; never mix proof, calldata, VK, or verifier outputs from another set.
 
 ```bash
 npm run proof:input
@@ -21,13 +21,10 @@ cd circuits/payroll_integrity
 nargo test
 nargo build
 nargo execute witness
-
-bb prove --scheme ultra_honk --oracle_hash keccak --write_vk \
-  -b target/payo_payroll_integrity.json -w target/witness.gz -o target
-bb verify --scheme ultra_honk --oracle_hash keccak \
-  -k target/vk -p target/proof -i target/public_inputs
+cd ../..
+npm run proof:prove
 ```
 
-This Barretenberg release generates zero-knowledge UltraHonk proofs by default; `--disable_zk` is never used. The gate emits the VK from the same witness-expanded proving key as the proof. With this circuit, the standalone synthetic-witness `write_vk` path produced a proof/VK pair that failed native verification, so it is intentionally not used. The artifact runner supplies bounded swap because this circuit's normal prover path needs substantially more memory than a standard hosted runner provides.
+`proof:prove` explicitly requests `starknetZK`, self-verifies before writing any artifact, derives the VK from the same pinned circuit, and generates Garaga calldata only after verification. A non-ZK fallback is forbidden. The previous Noir beta.16/Barretenberg 3.0 Keccak-ZK path produced matching proof-bound and standalone VKs but rejected valid large-circuit proofs because of the upstream large-domain ZK defect; it is intentionally not used.
 
-The pinned circuit reports 622,777 ACIR opcodes. Native and browser proof generation therefore run on the x64 artifact workflow rather than being inferred from witness execution on a phone. The committed browser artifact is `public/circuits/payroll_integrity-v1.json`; CI compares its semantic circuit fields to a fresh pinned build.
+The proof-root layer uses Poseidon2 for circuit-internal leaves and fixed trees while externally disclosed v1 identity/text commitments and the run nullifier remain canonical Keccak. Native and browser proof generation run on the x64 artifact workflow rather than being inferred from witness execution on a phone. The committed browser artifact is `public/circuits/payroll_integrity-v1.json`; CI compares its semantic circuit fields to a fresh pinned build.

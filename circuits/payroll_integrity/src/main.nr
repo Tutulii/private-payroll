@@ -18,6 +18,18 @@ global EMPTY_LEAF: [u8; 32] = [
 
 global ZERO_BYTES: [u8; 32] = [0; 32];
 
+// Circuit-internal commitments use the BN254 Poseidon2 permutation. Keeping the
+// fixed tree SNARK-native is what makes a 64-leaf proof viable in a browser;
+// externally disclosed identity/text commitments remain canonical Keccak values.
+global PROOF_DOMAIN_EMPTY: Field = 1;
+global PROOF_DOMAIN_MERKLE_NODE: Field = 2;
+global PROOF_DOMAIN_AGREEMENT: Field = 3;
+global PROOF_DOMAIN_PAYROLL_LINE: Field = 4;
+global PROOF_EMPTY_LEAF: [u8; 32] = [
+    22, 135, 88, 51, 45, 91, 62, 45, 19, 190, 128, 72, 200, 1, 27, 69, 69, 144, 224, 108, 68, 188,
+    231, 247, 2, 240, 145, 3, 238, 245, 163, 115,
+];
+
 global STRK_ADDRESS: [u8; 32] = [
     4, 113, 143, 90, 15, 195, 76, 193, 175, 22, 161, 205, 238, 152, 255, 178, 12, 49, 245, 205, 97,
     214, 171, 7, 32, 24, 88, 244, 40, 124, 147, 141,
@@ -198,18 +210,6 @@ fn merkle_root(mut leaves: [[u8; 32]; MAX_LINES]) -> [u8; 32] {
     leaves[0]
 }
 
-fn root_from_membership(leaf: [u8; 32], membership: MerkleMembership) -> [u8; 32] {
-    let mut current = leaf;
-    for level in 0..CATALOG_DEPTH {
-        current = if membership.path_bits[level] {
-            hash_merkle_node(membership.siblings[level], current)
-        } else {
-            hash_merkle_node(current, membership.siblings[level])
-        };
-    }
-    current
-}
-
 fn bytes_less_than(left: [u8; 32], right: [u8; 32]) -> bool {
     let mut decided = false;
     let mut less = false;
@@ -249,6 +249,146 @@ fn low_limb(value: [u8; 32]) -> u128 {
         result = result * 256 + value[index] as u128;
     }
     result
+}
+
+// Matches Barretenberg's Poseidon2::hash fixed-length sponge: the IV is
+// input_length << 64, the rate is three, and the domain is the first input.
+fn proof_hash<let N: u32>(domain: Field, values: [Field; N]) -> Field {
+    let mut state: [Field; 4] = [0; 4];
+    state[3] = ((N + 1) as Field) * 18446744073709551616;
+    let mut cache: [Field; 3] = [0; 3];
+    let mut cache_size: u32 = 1;
+    cache[0] = domain;
+    for index in 0..N {
+        if cache_size == 3 {
+            for cache_index in 0..3 {
+                state[cache_index] += cache[cache_index];
+            }
+            state = std::hash::poseidon2_permutation(state, 4);
+            cache = [0; 3];
+            cache_size = 0;
+        }
+        cache[cache_size] = values[index];
+        cache_size += 1;
+    }
+    for cache_index in 0..3 {
+        if cache_index < cache_size {
+            state[cache_index] += cache[cache_index];
+        }
+    }
+    state = std::hash::poseidon2_permutation(state, 4);
+    state[0]
+}
+
+fn bytes_as_fields(value: [u8; 32]) -> [Field; 2] {
+    [high_limb(value) as Field, low_limb(value) as Field]
+}
+
+fn proof_hash_bytes<let N: u32>(domain: Field, values: [Field; N]) -> [u8; 32] {
+    proof_hash(domain, values).to_be_bytes()
+}
+
+fn proof_merkle_node(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
+    let left_fields = bytes_as_fields(left);
+    let right_fields = bytes_as_fields(right);
+    proof_hash_bytes(
+        PROOF_DOMAIN_MERKLE_NODE,
+        [left_fields[0], left_fields[1], right_fields[0], right_fields[1]],
+    )
+}
+
+fn proof_merkle_root(mut leaves: [[u8; 32]; MAX_LINES]) -> [u8; 32] {
+    let mut width = MAX_LINES;
+    for _level in 0..6 {
+        for index in 0..32 {
+            if index < width / 2 {
+                leaves[index] = proof_merkle_node(leaves[index * 2], leaves[index * 2 + 1]);
+            }
+        }
+        width = width / 2;
+    }
+    leaves[0]
+}
+
+fn proof_root_from_membership(leaf: [u8; 32], membership: MerkleMembership) -> [u8; 32] {
+    let mut current = leaf;
+    for level in 0..CATALOG_DEPTH {
+        current = if membership.path_bits[level] {
+            proof_merkle_node(membership.siblings[level], current)
+        } else {
+            proof_merkle_node(current, membership.siblings[level])
+        };
+    }
+    current
+}
+
+fn proof_hash_agreement_terms(agreement: AgreementWitness) -> [u8; 32] {
+    let id = bytes_as_fields(agreement.id_commitment);
+    let recipient = bytes_as_fields(agreement.recipient_commitment);
+    let policy = bytes_as_fields(agreement.policy_commitment);
+    let schedule = bytes_as_fields(agreement.schedule_commitment);
+    let salt = bytes_as_fields(agreement.salt);
+    let mut fields: [Field; 34] = [0; 34];
+    fields[0] = id[0];
+    fields[1] = id[1];
+    fields[2] = recipient[0];
+    fields[3] = recipient[1];
+    fields[4] = agreement.earnings_count as Field;
+    for component in 0..MAX_COMPONENTS {
+        fields[5 + component] = agreement.earnings[component] as Field;
+    }
+    fields[13] = agreement.token as Field;
+    fields[14] = policy[0];
+    fields[15] = policy[1];
+    fields[16] = schedule[0];
+    fields[17] = schedule[1];
+    fields[18] = agreement.due_at as Field;
+    fields[19] = agreement.valid_until as Field;
+    fields[20] = agreement.classification_declared as Field;
+    fields[21] = agreement.classification_score as Field;
+    fields[22] = agreement.classification_employee_threshold as Field;
+    fields[23] = if agreement.final_pay_mode { 1 } else { 0 };
+    fields[24] = agreement.final_required_mask as Field;
+    for component in 0..MAX_FINAL_COMPONENTS {
+        fields[25 + component] = agreement.final_components[component] as Field;
+    }
+    fields[30] = agreement.fx_floor_atomic as Field;
+    fields[31] = agreement.reference_currency as Field;
+    fields[32] = salt[0];
+    fields[33] = salt[1];
+    proof_hash_bytes(PROOF_DOMAIN_AGREEMENT, fields)
+}
+
+fn proof_hash_payroll_line(
+    line: PayrollLine,
+    gross: u128,
+    deductions_total: u128,
+    policy_commitment: [u8; 32],
+) -> [u8; 32] {
+    let agreement = bytes_as_fields(line.agreement_commitment);
+    let recipient = bytes_as_fields(line.recipient_commitment);
+    let policy = bytes_as_fields(policy_commitment);
+    let schedule = bytes_as_fields(line.schedule_commitment);
+    let salt = bytes_as_fields(line.salt);
+    let mut fields: [Field; 22] = [0; 22];
+    fields[0] = agreement[0];
+    fields[1] = agreement[1];
+    fields[2] = recipient[0];
+    fields[3] = recipient[1];
+    fields[4] = gross as Field;
+    fields[5] = line.deductions_count as Field;
+    for component in 0..MAX_COMPONENTS {
+        fields[6 + component] = line.deductions[component] as Field;
+    }
+    fields[14] = (gross - deductions_total) as Field;
+    fields[15] = line.token as Field;
+    fields[16] = policy[0];
+    fields[17] = policy[1];
+    fields[18] = schedule[0];
+    fields[19] = schedule[1];
+    fields[20] = salt[0];
+    fields[21] = salt[1];
+    proof_hash_bytes(PROOF_DOMAIN_PAYROLL_LINE, fields)
 }
 
 fn hash_policy_program(program: PolicyProgram) -> [u8; 32] {
@@ -576,7 +716,7 @@ fn assert_final_pay(line: PayrollLine, gross: u128) {
             "final pay components do not equal gross",
         );
         for index in 0..MAX_FINAL_COMPONENTS {
-            let divisor: u32 = 1 << index;
+            let divisor: u32 = 1 << index as u8;
             let required = (line.final_required_mask as u32 / divisor) % 2 == 1;
             if required {
                 assert(line.final_components[index] > 0, "required final component is zero");
@@ -697,7 +837,7 @@ fn validate_active_line(
     assert(line.reference_value_atomic == adjusted_reference, "FX reference value mismatch");
     assert(line.reference_value_atomic >= line.fx_floor_atomic, "FX floor not met");
 
-    hash_payroll_line(line, gross, deductions, policy_commitment)
+    proof_hash_payroll_line(line, gross, deductions, policy_commitment)
 }
 
 fn assert_inactive_line(line: PayrollLine) {
@@ -857,7 +997,8 @@ fn main(
         }
         if policies[index].enabled {
             policy_commitments[index] = hash_policy_program(policies[index].program);
-            let root = root_from_membership(policy_commitments[index], policies[index].membership);
+            let root =
+                proof_root_from_membership(policy_commitments[index], policies[index].membership);
             assert_root_limbs(root, policy_root_high, policy_root_low);
         } else {
             assert_disabled_policy(policies[index]);
@@ -874,15 +1015,16 @@ fn main(
         }
         if fx_snapshots[index].enabled {
             fx_commitments[index] = hash_fx_snapshot(fx_snapshots[index].snapshot);
-            let root = root_from_membership(fx_commitments[index], fx_snapshots[index].membership);
+            let root =
+                proof_root_from_membership(fx_commitments[index], fx_snapshots[index].membership);
             assert_root_limbs(root, fx_root_high, fx_root_low);
         } else {
             assert_disabled_fx(fx_snapshots[index]);
         }
     }
 
-    let mut agreement_leaves: [[u8; 32]; MAX_LINES] = [EMPTY_LEAF; MAX_LINES];
-    let mut payroll_leaves: [[u8; 32]; MAX_LINES] = [EMPTY_LEAF; MAX_LINES];
+    let mut agreement_leaves: [[u8; 32]; MAX_LINES] = [PROOF_EMPTY_LEAF; MAX_LINES];
+    let mut payroll_leaves: [[u8; 32]; MAX_LINES] = [PROOF_EMPTY_LEAF; MAX_LINES];
     let mut real_line_count: u32 = 0;
     for index in 0..MAX_LINES {
         if index > 0 {
@@ -907,7 +1049,7 @@ fn main(
                 agreements[index].valid_until >= agreements[index].due_at,
                 "invalid agreement window",
             );
-            agreement_leaves[index] = hash_agreement_terms(agreements[index]);
+            agreement_leaves[index] = proof_hash_agreement_terms(agreements[index]);
         } else {
             assert_disabled_agreement(agreements[index]);
         }
@@ -943,12 +1085,12 @@ fn main(
     assert(real_line_count > 0, "empty payroll run");
     assert(real_line_count <= MAX_REAL_LINES, "too many real payroll lines");
     assert_root_limbs(
-        merkle_root(agreement_leaves),
+        proof_merkle_root(agreement_leaves),
         agreement_root_high,
         agreement_root_low,
     );
     assert_root_limbs(
-        merkle_root(payroll_leaves),
+        proof_merkle_root(payroll_leaves),
         manifest_root_high,
         manifest_root_low,
     );
@@ -1119,10 +1261,10 @@ fn valid_agreement() -> AgreementWitness {
 
 fn first_catalog_membership() -> MerkleMembership {
     let mut membership = empty_membership();
-    let mut empty_subtree = EMPTY_LEAF;
+    let mut empty_subtree = PROOF_EMPTY_LEAF;
     for level in 0..CATALOG_DEPTH {
         membership.siblings[level] = empty_subtree;
-        empty_subtree = hash_merkle_node(empty_subtree, empty_subtree);
+        empty_subtree = proof_merkle_node(empty_subtree, empty_subtree);
     }
     membership
 }
@@ -1213,20 +1355,40 @@ fn valid_public_roots() -> [[u8; 32]; 5] {
     let agreement = valid_agreement();
     let line = valid_line();
     let policy = valid_program();
-    let mut agreement_leaves = [EMPTY_LEAF; MAX_LINES];
-    agreement_leaves[0] = hash_agreement_terms(agreement);
-    let mut manifest_leaves = [EMPTY_LEAF; MAX_LINES];
-    manifest_leaves[0] = hash_payroll_line(line, 100, 10, hash_policy_program(policy));
+    let mut agreement_leaves = [PROOF_EMPTY_LEAF; MAX_LINES];
+    agreement_leaves[0] = proof_hash_agreement_terms(agreement);
+    let mut manifest_leaves = [PROOF_EMPTY_LEAF; MAX_LINES];
+    manifest_leaves[0] = proof_hash_payroll_line(line, 100, 10, hash_policy_program(policy));
     [
-        merkle_root(agreement_leaves),
-        merkle_root(manifest_leaves),
-        root_from_membership(hash_policy_program(policy), first_catalog_membership()),
-        root_from_membership(
+        proof_merkle_root(agreement_leaves),
+        proof_merkle_root(manifest_leaves),
+        proof_root_from_membership(hash_policy_program(policy), first_catalog_membership()),
+        proof_root_from_membership(
             hash_fx_snapshot(valid_snapshot()),
             first_catalog_membership(),
         ),
         valid_nullifier(),
     ]
+}
+
+#[test]
+fn legacy_keccak_empty_tree_matches_cross_language_vector() {
+    let mut leaves = [EMPTY_LEAF; MAX_LINES];
+    leaves[0] = [
+        227, 148, 180, 125, 92, 114, 78, 100, 101, 165, 225, 165, 34, 213, 156, 32, 242, 58, 167,
+        135, 61, 173, 51, 178, 202, 200, 181, 2, 114, 33, 38, 1,
+    ];
+    let root = merkle_root(leaves);
+    let expected = [
+        85, 218, 152, 239, 242, 83, 224, 55, 206, 123, 240, 63, 143, 148, 177, 32, 84, 121, 133,
+        131, 171, 168, 18, 19, 140, 166, 98, 77, 146, 79, 50, 133,
+    ];
+    assert(root == expected);
+}
+
+#[test]
+fn proof_empty_leaf_matches_poseidon2_vector() {
+    assert(proof_hash_bytes(PROOF_DOMAIN_EMPTY, []) == PROOF_EMPTY_LEAF);
 }
 
 #[test]
@@ -1433,13 +1595,13 @@ fn fx_conversion_uses_canonical_floor_rounding() {
 #[test(should_fail_with = "root high limb mismatch")]
 fn rejects_wrong_policy_catalog_root() {
     let policy = valid_program();
-    let root = root_from_membership(hash_policy_program(policy), first_catalog_membership());
+    let root = proof_root_from_membership(hash_policy_program(policy), first_catalog_membership());
     assert_root_limbs(root, 0, low_limb(root));
 }
 
 #[test(should_fail_with = "root low limb mismatch")]
 fn rejects_wrong_fx_catalog_root() {
-    let root = root_from_membership(
+    let root = proof_root_from_membership(
         hash_fx_snapshot(valid_snapshot()),
         first_catalog_membership(),
     );
@@ -1757,9 +1919,96 @@ fn rejects_schedule_mismatch() {
     );
 }
 
+#[test(should_fail_with = "obligation is not due")]
+fn rejects_early_obligation() {
+    let mut line = valid_line();
+    line.due_at = 101;
+    let mut agreement = valid_agreement();
+    agreement.due_at = 101;
+    let policy = valid_program();
+    let _ = validate_active_line(
+        line,
+        agreement,
+        policy,
+        hash_policy_program(policy),
+        valid_snapshot(),
+        100,
+    );
+}
+
+#[test(should_fail_with = "agreement is expired")]
+fn rejects_expired_obligation() {
+    let mut agreement = valid_agreement();
+    agreement.valid_until = 99;
+    let policy = valid_program();
+    let _ = validate_active_line(
+        valid_line(),
+        agreement,
+        policy,
+        hash_policy_program(policy),
+        valid_snapshot(),
+        100,
+    );
+}
+
+#[test(should_fail_with = "FX token mismatch")]
+fn rejects_fx_snapshot_for_another_token() {
+    let mut snapshot = valid_snapshot();
+    snapshot.token = 1;
+    let policy = valid_program();
+    let _ = validate_active_line(
+        valid_line(),
+        valid_agreement(),
+        policy,
+        hash_policy_program(policy),
+        snapshot,
+        100,
+    );
+}
+
+#[test(should_fail_with = "FX reference value mismatch")]
+fn rejects_incorrect_fx_conversion() {
+    let mut line = valid_line();
+    line.reference_value_atomic = 89;
+    let policy = valid_program();
+    let _ = validate_active_line(
+        line,
+        valid_agreement(),
+        policy,
+        hash_policy_program(policy),
+        valid_snapshot(),
+        100,
+    );
+}
+
 #[test(should_fail_with = "agreements must be sorted and unique")]
 fn rejects_unsorted_agreements() {
     assert(bytes_less_than([2; 32], [1; 32]), "agreements must be sorted and unique");
+}
+
+#[test(should_fail_with = "agreements must be sorted and unique")]
+fn rejects_duplicate_agreements_in_main() {
+    let mut agreements = [empty_agreement(); MAX_LINES];
+    agreements[0] = valid_agreement();
+    agreements[1] = valid_agreement();
+    let mut lines = [empty_line(); MAX_LINES];
+    lines[0] = valid_line();
+    lines[1] = valid_line();
+    let roots = valid_public_roots();
+    invoke_valid_main(
+        high_limb(roots[0]),
+        low_limb(roots[0]),
+        high_limb(roots[1]),
+        low_limb(roots[1]),
+        high_limb(roots[2]),
+        low_limb(roots[2]),
+        high_limb(roots[3]),
+        low_limb(roots[3]),
+        high_limb(roots[4]),
+        low_limb(roots[4]),
+        agreements,
+        lines,
+    );
 }
 
 #[test]

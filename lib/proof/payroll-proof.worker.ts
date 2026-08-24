@@ -71,10 +71,10 @@ scope.addEventListener("message", async (event: MessageEvent<ProofWorkerRequest>
     backend = new UltraHonkBackend(circuit.bytecode, {
       threads: crossOriginIsolated ? Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1)) : 1,
     });
-    const proofData = await backend.generateProof(witness, { keccakZK: true });
+    const proofData = await backend.generateProof(witness, { starknetZK: true });
     witness.fill(0);
     progress(requestId, "verifying");
-    if (!await backend.verifyProof(proofData, { keccakZK: true })) {
+    if (!await backend.verifyProof(proofData, { starknetZK: true })) {
       scope.postMessage(safeProofFailure(requestId, "SELF_VERIFY_FAILED"));
       return;
     }
@@ -82,7 +82,7 @@ scope.addEventListener("message", async (event: MessageEvent<ProofWorkerRequest>
       version: 1,
       type: "proof-complete",
       requestId,
-      scheme: "ultra_keccak_zk_honk",
+      scheme: "ultra_starknet_zk_honk",
       proof: proofData.proof,
       publicInputs: mapPayrollPublicInputs(proofData.publicInputs),
       circuitSha256: PAYROLL_INTEGRITY_CIRCUIT_SHA256,

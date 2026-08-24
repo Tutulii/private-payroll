@@ -65,7 +65,7 @@ export default function ProofBenchmarkPage() {
         <div className="payroll-stage__copy">
           <div className="stage-status"><span /> {stage.replaceAll("-", " ").toUpperCase()}</div>
           <h3>PayrollIntegrity v1</h3>
-          <p>The worker self-verifies the UltraKeccakZKHonk proof and returns exactly the 16 deployment-bound public inputs.</p>
+          <p>The worker self-verifies the UltraStarknetZKHonk proof and returns exactly the 16 deployment-bound public inputs.</p>
           <button className="button button--ink" type="button" onClick={prove} disabled={!fixture || !["ready", "failed", "complete"].includes(stage)}>
             Generate local proof
           </button>

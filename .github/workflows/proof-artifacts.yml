@@ -5,6 +5,11 @@ on:
   push:
     paths:
       - "circuits/**"
+      - "contracts/**"
+      - "lib/proof/**"
+      - "scripts/*proof*"
+      - "package*.json"
+      - "toolchains.lock.json"
       - ".github/workflows/proof-artifacts.yml"
 
 permissions:
@@ -25,19 +30,18 @@ jobs:
         run: |
           curl -L https://raw.githubusercontent.com/noir-lang/noirup/main/install | bash
           echo "$HOME/.nargo/bin" >> "$GITHUB_PATH"
-          "$HOME/.nargo/bin/noirup" -v 1.0.0-beta.16
-      - name: Install pinned Barretenberg
-        run: |
-          curl -L https://raw.githubusercontent.com/AztecProtocol/aztec-packages/refs/heads/next/barretenberg/bbup/install | bash
-          echo "$HOME/.bb" >> "$GITHUB_PATH"
-          "$HOME/.bb/bbup" -v 3.0.0-nightly.20251104
+          "$HOME/.nargo/bin/noirup" -v 1.0.0-beta.5
       - name: Install pinned Garaga
-        run: pipx install garaga==1.1.0
+        run: pipx install garaga==0.18.2
       - name: Install pinned Scarb
         uses: software-mansion/setup-scarb@v1
         with:
           scarb-version: 2.16.1
           cache: false
+      - name: Install pinned Starknet Foundry
+        uses: foundry-rs/setup-snfoundry@v4
+        with:
+          starknet-foundry-version: 0.57.0
       - name: Reserve prover swap
         run: |
           swapon --show
@@ -61,27 +65,23 @@ jobs:
         working-directory: circuits/payroll_integrity
         run: nargo execute witness
       - name: Generate the proof-bound verification key and zero-knowledge proof
-        working-directory: circuits/payroll_integrity
         env:
           HARDWARE_CONCURRENCY: "1"
         run: |
-          /usr/bin/time -v -o target/prover-benchmark.txt \
-            bb prove --scheme ultra_honk --oracle_hash keccak --write_vk \
-              -b target/payo_payroll_integrity.json -w target/witness.gz -o target
-          bb verify --scheme ultra_honk --oracle_hash keccak \
-            -k target/vk -p target/proof -i target/public_inputs
+          /usr/bin/time -v -o circuits/payroll_integrity/target/prover-benchmark.txt \
+            npm run proof:prove
       - name: Generate Starknet verifier
         working-directory: contracts
-        run: garaga gen --system ultra_keccak_zk_honk --vk ../circuits/payroll_integrity/target/vk --project-name integrity_verifier
+        run: garaga gen --system ultra_starknet_zk_honk --vk ../circuits/payroll_integrity/target/vk --project-name integrity_verifier
       - name: Build generated Starknet verifier
         working-directory: contracts/integrity_verifier
         run: scarb build
-      - name: Generate Starknet proof calldata
-        working-directory: circuits/payroll_integrity
+      - name: Test the real proof in the generated Starknet verifier
         run: |
-          garaga calldata --system ultra_keccak_zk_honk \
-            --vk target/vk --proof target/proof --public-inputs target/public_inputs \
-            --format snforge --output-path ../../contracts/integrity_verifier/tests
+          mkdir -p contracts/integrity_verifier/tests
+          cp circuits/payroll_integrity/target/proof_calldata.txt contracts/integrity_verifier/tests/proof_calldata.txt
+          cd contracts/integrity_verifier
+          snforge test
       - name: Record reproducible artifact hashes
         run: |
           sha256sum \
@@ -89,7 +89,7 @@ jobs:
             circuits/payroll_integrity/target/vk \
             circuits/payroll_integrity/target/proof \
             circuits/payroll_integrity/target/public_inputs \
-            contracts/integrity_verifier/tests/proof_calldata.txt \
+            circuits/payroll_integrity/target/proof_calldata.txt \
             > circuits/payroll_integrity/target/SHA256SUMS
       - name: Install the pinned browser
         run: npx playwright install --with-deps chromium
@@ -116,6 +116,7 @@ jobs:
             circuits/payroll_integrity/target/proof
             circuits/payroll_integrity/target/public_inputs
             circuits/payroll_integrity/target/prover-benchmark.txt
+            circuits/payroll_integrity/target/prover-benchmark.json
             circuits/payroll_integrity/target/browser-proof-benchmark.json
             circuits/payroll_integrity/target/SHA256SUMS
             contracts/integrity_verifier/
