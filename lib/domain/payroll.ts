@@ -3,9 +3,17 @@ import { z } from "zod";
 export const payrollTokenSchema = z.enum(["STRK", "USDC"]);
 export type PayrollTokenSymbol = z.infer<typeof payrollTokenSchema>;
 
+export const PAYO_MAX_U128 = (1n << 128n) - 1n;
+const PAYO_MAX_U128_DECIMAL = PAYO_MAX_U128.toString();
+
 export const atomicAmountSchema = z
   .string()
-  .regex(/^(0|[1-9]\d*)$/, "Amounts must be unsigned base-10 atomic-unit strings.");
+  .regex(/^(0|[1-9]\d*)$/, "Amounts must be unsigned base-10 atomic-unit strings.")
+  .refine(
+    (value) => value.length < PAYO_MAX_U128_DECIMAL.length
+      || (value.length === PAYO_MAX_U128_DECIMAL.length && value <= PAYO_MAX_U128_DECIMAL),
+    "Amount exceeds PayrollIntegrity's u128 range.",
+  );
 
 export const moneySchema = z.object({
   token: payrollTokenSchema,
@@ -77,6 +85,9 @@ export function calculatePayrollLine(input: PrivatePayrollLine): CalculatedPayro
   const gross = sumAtomic(line.earningsAtomic);
   const deductions = sumAtomic(line.deductionsAtomic);
   if (gross <= 0n) throw new Error("Gross pay must be greater than zero.");
+  if (gross > PAYO_MAX_U128 || deductions > PAYO_MAX_U128) {
+    throw new Error("Payroll totals exceed PayrollIntegrity's u128 range.");
+  }
   if (deductions > gross) throw new Error("Deductions cannot exceed gross pay.");
 
   return {

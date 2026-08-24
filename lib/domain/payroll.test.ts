@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertPayrollTransition,
+  atomicAmountSchema,
   calculatePayrollLine,
   calculatePayrollManifest,
   type PrivatePayrollLine,
@@ -31,6 +32,18 @@ describe("payroll domain", () => {
     expect(() => calculatePayrollLine(line({ deductionsAtomic: ["1300000"] }))).toThrow(
       "Deductions cannot exceed gross pay",
     );
+  });
+
+  it("rejects values and aggregate totals outside the circuit u128 range", () => {
+    expect(() => atomicAmountSchema.parse("340282366920938463463374607431768211456"))
+      .toThrow("u128");
+    expect(() => calculatePayrollLine(line({
+      earningsAtomic: [
+        "340282366920938463463374607431768211455",
+        "1",
+      ],
+      deductionsAtomic: [],
+    }))).toThrow("totals exceed");
   });
 
   it("rejects duplicate obligations", () => {
