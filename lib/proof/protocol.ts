@@ -2,6 +2,8 @@ import type { InputMap } from "@noir-lang/noir_js";
 import type { EncryptedVaultRecord, VaultPrincipalKeyPair } from "@/lib/crypto/vault";
 
 export const PAYROLL_INTEGRITY_CIRCUIT_URL = "/circuits/payroll_integrity-v1.json";
+export const PAYROLL_INTEGRITY_CIRCUIT_SHA256 =
+  "0x7e2a91ad918059b72e8c4e211be8dfabcfad8e58b130857092b0677572ad78fd";
 export const PAYROLL_INTEGRITY_PUBLIC_INPUT_COUNT = 16;
 
 export type EncryptedPayrollWitness = {

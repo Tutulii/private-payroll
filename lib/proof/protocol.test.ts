@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { mapPayrollPublicInputs, safeProofFailure } from "./protocol";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import {
+  mapPayrollPublicInputs,
+  PAYROLL_INTEGRITY_CIRCUIT_SHA256,
+  safeProofFailure,
+} from "./protocol";
 
 describe("proof-worker privacy protocol", () => {
   it("returns only the 16 deployment-bound public inputs", () => {
@@ -17,6 +23,12 @@ describe("proof-worker privacy protocol", () => {
 
   it("rejects unexpected public-input shapes", () => {
     expect(() => mapPayrollPublicInputs(["0x1"])).toThrow("Expected 16");
+  });
+
+  it("pins the exact deployment-bound browser circuit", () => {
+    const circuit = readFileSync(new URL("../../public/circuits/payroll_integrity-v1.json", import.meta.url));
+    const digest = `0x${createHash("sha256").update(circuit).digest("hex")}`;
+    expect(PAYROLL_INTEGRITY_CIRCUIT_SHA256).toBe(digest);
   });
 
   it("never reflects prover errors or witness values to the main thread", () => {

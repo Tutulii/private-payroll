@@ -5,6 +5,7 @@ import { Noir, type CompiledCircuit } from "@noir-lang/noir_js";
 import { decryptVaultRecord } from "@/lib/crypto/vault";
 import {
   mapPayrollPublicInputs,
+  PAYROLL_INTEGRITY_CIRCUIT_SHA256,
   PAYROLL_INTEGRITY_CIRCUIT_URL,
   safeProofFailure,
   type EncryptedPayrollWitness,
@@ -38,6 +39,9 @@ scope.addEventListener("message", async (event: MessageEvent<ProofWorkerRequest>
     const response = await fetch(PAYROLL_INTEGRITY_CIRCUIT_URL, { cache: "force-cache" });
     if (!response.ok) throw new Error("circuit response failed");
     circuitText = await response.text();
+    if (await sha256Hex(circuitText) !== PAYROLL_INTEGRITY_CIRCUIT_SHA256) {
+      throw new Error("circuit digest mismatch");
+    }
   } catch {
     scope.postMessage(safeProofFailure(requestId, "CIRCUIT_LOAD_FAILED"));
     return;
@@ -81,7 +85,7 @@ scope.addEventListener("message", async (event: MessageEvent<ProofWorkerRequest>
       scheme: "ultra_keccak_zk_honk",
       proof: proofData.proof,
       publicInputs: mapPayrollPublicInputs(proofData.publicInputs),
-      circuitSha256: await sha256Hex(circuitText),
+      circuitSha256: PAYROLL_INTEGRITY_CIRCUIT_SHA256,
       provingTimeMs: Math.round(performance.now() - startedAt),
     };
     scope.postMessage(result, [proofData.proof.buffer]);
