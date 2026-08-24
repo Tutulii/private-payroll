@@ -60,22 +60,14 @@ jobs:
       - name: Execute the full deployment-bound witness
         working-directory: circuits/payroll_integrity
         run: nargo execute witness
-      - name: Generate verification key
-        working-directory: circuits/payroll_integrity
-        env:
-          HARDWARE_CONCURRENCY: "1"
-        run: |
-          /usr/bin/time -v -o target/vk-benchmark.txt \
-            bb write_vk --scheme ultra_honk --oracle_hash keccak \
-              -b target/payo_payroll_integrity.json -o target
-      - name: Generate and verify the zero-knowledge proof
+      - name: Generate the proof-bound verification key and zero-knowledge proof
         working-directory: circuits/payroll_integrity
         env:
           HARDWARE_CONCURRENCY: "1"
         run: |
           /usr/bin/time -v -o target/prover-benchmark.txt \
-            bb prove --scheme ultra_honk --oracle_hash keccak \
-              -b target/payo_payroll_integrity.json -w target/witness.gz -k target/vk -o target
+            bb prove --scheme ultra_honk --oracle_hash keccak --write_vk \
+              -b target/payo_payroll_integrity.json -w target/witness.gz -o target
           bb verify --scheme ultra_honk --oracle_hash keccak \
             -k target/vk -p target/proof -i target/public_inputs
       - name: Generate Starknet verifier
@@ -123,7 +115,6 @@ jobs:
             circuits/payroll_integrity/target/vk
             circuits/payroll_integrity/target/proof
             circuits/payroll_integrity/target/public_inputs
-            circuits/payroll_integrity/target/vk-benchmark.txt
             circuits/payroll_integrity/target/prover-benchmark.txt
             circuits/payroll_integrity/target/browser-proof-benchmark.json
             circuits/payroll_integrity/target/SHA256SUMS
