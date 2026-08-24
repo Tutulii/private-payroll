@@ -24,7 +24,7 @@ export function proveEncryptedPayroll(input: {
 }): Promise<ProofWorkerSuccess> {
   const worker = new Worker(new URL("./payroll-proof.worker.ts", import.meta.url), { type: "module" });
   const requestId = crypto.randomUUID();
-  const timeoutMs = input.timeoutMs ?? 15 * 60_000;
+  const timeoutMs = input.timeoutMs ?? 30 * 60_000;
   const request: ProofWorkerRequest = {
     version: 1,
     type: "prove-payroll-integrity",

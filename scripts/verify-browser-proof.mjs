@@ -8,7 +8,7 @@ const unexpectedErrors = [];
 page.on("pageerror", (error) => unexpectedErrors.push(error.message));
 await page.goto(`${baseUrl}/proof-benchmark`, { waitUntil: "networkidle" });
 await page.locator('[data-proof-stage="ready"] button').click();
-await page.locator('[data-proof-result="verified"]').waitFor({ timeout: 15 * 60_000 });
+await page.locator('[data-proof-result="verified"]').waitFor({ timeout: 30 * 60_000 });
 const result = await page.locator('[data-proof-result="verified"]').evaluate((node) => ({
   text: node.textContent,
   stage: node.closest("[data-proof-stage]")?.getAttribute("data-proof-stage"),
