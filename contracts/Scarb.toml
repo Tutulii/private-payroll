@@ -9,6 +9,8 @@ starknet = "2.16.1"
 [dev-dependencies]
 snforge_std = { git = "https://github.com/foundry-rs/starknet-foundry.git", tag = "v0.57.0" }
 
+[lib]
+
 [[target.starknet-contract]]
 sierra = true
 casm = true

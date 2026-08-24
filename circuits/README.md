@@ -1,30 +1,58 @@
 # PAYO circuits
 
-`payroll_integrity` is the deployment-bound v1 private calculation circuit. It binds fixed 64-leaf authoritative-agreement and payroll-manifest trees and permits at most 50 due obligations. The circuit has 16 public inputs:
+`payroll_integrity` is PAYO's deployment-bound v1 private calculation circuit. It binds fixed 64-leaf authoritative-agreement and payroll-manifest trees and permits at most 50 real obligations.
 
-1. Starknet chain ID, PAYO seal address, proof version, and schema version;
-2. agreement, manifest, policy-catalog, and FX-catalog roots as high/low `u128` limbs;
-3. a circuit-derived run nullifier as high/low limbs; and
-4. validity start and expiry.
+To keep the proof domain within `2^20` without weakening coverage, one payroll run is proved as two linked shards against one circuit and one verification key:
 
-The private witness proves one-to-one coverage of every due agreement, sorted unique agreement identifiers, canonical padding, committed recipient/earnings/token/schedule terms, bounded policy execution, deductions and net arithmetic, classification consistency, token and quote decimals, source-count and freshness rules, deterministic FX floor rounding, and explicit final-pay components. Agreement-term, policy-program, FX-snapshot, payroll-leaf, and nullifier encodings have TypeScript/Noir golden tests. V1 normalizes USD and GBP floors to six reference-currency decimals and rejects any other quote scale.
+- shard 0 authenticates agreement leaves 0–25 and payroll leaves 0–24;
+- shard 1 authenticates agreement leaves 24–49 and payroll leaves 25–49;
+- the two-agreement overlap proves the private global sorting boundary;
+- both proofs expose identical deployment fields and roots; their final public input is respectively `0` and `1`.
 
-The circuit is deliberately a consistency proof, not a legal opinion. A policy catalog must be reviewed and activated by the organization or its authorized reviewer. A classification proof cannot establish whether the private real-world facts supplied to the agreement are true.
+Each shard exposes 17 public inputs: chain ID, PAYO seal address, proof/schema versions, agreement/manifest/policy/FX roots as high/low `u128` limbs, the run-nullifier limbs, validity start/expiry, and the shard index. The Payroll Seal requires the ordered 34-input bundle and rejects missing, duplicate, reordered, or root-mismatched shards.
+
+The private witness proves one-to-one coverage of every due agreement, sorted unique agreement identifiers, canonical padding, committed recipient/earnings/token/schedule terms, bounded policy execution, deductions and net arithmetic, classification consistency, token and quote decimals, FX source-count/freshness/floor rules, and explicit final-pay components. TypeScript/Noir golden tests cover the agreement, policy, FX, payroll-leaf, empty-leaf, and nullifier encodings.
+
+This is a consistency proof, not a legal opinion. Reference policy catalogs must be reviewed by an authorized professional before activation.
 
 ## Pinned proof pipeline
 
-The exact compatibility set is Noir `1.0.0-beta.5`, Barretenberg/bb.js `0.87.4-starknet.1`, Garaga `0.18.2`, Scarb/Cairo `2.16.1`, and Starknet Foundry `0.57.0`. It uses the `UltraStarknetZKHonk` flavor supported by that Garaga release. `toolchains.lock.json`, exact npm versions, and `.github/workflows/proof-artifacts.yml` are authoritative; never mix proof, calldata, VK, or verifier outputs from another set.
+The exact compatibility set is:
+
+- Noir `1.0.0-beta.16` (`noirc` commit `2d46fca7203545cbbfb31a0d0328de6c10a8db95`);
+- native Barretenberg `3.0.0-nightly.20251104`;
+- Garaga `1.1.0`;
+- Scarb/Cairo `2.16.1`; and
+- Starknet Foundry `0.57.0`.
+
+Proofs use ZK UltraHonk with a Keccak transcript (`ultra_keccak_zk_honk`). Circuit-internal leaves and tree nodes use domain-separated BN254 Poseidon2. The Keccak transcript is required by the generated Garaga verifier; a non-ZK fallback is forbidden.
 
 ```bash
 npm run proof:input
+
 cd circuits/payroll_integrity
 nargo test
 nargo build
-nargo execute witness
+nargo execute witness-shard-0 --prover-name Prover
+nargo execute witness-shard-1 --prover-name Prover-shard-1
 cd ../..
+
 npm run proof:prove
+cd contracts/integrity_verifier
+scarb build
+snforge test
 ```
 
-`proof:prove` explicitly requests `starknetZK`, self-verifies before writing any artifact, derives the VK from the same pinned circuit, and generates Garaga calldata only after verification. A non-ZK fallback is forbidden. The previous Noir beta.16/Barretenberg 3.0 Keccak-ZK path produced matching proof-bound and standalone VKs but rejected valid large-circuit proofs because of the upstream large-domain ZK defect; it is intentionally not used.
+`proof:prove` invokes the pinned native `bb`, generates both proofs in low-memory mode, verifies each proof independently, requires the same VK and first 16 public inputs, validates shard indices 0/1, and emits the inner Garaga calldata felts. The generated Cairo suite verifies each proof and the uninterrupted real-proof → bundle verifier → Payroll Seal path.
 
-The proof-root layer uses Poseidon2 for circuit-internal leaves and fixed trees while externally disclosed v1 identity/text commitments and the run nullifier remain canonical Keccak. Native and browser proof generation run on the x64 artifact workflow rather than being inferred from witness execution on a phone. The committed browser artifact is `public/circuits/payroll_integrity-v1.json`; CI compares its semantic circuit fields to a fresh pinned build.
+Current proof-bound measurements:
+
+- ACIR opcodes: `206,987`;
+- backend circuit size: `864,348` (`log_circuit_size = 20`);
+- proof size: `10,560` bytes per shard;
+- public inputs: `17` per shard;
+- Garaga calldata: `3,187` inner felts per shard;
+- VK file SHA-256: `d622dff7f86da80f1b9e2fae58d4aee071d2fdec5ae018bcec353a6ce8941d96`;
+- Garaga VK hash: `0x083a0b53dfd5611364613319f15de9b3c9b42568586814e371a71608f95b47b4`.
+
+The committed browser artifact is `public/circuits/payroll_integrity-v1.json`; its SHA-256 is pinned in `lib/proof/protocol.ts`. CI rebuilds the circuit, enforces the `2^20` gate budget, regenerates both witnesses/proofs/calldata and the verifier source, runs the real Cairo integration, and finally proves both shards inside the browser Web Worker.

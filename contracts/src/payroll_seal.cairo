@@ -10,8 +10,8 @@ pub struct OpenNoteDeposit {
 
 #[starknet::interface]
 pub trait IIntegrityVerifier<TContractState> {
-    fn verify_ultra_starknet_zk_honk_proof(
-        self: @TContractState, full_proof_with_hints: Span<felt252>,
+    fn verify_payroll_integrity_bundle(
+        self: @TContractState, shard_0_proof: Span<felt252>, shard_1_proof: Span<felt252>,
     ) -> Result<Span<u256>, felt252>;
 }
 
@@ -35,7 +35,8 @@ pub trait IPayoPayrollSeal<TContractState> {
         run_nullifier_low: u128,
         validity_start: u64,
         validity_expiry: u64,
-        proof_calldata: Span<felt252>,
+        shard_0_proof_calldata: Span<felt252>,
+        shard_1_proof_calldata: Span<felt252>,
     ) -> Span<OpenNoteDeposit>;
 
     fn get_run_status(
@@ -48,7 +49,10 @@ pub trait IPayoPayrollSeal<TContractState> {
 #[starknet::contract]
 pub mod PayoPayrollSeal {
     use core::num::traits::Zero;
-    use starknet::storage::{Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess, StoragePointerWriteAccess};
+    use starknet::storage::{
+        Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess,
+        StoragePointerWriteAccess,
+    };
     use starknet::{ContractAddress, get_block_info, get_caller_address, get_contract_address};
     use super::{IIntegrityVerifierDispatcher, IIntegrityVerifierDispatcherTrait, OpenNoteDeposit};
 
@@ -134,7 +138,8 @@ pub mod PayoPayrollSeal {
             run_nullifier_low: u128,
             validity_start: u64,
             validity_expiry: u64,
-            proof_calldata: Span<felt252>,
+            shard_0_proof_calldata: Span<felt252>,
+            shard_1_proof_calldata: Span<felt252>,
         ) -> Span<OpenNoteDeposit> {
             assert(get_caller_address() == self.pool.read(), errors::BAD_POOL);
             assert(mode == MODE_PRECOMMIT, errors::BAD_MODE);
@@ -148,37 +153,51 @@ pub mod PayoPayrollSeal {
 
             let verifier = IIntegrityVerifierDispatcher { contract_address: self.verifier.read() };
             let public_inputs = verifier
-                .verify_ultra_starknet_zk_honk_proof(proof_calldata)
+                .verify_payroll_integrity_bundle(shard_0_proof_calldata, shard_1_proof_calldata)
                 .expect(errors::PROOF_FAILED);
-            assert(public_inputs.len() == 16, errors::PUBLIC_INPUTS);
+            assert(public_inputs.len() == 34, errors::PUBLIC_INPUTS);
 
-            // Public input order is fixed by circuits/payroll_integrity/src/main.nr.
+            // Each shard has the 17 public inputs fixed by the Noir entrypoint. The first 16
+            // must match exactly and the final input must identify shard 0 then shard 1.
             let seal_address: felt252 = get_contract_address().into();
-            assert_public_input(public_inputs, 0, as_u256(self.chain_id.read()));
-            assert_public_input(public_inputs, 1, as_u256(seal_address));
-            assert_public_input(public_inputs, 2, as_u256(proof_version));
-            assert_public_input(public_inputs, 3, as_u256(schema_version));
-            assert_public_input(public_inputs, 4, as_u256(agreement_root_high));
-            assert_public_input(public_inputs, 5, as_u256(agreement_root_low));
-            assert_public_input(public_inputs, 6, as_u256(manifest_root_high));
-            assert_public_input(public_inputs, 7, as_u256(manifest_root_low));
-            assert_public_input(public_inputs, 8, as_u256(policy_root_high));
-            assert_public_input(public_inputs, 9, as_u256(policy_root_low));
-            assert_public_input(public_inputs, 10, as_u256(fx_root_high));
-            assert_public_input(public_inputs, 11, as_u256(fx_root_low));
-            assert_public_input(public_inputs, 12, as_u256(run_nullifier_high));
-            assert_public_input(public_inputs, 13, as_u256(run_nullifier_low));
-            assert_public_input(public_inputs, 14, as_u256(validity_start));
-            assert_public_input(public_inputs, 15, as_u256(validity_expiry));
+            let mut offset = 0;
+            let mut shard_index: u8 = 0;
+            loop {
+                assert_public_input(public_inputs, offset, as_u256(self.chain_id.read()));
+                assert_public_input(public_inputs, offset + 1, as_u256(seal_address));
+                assert_public_input(public_inputs, offset + 2, as_u256(proof_version));
+                assert_public_input(public_inputs, offset + 3, as_u256(schema_version));
+                assert_public_input(public_inputs, offset + 4, as_u256(agreement_root_high));
+                assert_public_input(public_inputs, offset + 5, as_u256(agreement_root_low));
+                assert_public_input(public_inputs, offset + 6, as_u256(manifest_root_high));
+                assert_public_input(public_inputs, offset + 7, as_u256(manifest_root_low));
+                assert_public_input(public_inputs, offset + 8, as_u256(policy_root_high));
+                assert_public_input(public_inputs, offset + 9, as_u256(policy_root_low));
+                assert_public_input(public_inputs, offset + 10, as_u256(fx_root_high));
+                assert_public_input(public_inputs, offset + 11, as_u256(fx_root_low));
+                assert_public_input(public_inputs, offset + 12, as_u256(run_nullifier_high));
+                assert_public_input(public_inputs, offset + 13, as_u256(run_nullifier_low));
+                assert_public_input(public_inputs, offset + 14, as_u256(validity_start));
+                assert_public_input(public_inputs, offset + 15, as_u256(validity_expiry));
+                assert_public_input(public_inputs, offset + 16, as_u256(shard_index));
+                if shard_index == 1 {
+                    break;
+                }
+                shard_index = 1;
+                offset = 17;
+            }
 
             self.run_status.write(nullifier, STATUS_PROVEN);
-            self.emit(PayrollProven {
-                run_nullifier_high,
-                run_nullifier_low,
-                manifest_root_high,
-                manifest_root_low,
-                proof_version,
-            });
+            self
+                .emit(
+                    PayrollProven {
+                        run_nullifier_high,
+                        run_nullifier_low,
+                        manifest_root_high,
+                        manifest_root_low,
+                        proof_version,
+                    },
+                );
 
             // The seal never receives or custodies payroll tokens.
             array![].span()

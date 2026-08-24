@@ -9,6 +9,7 @@ import {
   PAYROLL_INTEGRITY_CIRCUIT_URL,
   safeProofFailure,
   type EncryptedPayrollWitness,
+  type PayrollIntegrityShardProof,
   type ProofWorkerRequest,
   type ProofWorkerResponse,
 } from "./protocol";
@@ -50,7 +51,12 @@ scope.addEventListener("message", async (event: MessageEvent<ProofWorkerRequest>
   let encryptedPayload: EncryptedPayrollWitness;
   try {
     encryptedPayload = decryptVaultRecord<EncryptedPayrollWitness>(request.encryptedWitness, request.principal);
-    if (!encryptedPayload || typeof encryptedPayload.circuitInput !== "object") throw new Error("missing input");
+    if (
+      !encryptedPayload ||
+      !Array.isArray(encryptedPayload.circuitInputs) ||
+      encryptedPayload.circuitInputs.length !== 2 ||
+      encryptedPayload.circuitInputs.some((input) => typeof input !== "object")
+    ) throw new Error("missing linked shard inputs");
   } catch {
     scope.postMessage(safeProofFailure(requestId, "WITNESS_INVALID"));
     return;
@@ -62,38 +68,61 @@ scope.addEventListener("message", async (event: MessageEvent<ProofWorkerRequest>
   try {
     const circuit = JSON.parse(circuitText) as CompiledCircuit;
     const noir = new Noir(circuit);
-    progress(requestId, "executing");
-    const { witness } = await noir.execute(encryptedPayload.circuitInput);
-    witnessToErase = witness;
-    // Drop the only plaintext object reference before the expensive prover starts.
-    encryptedPayload = { circuitInput: {} };
-    progress(requestId, "proving");
     backend = new UltraHonkBackend(circuit.bytecode, {
       threads: crossOriginIsolated ? Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1)) : 1,
     });
-    const proofData = await backend.generateProof(witness, { starknetZK: true });
-    witness.fill(0);
-    progress(requestId, "verifying");
-    if (!await backend.verifyProof(proofData, { starknetZK: true })) {
-      scope.postMessage(safeProofFailure(requestId, "SELF_VERIFY_FAILED"));
-      return;
+    const shards: PayrollIntegrityShardProof[] = [];
+    let commonPublicInputs: readonly string[] | undefined;
+    for (const shardIndex of [0, 1] as const) {
+      progress(requestId, "executing");
+      const { witness } = await noir.execute(encryptedPayload.circuitInputs[shardIndex]);
+      witnessToErase = witness;
+      encryptedPayload.circuitInputs[shardIndex] = {};
+      progress(requestId, "proving");
+      const proofData = await backend.generateProof(witness, { keccakZK: true });
+      witness.fill(0);
+      witnessToErase = undefined;
+      progress(requestId, "verifying");
+      if (!await backend.verifyProof(proofData, { keccakZK: true })) {
+        scope.postMessage(safeProofFailure(requestId, "SELF_VERIFY_FAILED"));
+        return;
+      }
+      if (BigInt(proofData.publicInputs[16]) !== BigInt(shardIndex)) {
+        scope.postMessage(safeProofFailure(requestId, "SELF_VERIFY_FAILED"));
+        return;
+      }
+      if (commonPublicInputs) {
+        for (let index = 0; index < 16; index += 1) {
+          if (BigInt(commonPublicInputs[index]) !== BigInt(proofData.publicInputs[index])) {
+            scope.postMessage(safeProofFailure(requestId, "SELF_VERIFY_FAILED"));
+            return;
+          }
+        }
+      } else {
+        commonPublicInputs = proofData.publicInputs;
+      }
+      shards.push({
+        shardIndex,
+        proof: proofData.proof,
+        publicInputs: mapPayrollPublicInputs(proofData.publicInputs),
+      });
     }
+    encryptedPayload = { circuitInputs: [{}, {}] };
     const result: ProofWorkerResponse = {
       version: 1,
       type: "proof-complete",
       requestId,
-      scheme: "ultra_starknet_zk_honk",
-      proof: proofData.proof,
-      publicInputs: mapPayrollPublicInputs(proofData.publicInputs),
+      scheme: "ultra_keccak_zk_honk",
+      shards: shards as [PayrollIntegrityShardProof, PayrollIntegrityShardProof],
       circuitSha256: PAYROLL_INTEGRITY_CIRCUIT_SHA256,
       provingTimeMs: Math.round(performance.now() - startedAt),
     };
-    scope.postMessage(result, [proofData.proof.buffer]);
+    scope.postMessage(result, shards.map((shard) => shard.proof.buffer));
   } catch {
     scope.postMessage(safeProofFailure(requestId, "PROVING_FAILED"));
   } finally {
     witnessToErase?.fill(0);
-    encryptedPayload = { circuitInput: {} };
+    encryptedPayload = { circuitInputs: [{}, {}] };
     circuitText = "";
     await backend?.destroy();
   }

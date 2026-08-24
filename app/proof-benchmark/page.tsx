@@ -43,7 +43,10 @@ export default function ProofBenchmarkPage() {
       setResult({
         circuitSha256: proof.circuitSha256,
         provingTimeMs: proof.provingTimeMs,
-        publicInputCount: Object.keys(proof.publicInputs).length,
+        publicInputCount: proof.shards.reduce(
+          (count, shard) => count + Object.keys(shard.publicInputs).length,
+          0,
+        ),
       });
       setStage("complete");
     } catch (proofError) {
@@ -65,7 +68,7 @@ export default function ProofBenchmarkPage() {
         <div className="payroll-stage__copy">
           <div className="stage-status"><span /> {stage.replaceAll("-", " ").toUpperCase()}</div>
           <h3>PayrollIntegrity v1</h3>
-          <p>The worker self-verifies the UltraStarknetZKHonk proof and returns exactly the 16 deployment-bound public inputs.</p>
+          <p>The worker self-verifies both linked UltraKeccakZKHonk shards and returns exactly 34 deployment-bound public inputs.</p>
           <button className="button button--ink" type="button" onClick={prove} disabled={!fixture || !["ready", "failed", "complete"].includes(stage)}>
             Generate local proof
           </button>

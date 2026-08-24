@@ -1,80 +1,155 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
-import { UltraHonkBackend } from "@aztec/bb.js";
-import { getZKHonkCallData } from "garaga";
+import { spawnSync } from "node:child_process";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { delimiter, resolve } from "node:path";
+import { getZKHonkCallData, init as initGaraga } from "garaga";
 
 const root = resolve(import.meta.dirname, "..");
 const target = resolve(root, "circuits/payroll_integrity/target");
 const circuitPath = resolve(target, "payo_payroll_integrity.json");
-const witnessPath = resolve(target, "witness.gz");
-
-function bytes32(value) {
-  const clean = value.replace(/^0x/, "").padStart(64, "0");
-  if (!/^[0-9a-f]{64}$/i.test(clean)) throw new Error(`Invalid public input: ${value}`);
-  return Buffer.from(clean, "hex");
+const requestedShard = process.argv[2];
+if (requestedShard && requestedShard !== "0" && requestedShard !== "1") {
+  throw new Error("Optional PayrollIntegrity shard must be 0 or 1.");
 }
+const shards = requestedShard ? [Number(requestedShard)] : [0, 1];
+const bbBinary = process.env.PAYO_BB_BINARY || "bb";
+const crsPath = process.env.PAYO_BB_CRS_PATH;
+const reuseArtifacts = process.env.PAYO_PROOF_REUSE_ARTIFACTS === "true";
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
-const circuit = JSON.parse(await readFile(circuitPath, "utf8"));
-const witness = new Uint8Array(await readFile(witnessPath));
-const backend = new UltraHonkBackend(circuit.bytecode, {
-  threads: 1,
-  logger: (message) => process.stdout.write(`[bb] ${message}\n`),
-});
-const startedAt = performance.now();
+function runBb(args) {
+  const result = spawnSync(bbBinary, args, {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, HARDWARE_CONCURRENCY: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  if (result.error) {
+    const pathHint = process.env.PATH?.split(delimiter).join(", ") ?? "(unset)";
+    throw new Error(`Could not run ${bbBinary}; PATH=${pathHint}`, { cause: result.error });
+  }
+  if (result.status !== 0) throw new Error(`${bbBinary} ${args[0]} exited with status ${result.status}.`);
+}
 
-try {
-  const proofData = await backend.generateProof(witness, { starknetZK: true });
+function bbArgs(command, args) {
+  return crsPath ? [command, "-c", crsPath, ...args] : [command, ...args];
+}
+
+function parsePublicInputs(bytes) {
+  if (bytes.length !== 17 * 32) {
+    throw new Error(`Expected 17 PayrollIntegrity public inputs; received ${bytes.length / 32}.`);
+  }
+  return Array.from({ length: 17 }, (_, index) =>
+    BigInt(`0x${bytes.subarray(index * 32, (index + 1) * 32).toString("hex")}`));
+}
+
+await initGaraga();
+const manifests = [];
+
+for (const shard of shards) {
+  const witnessPath = resolve(target, `witness-shard-${shard}.gz`);
+  const outputPath = resolve(target, `native3-shard-${shard}`);
+  const canonicalVk = resolve(target, "native3-shard-0/vk");
+  await mkdir(outputPath, { recursive: true });
+
+  const proveArgs = [
+    "--scheme", "ultra_honk",
+    "--oracle_hash", "keccak",
+    "--write_vk",
+    "--verify",
+    "--slow_low_memory",
+    "--storage_budget", process.env.PAYO_BB_STORAGE_BUDGET || "2g",
+    "-b", circuitPath,
+    "-w", witnessPath,
+    "-o", outputPath,
+  ];
+  if (shard === 1) proveArgs.push("-k", canonicalVk, "--vk_policy", "check");
+
+  const startedAt = performance.now();
+  if (!reuseArtifacts) runBb(bbArgs("prove", proveArgs));
   const provingTimeMs = Math.round(performance.now() - startedAt);
-  const verified = await backend.verifyProof(proofData, { starknetZK: true });
-  if (!verified) throw new Error("Barretenberg rejected the freshly generated Starknet ZK proof.");
 
-  const verificationKey = await backend.getVerificationKey({ starknetZK: true });
-  const publicInputs = Buffer.concat(proofData.publicInputs.map(bytes32));
-  const proof = Buffer.from(proofData.proof);
-  const vk = Buffer.from(verificationKey);
-  // garaga 0.18.2's runtime omits the declared enum export; 1 is STARKNET.
-  const calldata = getZKHonkCallData(proof, publicInputs, vk, 1);
+  const vkPath = shard === 0 ? resolve(outputPath, "vk") : canonicalVk;
+  const proofPath = resolve(outputPath, "proof");
+  const publicInputsPath = resolve(outputPath, "public_inputs");
+  runBb(bbArgs("verify", [
+    "--scheme", "ultra_honk",
+    "--oracle_hash", "keccak",
+    "-k", vkPath,
+    "-p", proofPath,
+    "-i", publicInputsPath,
+  ]));
 
-  await mkdir(target, { recursive: true });
-  await Promise.all([
-    writeFile(resolve(target, "proof"), proof),
-    writeFile(resolve(target, "vk"), vk),
-    writeFile(resolve(target, "public_inputs"), publicInputs),
-    writeFile(
-      resolve(target, "prover-benchmark.json"),
-      `${JSON.stringify({
-        scheme: "ultra_starknet_zk_honk",
-        selfVerified: true,
-        provingTimeMs,
-        maxResidentSetKb: process.resourceUsage().maxRSS,
-        proofBytes: proof.length,
-        publicInputBytes: publicInputs.length,
-        verificationKeyBytes: vk.length,
-        proofSha256: sha256(proof),
-        publicInputsSha256: sha256(publicInputs),
-        verificationKeySha256: sha256(vk),
-      }, null, 2)}\n`,
-    ),
-    writeFile(
-      resolve(target, "proof_calldata.txt"),
-      `${calldata.map((value) => `0x${value.toString(16)}`).join("\n")}\n`,
-    ),
+  const [proof, publicInputs, vk] = await Promise.all([
+    readFile(proofPath),
+    readFile(publicInputsPath),
+    readFile(vkPath),
   ]);
+  const decoded = parsePublicInputs(publicInputs);
+  if (decoded[16] !== BigInt(shard)) {
+    throw new Error(`Shard ${shard} proof exposes shard index ${decoded[16]}.`);
+  }
+  if (manifests[0]) {
+    const firstInputs = parsePublicInputs(await readFile(resolve(target, "native3-shard-0/public_inputs")));
+    for (let index = 0; index < 16; index += 1) {
+      if (decoded[index] !== firstInputs[index]) {
+        throw new Error(`Shard public input ${index} does not match shard zero.`);
+      }
+    }
+    if (sha256(vk) !== manifests[0].verificationKeySha256) {
+      throw new Error("Shard proofs were not generated against the same verification key.");
+    }
+  }
 
-  process.stdout.write(`${JSON.stringify({
+  const serializedCalldata = getZKHonkCallData(proof, publicInputs, vk);
+  const declaredLength = Number(serializedCalldata[0]);
+  if (declaredLength !== serializedCalldata.length - 1) {
+    throw new Error(
+      `Garaga calldata declares ${declaredLength} felts but contains ${serializedCalldata.length - 1}.`,
+    );
+  }
+  // Garaga returns the Starknet ABI Span length followed by the proof felts.
+  // Our Cairo dispatcher and Starknet.js add that length when serializing the
+  // Span, so the portable proof fixture must contain only the inner felts.
+  const calldata = serializedCalldata.slice(1);
+  const calldataPath = resolve(target, `proof_calldata-shard-${shard}.txt`);
+  await writeFile(calldataPath, `${calldata.map((value) => `0x${value.toString(16)}`).join("\n")}\n`);
+
+  const manifest = {
+    shard,
+    scheme: "ultra_keccak_zk_honk",
+    oracleHash: "keccak",
+    reusedArtifacts: reuseArtifacts,
     selfVerified: true,
     provingTimeMs,
-    proofBytes: proof.length,
-    publicInputs: proofData.publicInputs.length,
-    vkSha256: sha256(vk),
+    proofBytes: (await stat(proofPath)).size,
+    publicInputBytes: publicInputs.length,
+    publicInputCount: decoded.length,
+    verificationKeyBytes: vk.length,
     calldataFelts: calldata.length,
+    proofSha256: sha256(proof),
+    publicInputsSha256: sha256(publicInputs),
+    verificationKeySha256: sha256(vk),
+  };
+  manifests.push(manifest);
+  await writeFile(
+    resolve(target, `prover-benchmark-shard-${shard}.json`),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+  );
+  process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+if (manifests.length === 2) {
+  await writeFile(resolve(target, "prover-benchmark.json"), `${JSON.stringify({
+    scheme: "ultra_keccak_zk_honk",
+    linkedShardCount: 2,
+    selfVerified: manifests.every((manifest) => manifest.selfVerified),
+    verificationKeySha256: manifests[0].verificationKeySha256,
+    shards: manifests,
   }, null, 2)}\n`);
-} finally {
-  witness.fill(0);
-  await backend.destroy();
 }

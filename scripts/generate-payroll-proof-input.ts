@@ -19,7 +19,10 @@ import {
 import { calculatePayrollLine } from "../lib/domain/payroll";
 import { compilePolicyPack, policyPackCommitment } from "../lib/policy/engine";
 import { US_2026_SUPPLEMENTAL_FLAT } from "../lib/policy/reference-packs";
-import { createProofCommitter } from "../lib/proof/commitments";
+import {
+  createProofCommitter,
+  PAYO_PROOF_EMPTY_LEAF,
+} from "../lib/proof/commitments";
 
 const ZERO = `0x${"00".repeat(32)}`;
 const byteArray = (hex: string) =>
@@ -30,7 +33,7 @@ let proofCommitter: Awaited<ReturnType<typeof createProofCommitter>>;
 function firstCatalogMembership() {
   const membership = proofCommitter.firstProofCatalogMembership();
   return {
-    siblings: membership.siblings.map(byteArray),
+    siblings: membership.siblings.map((value) => BigInt(value).toString()),
     path_bits: membership.pathBits,
   };
 }
@@ -76,27 +79,13 @@ function emptyAgreement() {
 function emptyLine() {
   return {
     active: false,
-    agreement_commitment: byteArray(ZERO),
-    recipient_commitment: byteArray(ZERO),
-    earnings: Array(8).fill("0"),
-    earnings_count: "0",
     deductions: Array(8).fill("0"),
     deductions_count: "0",
-    token: "0",
     policy_slot: "0",
     fx_slot: "0",
-    schedule_commitment: byteArray(ZERO),
     salt: byteArray(ZERO),
-    due_at: "0",
-    classification_declared: "0",
     classification_treatment: "0",
-    classification_score: "0",
-    classification_employee_threshold: "0",
-    final_pay_mode: false,
-    final_required_mask: "0",
     final_included_mask: "0",
-    final_components: Array(5).fill("0"),
-    fx_floor_atomic: "0",
     reference_value_atomic: "0",
   };
 }
@@ -204,27 +193,13 @@ const agreement = {
 };
 const line = {
   active: true,
-  agreement_commitment: byteArray(agreementIdCommitment),
-  recipient_commitment: byteArray(recipientCommitment),
-  earnings: ["1000000", ...Array(7).fill("0")],
-  earnings_count: "1",
   deductions: ["220000", ...Array(7).fill("0")],
   deductions_count: "1",
-  token: "1",
   policy_slot: "0",
   fx_slot: "0",
-  schedule_commitment: byteArray(scheduleCommitment),
   salt: byteArray(lineSalt),
-  due_at: u128(dueAt),
-  classification_declared: "1",
   classification_treatment: "1",
-  classification_score: "10",
-  classification_employee_threshold: "5",
-  final_pay_mode: false,
-  final_required_mask: "0",
   final_included_mask: "0",
-  final_components: Array(5).fill("0"),
-  fx_floor_atomic: "700000",
   reference_value_atomic: "780000",
 };
 const policyProgram = {
@@ -254,7 +229,7 @@ const circuitSnapshot = {
   haircut_bps: u128(circuitFx.haircutBps),
 };
 const emptyMembership = {
-  siblings: Array.from({ length: 6 }, () => byteArray(ZERO)),
+  siblings: Array(6).fill("0"),
   path_bits: Array(6).fill(false),
 };
 const emptySnapshot = {
@@ -277,13 +252,8 @@ const cycleBytes = [
   ...Array(64 - cycleId.length).fill(0),
 ];
 
-async function buildProver() {
+async function buildProver(shardIndex: 0 | 1) {
   proofCommitter = await createProofCommitter();
-  const payrollLeaf = proofCommitter.proofPayrollCommitment(
-    calculatedLine,
-    1,
-    policyCommitment,
-  );
   const agreementTerms = proofCommitter.proofAgreementCommitment({
     agreementIdCommitment,
     recipientCommitment,
@@ -303,6 +273,15 @@ async function buildProver() {
     referenceCurrency: "USD",
     salt: agreementSalt,
   });
+  const payrollLeaf = proofCommitter.proofPayrollCommitment(
+    calculatedLine,
+    agreementTerms,
+    {
+      classificationTreatment: 1,
+      finalIncludedMask: 0,
+      referenceValueAtomic: "780000",
+    },
+  );
   const agreementRoot = rootLimbs(
     proofCommitter.buildProofFixedMerkleRoot([agreementTerms]),
   );
@@ -313,6 +292,15 @@ async function buildProver() {
     proofCommitter.proofCatalogRoot(policyCommitment),
   );
   const fxRoot = rootLimbs(proofCommitter.proofCatalogRoot(fxCommitment));
+  const emptyProofLeaf = BigInt(PAYO_PROOF_EMPTY_LEAF).toString();
+  const agreementLeaves = [
+    BigInt(agreementTerms).toString(),
+    ...Array(63).fill(emptyProofLeaf),
+  ];
+  const payrollLeaves = [
+    BigInt(payrollLeaf).toString(),
+    ...Array(63).fill(emptyProofLeaf),
+  ];
 
   const prover = {
     chain_id: "1",
@@ -331,12 +319,21 @@ async function buildProver() {
     run_nullifier_low: nullifier.low,
     validity_start: u128(validityStart),
     validity_expiry: u128(validityExpiry),
+    shard_index: shardIndex.toString(),
     organization_secret: byteArray(organizationSecret),
     cycle_id: cycleBytes,
     cycle_id_len: u128(cycleId.length),
     revision: "1",
-    agreements: [agreement, ...Array.from({ length: 63 }, emptyAgreement)],
-    lines: [line, ...Array.from({ length: 63 }, emptyLine)],
+    agreement_leaves: agreementLeaves,
+    payroll_leaves: payrollLeaves,
+    agreements:
+      shardIndex === 0
+        ? [agreement, ...Array.from({ length: 25 }, emptyAgreement)]
+        : Array.from({ length: 26 }, emptyAgreement),
+    lines:
+      shardIndex === 0
+        ? [line, ...Array.from({ length: 24 }, emptyLine)]
+        : Array.from({ length: 25 }, emptyLine),
     policies: [
       {
         enabled: true,
@@ -366,12 +363,23 @@ const outputPath = resolve(
   process.argv[2] ?? "circuits/payroll_integrity/Prover.toml",
 );
 async function writeProofInput() {
-  const { prover, agreementRoot, manifestRoot, policyRoot, fxRoot } =
-    await buildProver();
-  const output = `${Object.entries(prover)
-    .map(([key, value]) => `${key} = ${toml(value)}`)
-    .join("\n")}\n`;
-  await writeFile(outputPath, output, { encoding: "utf8", mode: 0o600 });
+  const shardZero = await buildProver(0);
+  const shardOne = await buildProver(1);
+  const secondaryOutputPath = outputPath.endsWith(".toml")
+    ? outputPath.replace(/\.toml$/, "-shard-1.toml")
+    : `${outputPath}-shard-1.toml`;
+  const serialize = (prover: Record<string, unknown>) =>
+    `${Object.entries(prover)
+      .map(([key, value]) => `${key} = ${toml(value)}`)
+      .join("\n")}\n`;
+  await writeFile(outputPath, serialize(shardZero.prover), {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  await writeFile(secondaryOutputPath, serialize(shardOne.prover), {
+    encoding: "utf8",
+    mode: 0o600,
+  });
   if (process.env.PAYO_WRITE_BROWSER_PROOF_FIXTURE === "true") {
     const fixtureDirectory = resolve(process.cwd(), "public/fixtures");
     const fixturePath = resolve(
@@ -380,7 +388,7 @@ async function writeProofInput() {
     );
     const principal = generateVaultPrincipal("phase1-browser-prover");
     const encryptedWitness = encryptVaultRecord(
-      { circuitInput: prover },
+      { circuitInputs: [shardZero.prover, shardOne.prover] },
       {
         schemaVersion: 1,
         organizationId: "phase1-proof-organization",
@@ -401,15 +409,16 @@ async function writeProofInput() {
     JSON.stringify(
       {
         outputPath,
+        secondaryOutputPath,
         publicInputs: {
           chainId: "1",
           sealAddress: "0x12345",
           proofVersion: "1",
           schemaVersion: "1",
-          agreementRoot,
-          manifestRoot,
-          policyRoot,
-          fxRoot,
+          agreementRoot: shardZero.agreementRoot,
+          manifestRoot: shardZero.manifestRoot,
+          policyRoot: shardZero.policyRoot,
+          fxRoot: shardZero.fxRoot,
           nullifier,
           validityStart: validityStart.toString(),
           validityExpiry: validityExpiry.toString(),

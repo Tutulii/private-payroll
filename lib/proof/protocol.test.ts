@@ -8,8 +8,8 @@ import {
 } from "./protocol";
 
 describe("proof-worker privacy protocol", () => {
-  it("returns only the 16 deployment-bound public inputs", () => {
-    const values = Array.from({ length: 16 }, (_, index) => `0x${index.toString(16)}`);
+  it("returns only the 16 deployment-bound inputs plus the shard index", () => {
+    const values = Array.from({ length: 17 }, (_, index) => `0x${index.toString(16)}`);
     const mapped = mapPayrollPublicInputs(values);
     expect(mapped).toEqual({
       chainId: "0x0", sealAddress: "0x1", proofVersion: "0x2", schemaVersion: "0x3",
@@ -17,12 +17,13 @@ describe("proof-worker privacy protocol", () => {
       manifestRootHigh: "0x6", manifestRootLow: "0x7",
       policyRootHigh: "0x8", policyRootLow: "0x9", fxRootHigh: "0xa", fxRootLow: "0xb",
       runNullifierHigh: "0xc", runNullifierLow: "0xd", validityStart: "0xe", validityExpiry: "0xf",
+      shardIndex: "0x10",
     });
-    expect(Object.keys(mapped)).toHaveLength(16);
+    expect(Object.keys(mapped)).toHaveLength(17);
   });
 
   it("rejects unexpected public-input shapes", () => {
-    expect(() => mapPayrollPublicInputs(["0x1"])).toThrow("Expected 16");
+    expect(() => mapPayrollPublicInputs(["0x1"])).toThrow("Expected 17");
   });
 
   it("pins the exact deployment-bound browser circuit", () => {

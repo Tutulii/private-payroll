@@ -18,7 +18,10 @@ permissions:
 jobs:
   verifier:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
+    env:
+      HARDWARE_CONCURRENCY: "1"
+      PAYO_BB_STORAGE_BUDGET: "2g"
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -26,17 +29,27 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+
       - name: Install pinned Noir
         run: |
           curl -L https://raw.githubusercontent.com/noir-lang/noirup/main/install | bash
           echo "$HOME/.nargo/bin" >> "$GITHUB_PATH"
-          "$HOME/.nargo/bin/noirup" -v 1.0.0-beta.5
+          "$HOME/.nargo/bin/noirup" -v 1.0.0-beta.16
+
+      - name: Install pinned native Barretenberg
+        run: |
+          curl -L https://raw.githubusercontent.com/AztecProtocol/aztec-packages/refs/heads/next/barretenberg/bbup/install | bash
+          echo "$HOME/.bb" >> "$GITHUB_PATH"
+          "$HOME/.bb/bbup" -v 3.0.0-nightly.20251104
+          "$HOME/.bb/bb" --version
+
       - name: Install Garaga Python runtime
         uses: actions/setup-python@v6
         with:
-          python-version: "3.10"
+          python-version: "3.12"
       - name: Install pinned Garaga
-        run: pipx install --python python3.10 garaga==0.18.2
+        run: pipx install --python python3.12 garaga==1.1.0
+
       - name: Install pinned Scarb
         uses: software-mansion/setup-scarb@v1
         with:
@@ -46,60 +59,101 @@ jobs:
         uses: foundry-rs/setup-snfoundry@v4
         with:
           starknet-foundry-version: 0.57.0
-      - name: Reserve prover swap
+
+      - name: Reserve low-memory prover swap
         run: |
           swapon --show
-          sudo fallocate -l 10G /mnt/payo-prover.swap
+          sudo fallocate -l 4G /mnt/payo-prover.swap
           sudo chmod 600 /mnt/payo-prover.swap
           sudo mkswap /mnt/payo-prover.swap
           sudo swapon /mnt/payo-prover.swap
           free -h
-      - name: Test and build circuit
+
+      - name: Test and build the pinned circuit
         working-directory: circuits/payroll_integrity
         run: |
           nargo test
           nargo build
           nargo info
           node -e 'const fs=require("fs"); const built=JSON.parse(fs.readFileSync("target/payo_payroll_integrity.json")); const published=JSON.parse(fs.readFileSync("../../public/circuits/payroll_integrity-v1.json")); for (const key of ["noir_version","hash","abi","bytecode"]) if (JSON.stringify(built[key]) !== JSON.stringify(published[key])) throw new Error(`Published circuit ${key} differs from pinned build`);'
-      - name: Generate the synthetic production witness
+
+      - name: Enforce the production gate budget
+        run: |
+          bb gates --scheme ultra_honk --oracle_hash keccak \
+            -b circuits/payroll_integrity/target/payo_payroll_integrity.json \
+            > circuits/payroll_integrity/target/gates.json
+          node -e 'const fs=require("fs"); const gates=JSON.parse(fs.readFileSync("circuits/payroll_integrity/target/gates.json")); const size=gates.functions[0].circuit_size; if (size > 1048576) throw new Error(`Circuit ${size} exceeds the 2^20 production domain`); console.log(`PayrollIntegrity circuit size: ${size}`);'
+
+      - name: Generate synthetic deployment-bound shard inputs
         env:
           PAYO_WRITE_BROWSER_PROOF_FIXTURE: "true"
         run: npm run proof:input
-      - name: Execute the full deployment-bound witness
+
+      - name: Execute both linked witnesses
         working-directory: circuits/payroll_integrity
-        run: nargo execute witness
-      - name: Generate the proof-bound verification key and zero-knowledge proof
-        env:
-          HARDWARE_CONCURRENCY: "1"
         run: |
-          /usr/bin/time -v -o circuits/payroll_integrity/target/prover-benchmark.txt \
+          nargo execute witness-shard-0 --prover-name Prover
+          nargo execute witness-shard-1 --prover-name Prover-shard-1
+
+      - name: Generate and self-verify the proof-bound key and both ZK proofs
+        run: |
+          /usr/bin/time -v -o circuits/payroll_integrity/target/prover-benchmark-resource.txt \
             npm run proof:prove
-      - name: Generate Starknet verifier
-        working-directory: contracts
-        run: garaga gen --system ultra_starknet_zk_honk --vk ../circuits/payroll_integrity/target/vk --project-name integrity_verifier
-      - name: Build generated Starknet verifier
-        working-directory: contracts/integrity_verifier
-        run: scarb build
-      - name: Test the real proof in the generated Starknet verifier
+
+      - name: Reproduce the Garaga verifier from the proof-bound key
         run: |
-          mkdir -p contracts/integrity_verifier/tests
-          cp circuits/payroll_integrity/target/proof_calldata.txt contracts/integrity_verifier/tests/proof_calldata.txt
-          cd contracts/integrity_verifier
+          mkdir -p /tmp/payo-garaga-generated
+          cd /tmp/payo-garaga-generated
+          garaga gen \
+            --system ultra_keccak_zk_honk \
+            --vk "$GITHUB_WORKSPACE/circuits/payroll_integrity/target/native3-shard-0/vk" \
+            --project-name integrity_verifier
+          diff -ru \
+            "$GITHUB_WORKSPACE/contracts/integrity_verifier/src" \
+            integrity_verifier/src
+
+      - name: Confirm committed Starknet calldata matches both proofs
+        run: |
+          cmp circuits/payroll_integrity/target/proof_calldata-shard-0.txt \
+            contracts/integrity_verifier/tests/proof_calldata-shard-0.txt
+          cmp circuits/payroll_integrity/target/proof_calldata-shard-1.txt \
+            contracts/integrity_verifier/tests/proof_calldata-shard-1.txt
+
+      - name: Build and test both real proofs in the generated Cairo verifier
+        working-directory: contracts/integrity_verifier
+        run: |
+          scarb build
           snforge test
+
+      - name: Build and test the Payroll Seal proof bundle
+        working-directory: contracts
+        run: |
+          scarb build
+          snforge test
+
+      - name: Run application checks
+        run: |
+          npm run typecheck
+          npm test
+
       - name: Record reproducible artifact hashes
         run: |
           sha256sum \
             public/circuits/payroll_integrity-v1.json \
-            circuits/payroll_integrity/target/vk \
-            circuits/payroll_integrity/target/proof \
-            circuits/payroll_integrity/target/public_inputs \
-            circuits/payroll_integrity/target/proof_calldata.txt \
+            circuits/payroll_integrity/target/native3-shard-0/vk \
+            circuits/payroll_integrity/target/native3-shard-0/proof \
+            circuits/payroll_integrity/target/native3-shard-0/public_inputs \
+            circuits/payroll_integrity/target/native3-shard-1/proof \
+            circuits/payroll_integrity/target/native3-shard-1/public_inputs \
+            circuits/payroll_integrity/target/proof_calldata-shard-0.txt \
+            circuits/payroll_integrity/target/proof_calldata-shard-1.txt \
             > circuits/payroll_integrity/target/SHA256SUMS
+
       - name: Install the pinned browser
         run: npx playwright install --with-deps chromium
       - name: Build the browser proof harness
         run: npm run build
-      - name: Generate and self-verify a proof in the browser Web Worker
+      - name: Generate and self-verify both proofs in the browser Web Worker
         run: |
           npm start > /tmp/payo-proof-browser.log 2>&1 &
           server_pid=$!
@@ -109,6 +163,7 @@ jobs:
             sleep 1
           done
           node scripts/verify-browser-proof.mjs
+
       - uses: actions/upload-artifact@v6
         if: ${{ always() }}
         with:
@@ -116,11 +171,13 @@ jobs:
           if-no-files-found: warn
           path: |
             circuits/payroll_integrity/target/payo_payroll_integrity.json
-            circuits/payroll_integrity/target/vk
-            circuits/payroll_integrity/target/proof
-            circuits/payroll_integrity/target/public_inputs
-            circuits/payroll_integrity/target/prover-benchmark.txt
-            circuits/payroll_integrity/target/prover-benchmark.json
+            circuits/payroll_integrity/target/gates.json
+            circuits/payroll_integrity/target/native3-shard-0/
+            circuits/payroll_integrity/target/native3-shard-1/
+            circuits/payroll_integrity/target/proof_calldata-shard-0.txt
+            circuits/payroll_integrity/target/proof_calldata-shard-1.txt
+            circuits/payroll_integrity/target/prover-benchmark*.json
+            circuits/payroll_integrity/target/prover-benchmark-resource.txt
             circuits/payroll_integrity/target/browser-proof-benchmark.json
             circuits/payroll_integrity/target/SHA256SUMS
             contracts/integrity_verifier/

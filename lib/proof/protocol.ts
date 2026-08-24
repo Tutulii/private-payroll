@@ -3,11 +3,11 @@ import type { EncryptedVaultRecord, VaultPrincipalKeyPair } from "@/lib/crypto/v
 
 export const PAYROLL_INTEGRITY_CIRCUIT_URL = "/circuits/payroll_integrity-v1.json";
 export const PAYROLL_INTEGRITY_CIRCUIT_SHA256 =
-  "0x97b70d6cd99d782501983a849c4996d366d48a51bddbd771c91dba388639d489";
-export const PAYROLL_INTEGRITY_PUBLIC_INPUT_COUNT = 16;
+  "0x3c739cc5bc376bfc3a9c46d316118107e9c97acd4e37e938de116c841b678f78";
+export const PAYROLL_INTEGRITY_PUBLIC_INPUT_COUNT = 17;
 
 export type EncryptedPayrollWitness = {
-  circuitInput: InputMap;
+  circuitInputs: [InputMap, InputMap];
 };
 
 export type ProofWorkerRequest = {
@@ -35,6 +35,13 @@ export type PayrollIntegrityPublicInputs = {
   runNullifierLow: string;
   validityStart: string;
   validityExpiry: string;
+  shardIndex: string;
+};
+
+export type PayrollIntegrityShardProof = {
+  shardIndex: 0 | 1;
+  proof: Uint8Array;
+  publicInputs: PayrollIntegrityPublicInputs;
 };
 
 export type ProofWorkerProgress = {
@@ -48,9 +55,8 @@ export type ProofWorkerSuccess = {
   version: 1;
   type: "proof-complete";
   requestId: string;
-  scheme: "ultra_starknet_zk_honk";
-  proof: Uint8Array;
-  publicInputs: PayrollIntegrityPublicInputs;
+  scheme: "ultra_keccak_zk_honk";
+  shards: [PayrollIntegrityShardProof, PayrollIntegrityShardProof];
   circuitSha256: string;
   provingTimeMs: number;
 };
@@ -86,6 +92,7 @@ export function mapPayrollPublicInputs(values: readonly string[]): PayrollIntegr
     runNullifierLow: values[13],
     validityStart: values[14],
     validityExpiry: values[15],
+    shardIndex: values[16],
   };
 }
 

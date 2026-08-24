@@ -26,7 +26,8 @@ flowchart LR
     Ready --> Pool[STRK20 privacy pool]
     Signer --> Pool
     Pool --> Seal[PAYO Payroll Seal]
-    Seal --> Verifier[PayrollIntegrity verifier]
+    Seal --> Bundle[Two-shard bundle verifier]
+    Bundle --> Verifier[Garaga PayrollIntegrity verifier]
     Seal --> Policies[Policy-root registry]
     Vault --> Export[Scoped proof packages]
 ```
@@ -43,6 +44,7 @@ flowchart LR
 | Structured-intent signer | Rebuild and validate permitted agent actions | Sign caller-supplied arbitrary calldata |
 | STRK20 | Private notes, channels, proving, and settlement | Enforce PAYO employment policy |
 | Payroll Seal | Verify proof state and prevent replay | Custody payroll assets |
+| Bundle verifier | Verify both linked shards with one proof-bound Garaga verifier | Accept a missing, duplicated, or reordered shard |
 
 ## 3. Trust and leakage boundaries
 
@@ -178,19 +180,22 @@ Hash and proof-root values crossing into Cairo are represented as two big-endian
 
 ### Public inputs
 
-The deployment-bound `v1` circuit exposes exactly 16 fields:
+The deployment-bound `v1` circuit uses two linked proofs against the same circuit and verification key. Each shard exposes exactly 17 fields:
 
 - chain ID, Payroll Seal address, proof version, and schema version;
 - authoritative agreement, payroll-manifest, policy-catalog, and FX-snapshot roots, each as two big-endian `u128` limbs;
 - a circuit-derived run nullifier as two limbs; and
-- validity start and expiry, with a maximum one-hour window.
+- validity start and expiry, with a maximum one-hour window; and
+- a shard index, required to be `0` for the first proof and `1` for the second.
+
+The first 16 public inputs must be identical across both proofs. Shard 0 authenticates agreement leaves 0–25 and payroll leaves 0–24; shard 1 authenticates agreement leaves 24–49 and payroll leaves 25–49. The agreement overlap binds the private global sorting boundary. `PayoPayrollSeal` accepts only the ordered 34-input bundle, so neither shard is independently sufficient to mark a run proven.
 
 The agreement root is not a list of opaque IDs. Each leaf canonically commits the agreement ID commitment, recipient commitment, earnings components, token, compiled policy commitment, schedule, due/expiry timestamps, classification inputs, final-pay requirements, FX floor/currency, and a random agreement salt. The circuit recomputes these leaves and requires each due payroll line to equal its authoritative private terms.
 
 ### Private witness
 
-- agreement leaves and membership paths;
-- real line count and padded lines;
+- both fixed 64-leaf agreement and payroll arrays;
+- 26 overlapping agreement witnesses and 25 payroll lines per shard;
 - recipient commitments and salts;
 - earnings, deductions, and net atomic amounts;
 - selected token and token decimals;
@@ -202,7 +207,7 @@ The agreement root is not a list of opaque IDs. Each leaf canonically commits th
 ### Assertions
 
 1. Every active due agreement appears exactly once.
-2. Agreement and line identifiers are unique and sorted before padding.
+2. Agreement identifiers are unique and sorted before padding; the one-to-one line mapping derives line uniqueness.
 3. Earnings components sum to gross.
 4. The bounded policy program produces committed deductions.
 5. Net equals gross minus deductions and is non-negative.
@@ -254,7 +259,8 @@ privacy_invoke(
   run_nullifier_low,
   validity_start,
   validity_expiry,
-  proof_or_hash[]
+  shard_0_proof_calldata[]
+  shard_1_proof_calldata[]
 )
 ```
 
@@ -271,7 +277,7 @@ If proof verification cannot execute within the STRK20 invoke resource limits, `
 
 ### PayoIntegrityVerifier
 
-A Garaga-generated, version-pinned Noir/Honk verifier. Generated code and verifying-key artifacts are reproducible build outputs. Public inputs returned by the verifier must match calldata supplied to the seal.
+A Garaga-generated, version-pinned UltraKeccakZKHonk verifier plus `PayoIntegrityBundleVerifier`. The wrapper calls the same proof-bound verifier for both shards and returns shard 0's 17 inputs followed by shard 1's 17 inputs. The seal requires identical deployment fields/roots, ordered shard indices, the proof-bound seal address, and the configured chain ID before it consumes the run nullifier. Generated code, proofs, calldata, and VK artifacts are reproducible build outputs.
 
 ### PayoPolicyRegistry
 
@@ -370,7 +376,9 @@ Human approval remains the default. Autonomous execution is enabled per capabili
 ## 16. Verification strategy
 
 - TypeScript/Noir/Cairo commitment golden vectors.
-- Circuit negative tests for omission, duplication, wrong arithmetic, stale FX, early vesting, and incomplete final pay.
+- Circuit negative tests for omission, duplication, wrong arithmetic, stale FX, early vesting, incomplete final pay, invalid shard indices, and shard/witness mismatches.
+- Native proof self-verification for both linked shards and real Cairo verification of each proof.
+- An uninterrupted real-proof → Garaga verifier → bundle verifier → Payroll Seal integration test; mocks do not satisfy this gate.
 - Cairo unit and fuzz tests for caller validation, replay, versioning, and state transitions.
 - Encryption tests for tenant isolation, associated-data tampering, revocation, and disclosure scope.
 - MCP adversarial tests for prompt injection, arbitrary targets, replay, and period-limit bypass.

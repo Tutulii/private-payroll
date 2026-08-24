@@ -16,10 +16,12 @@
     "starknetFoundry": "0.57.0"
   },
   "proof": {
-    "noir": "1.0.0-beta.5",
-    "noircCommit": "c651df6e2bf5db3966aa0c95abea2fc4c69d4513",
-    "barretenberg": "0.87.4-starknet.1",
-    "garaga": "0.18.2",
-    "scheme": "ultra_starknet_zk_honk"
+    "noir": "1.0.0-beta.16",
+    "noircCommit": "2d46fca7203545cbbfb31a0d0328de6c10a8db95",
+    "barretenberg": "3.0.0-nightly.20251104",
+    "garaga": "1.1.0",
+    "scheme": "ultra_keccak_zk_honk",
+    "oracleHash": "keccak",
+    "bundleShards": 2
   }
 }
