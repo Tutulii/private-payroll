@@ -109,7 +109,7 @@ jobs:
             --vk "$GITHUB_WORKSPACE/circuits/payroll_integrity/target/native3-shard-0/vk" \
             --project-name integrity_verifier
           (cd integrity_verifier && scarb fmt)
-          diff -ru \
+          diff -ruB \
             "$GITHUB_WORKSPACE/contracts/integrity_verifier/src" \
             integrity_verifier/src
 
