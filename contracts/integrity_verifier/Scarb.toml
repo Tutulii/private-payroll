@@ -16,6 +16,12 @@ inlining-strategy = 2
 snforge_std = { git = "https://github.com/foundry-rs/starknet-foundry.git", tag = "v0.57.0" }
 payo_contracts = { path = ".." }
 
+[target-defaults.test]
+build-external-contracts = [
+    "payo_contracts::integrity_bundle_verifier::PayoIntegrityBundleVerifier",
+    "payo_contracts::payroll_seal::PayoPayrollSeal",
+]
+
 [[target.starknet-contract]]
 casm = true
 casm-add-pythonic-hints = true
