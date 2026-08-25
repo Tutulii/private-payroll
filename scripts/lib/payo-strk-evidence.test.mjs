@@ -61,5 +61,10 @@ describe("proof-bound PAYO STRK Mainnet evidence", () => {
     expect(receiptHasEmitter(receipt, PAYO_PAYROLL_SEAL_ADDRESS)).toBe(true);
     expect(() => assertAcceptedReceipt({ ...receipt, block_number: 1 }, expected, "Payroll transaction"))
       .toThrow("block number differs");
+    expect(() => assertAcceptedReceipt(
+      { ...receipt, finality_status: "ACCEPTED_ON_L1" },
+      expected,
+      "Payroll transaction",
+    )).not.toThrow();
   });
 });

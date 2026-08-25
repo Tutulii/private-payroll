@@ -196,6 +196,7 @@ type StarknetWalletContextValue = {
     recipients: PayrollRecipient[],
     payoAction: STRK20_INVOKE_ACTION,
   ) => Promise<string>;
+  reconcilePayrollTransaction: (transactionHash: string) => Promise<void>;
   scheduleObligationRoot: (agreementRoot: string) => Promise<ObligationRootScheduleResult>;
   isObligationRootActive: (agreementRoot: string) => Promise<boolean>;
   publishFxRoot: (input: {
@@ -940,6 +941,37 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     [refreshBalanceForAccount, requestPrivateFeeQuote, submitPrivateActions, walletAccount],
   );
 
+  const reconcilePayrollTransaction = useCallback(async (transactionHash: string) => {
+    if (!/^0x[0-9a-fA-F]{1,64}$/.test(transactionHash)) {
+      throw new Error("PAYO recovered an invalid Starknet transaction hash.");
+    }
+    // Ready may submit the STRK20 transaction but leave the Wallet API promise
+    // unresolved. Once PAYO's canonical seal indexer recovers that hash, release
+    // the browser lock and reconcile the visible wallet state without issuing a
+    // second request.
+    privateActionLockRef.current = null;
+    setError("");
+    let balanceRefreshed = false;
+    let balanceRefreshError = "";
+    if (walletAccount) {
+      try {
+        await refreshBalanceForAccount(walletAccount);
+        balanceRefreshed = true;
+      } catch (refreshError) {
+        balanceRefreshError = describeError(refreshError);
+      }
+    }
+    setTransaction((current) => ({
+      ...(current?.kind === "payroll"
+        ? current
+        : { kind: "payroll" as const, label: "Private payroll recovered on-chain" }),
+      stage: "confirmed",
+      hash: transactionHash,
+      balanceRefreshed,
+      balanceRefreshError: balanceRefreshError || undefined,
+    }));
+  }, [refreshBalanceForAccount, walletAccount]);
+
   const scheduleObligationRoot = useCallback(async (
     agreementRoot: string,
   ): Promise<ObligationRootScheduleResult> => {
@@ -1442,6 +1474,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     shieldToken,
     shieldStrk,
     runProofBoundPayroll,
+    reconcilePayrollTransaction,
     scheduleObligationRoot,
     isObligationRootActive,
     publishFxRoot,

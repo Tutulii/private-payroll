@@ -1,4 +1,5 @@
 import { RpcProvider } from "starknet";
+import { recoverApprovalSubmissionsFromSealEvents } from "@/lib/persistence/settlement-repository";
 import { processEventIndexBatch } from "@/lib/server/chain-indexer";
 import { authorizeInternalWorker } from "@/lib/server/internal-auth";
 
@@ -50,13 +51,14 @@ export async function POST(request: Request) {
   }
   try {
     const provider = new RpcProvider({ nodeUrl: rpcUrl });
+    const chainId = process.env.PAYO_INDEX_CHAIN_ID ?? "SN_MAIN";
     const result = await processEventIndexBatch({
       rpc: {
         getBlockNumber: () => provider.getBlockNumber(),
         getBlockWithTxHashes: (blockNumber) => provider.getBlockWithTxHashes(blockNumber),
         getEvents: (filter) => provider.getEvents(filter),
       },
-      chainId: process.env.PAYO_INDEX_CHAIN_ID ?? "SN_MAIN",
+      chainId,
       consumer: process.env.PAYO_INDEX_CONSUMER ?? "payo-seal",
       fromBlock,
       maxBlocks: batchSize,
@@ -65,8 +67,13 @@ export async function POST(request: Request) {
       maxReorgDepth,
       address: contractAddress,
     });
+    const recovery = await recoverApprovalSubmissionsFromSealEvents({
+      chainId,
+      sealAddress: contractAddress,
+    });
     return Response.json({
       ...result,
+      recoveredSubmissions: recovery.recovered,
       rolledBack: result.rolledBack.toString(),
       headBlockNumber: result.headBlockNumber.toString(),
       nextBlockNumber: result.nextBlockNumber.toString(),

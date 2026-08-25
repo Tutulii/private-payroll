@@ -48,9 +48,12 @@ import {
 } from "./proof-verification-repository";
 import {
   applySettlementObservation,
+  cancelSettlementApproval,
   createSettlementIntent,
   leaseConfirmationJobs,
   recordSettlementSubmission,
+  recoverApprovalSubmissionsFromSealEvents,
+  getSealedRunRecoveryEvidence,
 } from "./settlement-repository";
 import {
   createDisclosureGrant,
@@ -66,6 +69,7 @@ import {
 } from "./vault-repository";
 import {
   agentCapabilities,
+  auditEvents,
   confirmationJobs,
   disclosureGrants,
   organizationMembers,
@@ -524,6 +528,146 @@ databaseSuite("PostgreSQL durability integration", () => {
     }, new Date("2030-08-24T12:01:01Z"));
     const [run] = await getDatabase().select().from(payrollRuns);
     expect(run.state).toBe("confirmed");
+  });
+
+  it("cancels only an approval that has no submitted transaction hash", async () => {
+    const organizationId = await seedOrganization();
+    const runId = generateUuidV7();
+    await getDatabase().insert(payrollRuns).values({
+      id: runId,
+      organizationId,
+      cycleId: "cancel-before-wallet-hash",
+      revision: 1,
+      state: "proven",
+      dueAt: new Date("2026-08-31T00:00:00.000Z"),
+    });
+    const prepared = prepareSettlementIntent({ organizationId, runId });
+    const settlement = await createSettlementIntent(prepared.request);
+
+    await expect(cancelSettlementApproval({ settlementId: settlement.id, principal: admin }))
+      .resolves.toMatchObject({ state: "failed", transactionHash: null });
+    const [run] = await getDatabase().select().from(payrollRuns);
+    expect(run.state).toBe("cancelled");
+    await expect(recordSettlementSubmission({
+      settlementId: settlement.id,
+      transactionHash: "0xabc",
+      principal: admin,
+    })).rejects.toThrow(/invalid settlement transition/i);
+  });
+
+  it("finalizes a submitted settlement when the first receipt already has final depth", async () => {
+    const organizationId = await seedOrganization();
+    const runId = generateUuidV7();
+    await getDatabase().insert(payrollRuns).values({
+      id: runId,
+      organizationId,
+      cycleId: "finalized-receipt-fast-forward",
+      revision: 1,
+      state: "proven",
+      dueAt: new Date("2026-08-31T00:00:00.000Z"),
+    });
+    const prepared = prepareSettlementIntent({ organizationId, runId });
+    const settlement = await createSettlementIntent(prepared.request);
+    await recordSettlementSubmission({ settlementId: settlement.id, transactionHash: "0xf1", principal: admin });
+    // The durable job's default available_at is the real insertion time. Use a
+    // deliberately future worker clock so this remains deterministic no matter
+    // when the integration suite is executed.
+    const [leased] = await leaseConfirmationJobs("fast-forward-worker", 10, new Date("2099-08-25T12:00:00Z"));
+    expect(leased).toBeDefined();
+
+    await expect(applySettlementObservation(leased, {
+      state: "finalized",
+      confirmationDepth: 12,
+      blockNumber: 123n,
+      blockHash: "0x123",
+    }, new Date("2099-08-25T12:00:01Z"))).resolves.toMatchObject({ state: "finalized" });
+
+    const [storedSettlement] = await getDatabase().select().from(settlements);
+    const [storedRun] = await getDatabase().select().from(payrollRuns);
+    const [job] = await getDatabase().select().from(confirmationJobs);
+    const storedAudit = await getDatabase().select({ action: auditEvents.action }).from(auditEvents)
+      .where(sql`${auditEvents.subjectId} = ${settlement.id}`);
+    expect(storedSettlement).toMatchObject({ state: "finalized", confirmationDepth: 12 });
+    expect(storedRun.state).toBe("confirmed");
+    expect(job.state).toBe("complete");
+    expect(storedAudit.map(({ action }) => action)).toEqual(expect.arrayContaining([
+      "settlement.confirmed",
+      "settlement.finalized",
+    ]));
+  });
+
+  it("recovers a missing Ready hash only from the matching canonical PayrollSealed event", async () => {
+    const organizationId = await seedOrganization();
+    const runId = generateUuidV7();
+    const runNullifier = `0x${"11".repeat(32)}`;
+    await getDatabase().insert(payrollRuns).values({
+      id: runId,
+      organizationId,
+      cycleId: "wallet-promise-recovery",
+      revision: 1,
+      state: "proven",
+      dueAt: new Date("2026-08-31T00:00:00.000Z"),
+      runNullifier,
+    });
+    const proofBundleId = generateUuidV7();
+    await getDatabase().insert(proofBundles).values({
+      id: proofBundleId,
+      runId,
+      organizationId,
+      proofType: "payroll_integrity",
+      proofVersion: "1",
+      proofPackage: {},
+      proofHash: `0x${"22".repeat(32)}`,
+    });
+    const nullifier = BigInt(runNullifier);
+    const high = nullifier >> 128n;
+    const low = nullifier & ((1n << 128n) - 1n);
+    const sealAddress = "0x123";
+    await persistIndexedBlock({
+      chainId: "SN_MAIN",
+      consumer: "payo-seal",
+      blockNumber: 12n,
+      blockHash: "0x12",
+      parentHash: "0x11",
+      events: [{
+        transactionHash: "0xfeed",
+        eventIndex: 0,
+        contractAddress: sealAddress,
+        eventName: "0x1b9fd7bf429246efa243b5f4b5eb036c1ab31a548ec13cc42f97a03b34f38ea",
+        payload: {
+          keys: [
+            "0x1b9fd7bf429246efa243b5f4b5eb036c1ab31a548ec13cc42f97a03b34f38ea",
+            `0x${high.toString(16)}`,
+            `0x${low.toString(16)}`,
+          ],
+          data: [],
+        },
+      }],
+    });
+
+    await expect(getSealedRunRecoveryEvidence({
+      runId,
+      chainId: "SN_MAIN",
+      sealAddress,
+      principal: admin,
+    })).resolves.toMatchObject({ proofBundleId, transactionHash: "0xfeed", blockNumber: "12" });
+    const prepared = prepareSettlementIntent({ organizationId, runId });
+    const settlement = await createSettlementIntent(prepared.request);
+
+    await expect(recoverApprovalSubmissionsFromSealEvents({
+      chainId: "SN_MAIN",
+      sealAddress,
+    })).resolves.toEqual({ recovered: 1 });
+    const [storedSettlement] = await getDatabase().select().from(settlements);
+    const [storedRun] = await getDatabase().select().from(payrollRuns);
+    const [confirmation] = await getDatabase().select().from(confirmationJobs);
+    expect(storedSettlement).toMatchObject({ id: settlement.id, state: "submitted", transactionHash: "0xfeed" });
+    expect(storedRun).toMatchObject({ state: "submitted", transactionHash: "0xfeed" });
+    expect(confirmation.settlementId).toBe(settlement.id);
+    await expect(recoverApprovalSubmissionsFromSealEvents({
+      chainId: "SN_MAIN",
+      sealAddress,
+    })).resolves.toEqual({ recovered: 0 });
   });
 
   it("stores receipts and revocable disclosure grants atomically with encrypted envelopes", async () => {

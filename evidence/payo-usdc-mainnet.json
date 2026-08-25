@@ -1,0 +1,75 @@
+{
+  "evidenceVersion": "payo-proof-bound-payroll-mainnet-v1",
+  "network": "SN_MAIN",
+  "wallet": {
+    "name": "Ready",
+    "walletApiVersion": "0.10.3"
+  },
+  "batch": {
+    "kind": "usdc-only",
+    "tokens": [
+      {
+        "symbol": "USDC",
+        "address": "0x033068f6539f8e6e6b131e6b2b814e6c34a5224bc66947c47dab9dfee93b35fb",
+        "decimals": 6
+      }
+    ]
+  },
+  "contracts": {
+    "pool": "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+    "generatedVerifier": "0x475cc47caf5d8b5b3a719915ceef5ae3e959f8754f2c0faa634d2e8c73d06db",
+    "bundleVerifier": "0x2755c2260220f44c319249402887ca50c8b968ab43364e90de54f5afd66759",
+    "payrollSeal": "0x4bde3263ff117f245f9ebea20670b363550951f61cf54f236c449f70181c01f"
+  },
+  "payroll": {
+    "transactionHash": "0x18ec86c318d1adcaa61bf145a91ee3ae67ed45dcce85187c5ab8cbfd58e04fd",
+    "blockNumber": 13852558,
+    "executionStatus": "SUCCEEDED",
+    "finalityStatus": "ACCEPTED_ON_L2"
+  },
+  "run": {
+    "id": "01a039e2-6fc9-7376-829f-a594569c5d1e",
+    "nullifierHigh": "0xe87ddc0af7f6be6ffe45ec94a315d1c3",
+    "nullifierLow": "0x351bbc087cafeb73b1302797be33673b",
+    "durableState": "confirmed",
+    "proofVerificationState": "onchain_verified",
+    "proofJobState": "complete",
+    "onchainStatus": 2,
+    "onchainStatusLabel": "proven",
+    "shardVerified": [true, true]
+  },
+  "verifierShards": [
+    {
+      "index": 0,
+      "transactionHash": "0x3143236a3dbdb65fdf6bb61f27a7974ee7a94a0e6066a1613cf2eca1ee8f5b9",
+      "blockNumber": 13852572,
+      "executionStatus": "SUCCEEDED",
+      "finalityStatus": "ACCEPTED_ON_L2"
+    },
+    {
+      "index": 1,
+      "transactionHash": "0xe4cd7b95971619fffd6a3f03dc5cddfb783a15884d144da09f4a5a783cdc60",
+      "blockNumber": 13852587,
+      "executionStatus": "SUCCEEDED",
+      "finalityStatus": "ACCEPTED_ON_L2"
+    }
+  ],
+  "privateFlowAttestation": {
+    "source": "authorized_ready_operator_confirmation",
+    "assets": ["USDC"],
+    "recipientRelationship": "registered_recipient_wallet",
+    "recipientBalanceObservation": "awaiting_user_report",
+    "publicSettlementProof": "unavailable_by_design"
+  },
+  "privacy": {
+    "recipient": "withheld",
+    "salaryAmount": "withheld",
+    "reason": "STRK20 hides private recipients and amounts; repository evidence records only public proof and settlement state."
+  },
+  "topologyVerification": {
+    "passed": true,
+    "blockNumber": 13853114,
+    "verifiedAt": "2026-08-25T17:26:22.790Z"
+  },
+  "observedAt": "2026-08-25T17:11:25.190Z"
+}

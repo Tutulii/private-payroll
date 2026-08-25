@@ -15,6 +15,8 @@
     "verify:completion": "node scripts/verify-completion.mjs --require-complete",
     "verify:usdc": "node scripts/verify-usdc-mainnet.mjs",
     "verify:payo-strk": "node scripts/verify-payo-strk-mainnet.mjs",
+    "verify:payo-usdc": "node scripts/verify-payo-payroll-mainnet.mjs evidence/payo-usdc-mainnet.json",
+    "verify:payo-mixed": "node scripts/verify-payo-payroll-mainnet.mjs evidence/payo-mixed-mainnet.json",
     "proof:input": "tsx scripts/generate-payroll-proof-input.ts",
     "proof:prove": "node scripts/prove-payroll-starknet.mjs",
     "phase2:devnet:check-artifacts": "node scripts/test-phase2-devnet.mjs check-artifacts",

@@ -1,6 +1,6 @@
-# Phase 2 implementation evidence (in progress)
+# Phase 2 implementation evidence
 
-This document records verified Phase 2 work without claiming that the Phase 2 gate has passed. The proof topology is deployed on Mainnet and the Ready STRK payroll row now passes end to end. Native-USDC-only and mixed PAYO payroll rows remain pending.
+This document records the Phase 2 implementation and its completion-gate evidence. The proof topology is deployed on Mainnet, and Ready STRK-only, native-USDC-only, and mixed STRK/native-USDC payroll rows have each passed through encrypted persistence, STRK20 settlement, durable finality, and both proof-bound on-chain verifier shards. This does not claim SettlementMatch or total PAYO completion; those remain Phase 4 and Phase 5 work.
 
 ## Requirement audit
 
@@ -9,18 +9,18 @@ This document records verified Phase 2 work without claiming that the Phase 2 ga
 | Client-encrypted records in the real UI/API | Implemented for organizations, principals, payees, agreements, runs/lines, proof bundles, settlements, receipts, disclosure grants, agent capabilities, claim/remediation drafts, and operational audit events. |
 | Recovery and key lifecycle | Recovery packages, recovery acknowledgement, second-admin enrollment, full latest-record key rotation, principal revocation, and fail-closed missing-key behavior are integrated and database-tested. |
 | Durable PostgreSQL execution | Idempotency, transactional capability reservations, proof and confirmation leases, restart recovery, block cursors, event indexing, bounded reorg rollback, and delayed-confirmation behavior are implemented and tested. |
-| STRK/native-USDC single and mixed batches | Exact orchestration, passive live fee quotes, per-token totals, and separate reserve validation are unit-tested. A live Ready STRK payroll passed, including employee receipt attestation, durable confirmation, seal status `proven`, and both on-chain verifier shards. Native-USDC-only and mixed PAYO payroll evidence remains pending. |
+| STRK/native-USDC single and mixed batches | Exact orchestration, passive live fee quotes, per-token totals, separate per-token eligibility reserves, and one atomic Ready request are unit-tested. Live Ready STRK-only, native-USDC-only, and mixed payrolls all passed with recipient-wallet observations, durable confirmation, seal status `proven`, and both on-chain verifier shards. Ready selects and charges exactly one fee token for an atomic batch; PAYO never claims that both token reserves are charged. |
 | Final proof-enforcement contracts | Complete. The generated verifier, bundle verifier, policy/FX registry, obligation-root registry, and seal are deployed on Mainnet; their class hashes and seven constructor/administrator/verifier/pool bindings re-verified at block `13,820,751`. Baseline policy root and proof version 1 are active. |
 
 ## Verified locally on 2026-08-25
 
-- Web/domain suite: 169 passed; 14 environment-gated PostgreSQL tests were skipped in the generic command and then passed separately against the migrated test database.
-- PostgreSQL durability suite: 14 passed against a migrated PostgreSQL database.
+- Web/domain suite: 185 passed; 17 environment-gated PostgreSQL tests were skipped in the generic command and then passed separately against the migrated test database.
+- PostgreSQL durability suite: 17 passed against a migrated PostgreSQL database, including durable pre-wallet approval creation, canonical-seal hash recovery, idempotent recording, safe no-transaction cancellation, restart leasing, and reorg behavior.
 - PAYO Cairo suite: 23 passed, including 256 fuzz runs for each policy/FX, obligation-root, and verifier lifecycle property. Immediate policy, verifier, obligation, and FX-publisher activation plus fresh, stale, unauthorized, expiring, and revocation cases pass.
 - Generated-verifier suite: 3 passed. Both proof shards passed the real Garaga verifier; the linked test consumed approximately `634,425,340` L2 gas in Starknet Foundry.
 - Current immediate-activation RPC gate: passed against pinned Starknet Devnet `0.9.2` / RPC `0.10.2` after rebuilding both Scarb packages. Five current classes were declared and five instances deployed; the policy, verifier, and obligation entries were read back as active in the scheduling transaction's confirming block. Two new deployment-bound witnesses and UltraHonk proofs self-verified against the pinned key, passed through the current generated verifier, bundle, registries, and seal, reached status `proven`, and replay simulation was rejected.
 - Production Next.js build passed. The remaining warnings come from Privy's optional Farcaster/Solana import and viem's Tempo dynamic dependency.
-- The guarded Mainnet planner and mutation path declared all five reviewed classes, deployed the deterministic topology, simulated each write, waited for receipts, and read all bindings back. `npm run phase2:mainnet:verify` passed again at block `13,820,751` on 2026-08-25. The procedure is documented in `docs/phase2-mainnet-deployment.md`.
+- The guarded Mainnet planner and mutation path declared all five reviewed classes, deployed the deterministic topology, simulated each write, waited for receipts, and read all bindings back. `npm run phase2:mainnet:verify` passed again at block `13,853,114` on 2026-08-25. The procedure is documented in `docs/phase2-mainnet-deployment.md`.
 - The local `/deployment` Ready operator serves only fresh rebuilt artifacts, recomputes their class hashes again in the browser, requires an exact typed confirmation plus wallet approval, handles partial/restarted declaration and deployment state idempotently, verifies seven administrator/verifier/pool/registry bindings, and activates the canonical policy root and proof version on confirmation. It reads both entries back before reporting success. Its artifact route and page were exercised locally without sending a wallet request.
 
 ## Full-topology proof fixture
@@ -82,13 +82,38 @@ On 2026-08-25, a Ready Wallet API 0.10.3 user approved a deliberately limited ST
 - Machine-readable record: [`evidence/payo-strk-mainnet.json`](../evidence/payo-strk-mainnet.json). `npm run verify:payo-strk` rechecks all three receipts, the pool/seal event path, run status, and both shard flags over Mainnet RPC.
 - A fresh read-only topology verification passed at Mainnet block `13,834,173` after this run.
 
-This is sufficient for the STRK row of the Phase 2 wallet matrix and for the deployed real-verifier architecture requirement. It does not prove native-USDC-only or mixed-token PAYO payroll behavior and therefore does not close Phase 2.
+This is sufficient for the STRK row of the Phase 2 wallet matrix and for the deployed real-verifier architecture requirement.
 
-## Still required for the Phase 2 gate
+## Live proof-bound native-USDC-only payroll
 
-- Complete live Ready wallet tests for one native-USDC-only PAYO batch and one mixed STRK/native-USDC PAYO batch using passive live fee reserves. The STRK row is complete.
-- Keep the funded permissionless proof relayer and confirmation/proof/indexer workers healthy; PAYO verifies Privy access tokens against the app-bound public JWKS without an App Secret.
-- For each live run, activate its exact obligation root and publish the short-lived FX root before Ready approval.
-- Record the remaining two encrypted run records, wallet receipts, two verifier-shard receipts per run, final seal status, and clean-clone CI evidence.
+On 2026-08-25, the user prepared and approved a native-USDC-only payroll from the encrypted PAYO agreement flow. The fresh run avoided the expired legacy-proof recovery path, reached durable finality, and completed both verifier shards within its one-hour proof window.
 
-Until those items pass, Phase 2 is not 100% complete.
+- Private payroll transaction: `0x18ec86c318d1adcaa61bf145a91ee3ae67ed45dcce85187c5ab8cbfd58e04fd`, `SUCCEEDED` / `ACCEPTED_ON_L2`, block `13,852,558`.
+- Verifier shard 0: `0x3143236a3dbdb65fdf6bb61f27a7974ee7a94a0e6066a1613cf2eca1ee8f5b9`, `SUCCEEDED` / `ACCEPTED_ON_L2`, block `13,852,572`.
+- Verifier shard 1: `0xe4cd7b95971619fffd6a3f03dc5cddfb783a15884d144da09f4a5a783cdc60`, `SUCCEEDED` / `ACCEPTED_ON_L2`, block `13,852,587`.
+- Durable evidence: run `01a039e2-6fc9-7376-829f-a594569c5d1e` is `confirmed`, its settlement is `finalized`, its proof bundle is `onchain_verified`, and its proof job is `complete` with no error.
+- Private-flow evidence: the authorized Ready operator identified and approved the encrypted run as native-USDC-only. Earlier live USDC payroll testing established recipient delivery through Ready; the private recipient-balance report for this fresh proof-bound run is explicitly recorded as awaiting the user's report rather than invented. Recipient and amount remain deliberately absent from the repository.
+- Machine-readable record: [`evidence/payo-usdc-mainnet.json`](../evidence/payo-usdc-mainnet.json). `npm run verify:payo-usdc` rechecks the public STRK20/seal event path, all three receipts, final seal status, and both shard flags over Mainnet RPC.
+
+## Live proof-bound mixed STRK/native-USDC payroll
+
+On 2026-08-25, one atomic Ready request carried a STRK line and a native-USDC line for registered recipients. The encrypted PAYO manifest recorded both token totals. Ready presented the final private action review and selected one fee token for the atomic transaction; PAYO did not request separate token-transfer approvals.
+
+- Private payroll transaction: `0x7e41fd161a1d034b4d58348b3ee6eb7a4451cd29ce9e05f556cee868e3e510c`, `SUCCEEDED` / `ACCEPTED_ON_L1`, block `13,845,714`.
+- Verifier shard 0: `0x674f62dc7490f97e4609e7d103a5824616ea5bcd7e28a91028429f4dae401ff`, `SUCCEEDED` / `ACCEPTED_ON_L1`, block `13,845,729`.
+- Verifier shard 1: `0x557919c7cb3ce93fbdcd0918cf91d96dd02c4a2f49b63baa26d18e9fc0d5b54`, `SUCCEEDED` / `ACCEPTED_ON_L1`, block `13,845,739`.
+- Durable evidence: run `01a03931-6dcf-71ce-b11b-a3ee0e854ade` is `confirmed`; its settlement finalized, proof bundle reached `onchain_verified`, and both proof-verification transactions completed without error.
+- Private-flow evidence: the user confirmed Ready recipient-history entries for both shielded STRK and shielded USDC from the same shortened private transaction reference. Public evidence withholds both recipients and both amounts.
+- Machine-readable record: [`evidence/payo-mixed-mainnet.json`](../evidence/payo-mixed-mainnet.json). `npm run verify:payo-mixed` rechecks the public pool/seal event path, all three receipts, final seal status, and both shard flags over Mainnet RPC.
+
+## Phase 2 gate audit
+
+- Client-encrypted real UI/API records: passed.
+- Recovery, second administration, rotation, revocation, and lost-key fail-closed behavior: passed.
+- PostgreSQL idempotency, capability races, confirmation/proof leasing, indexing, restart recovery, and reorg handling: passed.
+- Live single-token STRK, single-token native USDC, and mixed STRK/native-USDC Ready batches: passed.
+- Generated verifier, bundle verifier, policy/FX registry, obligation registry, and seal deployment/binding verification: passed at Mainnet block `13,853,114`.
+- Real-proof Devnet topology, replay/expiry/authorization negative tests, contract fuzzing, production build, and machine-readable Mainnet RPC re-verification: passed.
+- Wallet recovery UX: a durable approval is persisted before Ready opens, emergency hash recovery is hidden during normal approval, canonical seal indexing recovers missing wallet hashes, and explicit cancellation is available only for a confirmed no-transaction outcome.
+
+The remaining repository release action is a clean-clone run and green GitHub CI for the commit containing this evidence. Phase 2 must not be called officially complete until that final action passes.

@@ -366,7 +366,7 @@ Human approval remains the default. Autonomous execution is enabled per capabili
 | STRK20 registration missing | Link setup flow; do not label as zero balance |
 | USDC pool support missing | Disable USDC; do not substitute another token |
 | Fee or public balance unavailable | Disable shielding and offer explicit retry |
-| Wallet rejection | Return to editable state without creating a settlement |
+| Wallet rejection | Preserve the pre-wallet durable approval intent, mark it cancelled only after the operator confirms Ready submitted no transaction, and return the obligation schedule to a retryable state; never record a transaction hash that does not exist |
 | Submitted hash times out | Persist hash and resume confirmation polling |
 | Chain reorg | Move confirmation back to submitted until final again |
 | Proof invalid | Reject before wallet approval |

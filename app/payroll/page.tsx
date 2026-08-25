@@ -21,7 +21,7 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   formatTokenAmount,
   parseTokenAmount,
@@ -40,10 +40,13 @@ import {
   derivePayrollCycleId,
   parsePendingPayrollSubmission,
   preparePayrollObligationRoot,
+  recoverSealedProvenPayroll,
   resumePendingPayrollSubmission,
   type PayrollExecutionStage,
+  type PayrollExecutionResult,
   type PendingPayrollSubmission,
 } from "@/lib/client/payroll-execution";
+import { payrollRecoveryMode } from "@/lib/client/payroll-recovery-state";
 import { decryptVaultRecord, type EncryptedVaultRecord } from "@/lib/crypto/vault";
 import {
   agreementScheduleCommitment,
@@ -86,6 +89,7 @@ function runDate(value: string, options?: Intl.DateTimeFormatOptions) {
 export default function PayrollPage() {
   const { openPayroll, notify } = useAppShell();
   const starknet = useStarknetWallet();
+  const { reconcilePayrollTransaction } = starknet;
   const {
     isConnected: shieldWalletConnected,
     isMainnet: shieldWalletMainnet,
@@ -113,9 +117,13 @@ export default function PayrollPage() {
   const [rotationPassword, setRotationPassword] = useState("");
   const [revokePrincipalId, setRevokePrincipalId] = useState("");
   const [payrollStage, setPayrollStage] = useState<PayrollExecutionStage | null>(null);
-  const [payrollReceipt, setPayrollReceipt] = useState<PendingPayrollSubmission | null>(null);
+  const [payrollReceipt, setPayrollReceipt] = useState<PayrollExecutionResult | null>(null);
   const [recoverableSubmission, setRecoverableSubmission] = useState<PendingPayrollSubmission | null>(null);
+  const [recoveryTransactionHash, setRecoveryTransactionHash] = useState("");
+  const [showManualHashRecovery, setShowManualHashRecovery] = useState(false);
+  const automaticRecoveryRef = useRef<string | null>(null);
   const [releasingRunId, setReleasingRunId] = useState<string | null>(null);
+  const [recoveringRunId, setRecoveringRunId] = useState<string | null>(null);
   const [payrollRuns, setPayrollRuns] = useState<PayrollRunSummary[]>([]);
   const [obligationSchedule, setObligationSchedule] = useState<{
     root: string;
@@ -308,6 +316,14 @@ export default function PayrollPage() {
     return () => window.clearTimeout(timer);
   }, [refreshPayrollRuns]);
 
+  const hasUnsettledRun = payrollRuns.some(({ state }) =>
+    ["approval_pending", "submitted", "confirmed"].includes(state));
+  useEffect(() => {
+    if (!vault.session || !hasUnsettledRun) return;
+    const timer = window.setInterval(() => void refreshPayrollRuns(), 5_000);
+    return () => window.clearInterval(timer);
+  }, [hasUnsettledRun, refreshPayrollRuns, vault.session]);
+
   useEffect(() => {
     let stale = false;
     const timer = window.setTimeout(() => {
@@ -434,13 +450,21 @@ export default function PayrollPage() {
     return () => window.clearTimeout(timer);
   }, [vault.session]);
 
-  const persistPendingSubmission = (submission: PendingPayrollSubmission | null) => {
+  const persistPendingSubmission = useCallback((submission: PendingPayrollSubmission | null) => {
     if (!vault.session) throw new Error("The PAYO workspace locked during settlement recording.");
     const storageKey = `payo:pending-settlement:v1:${vault.session.organizationId}`;
     if (submission) localStorage.setItem(storageKey, JSON.stringify(submission));
     else localStorage.removeItem(storageKey);
     setRecoverableSubmission(submission);
-  };
+    setShowManualHashRecovery(false);
+    if (submission) void refreshPayrollRuns();
+  }, [refreshPayrollRuns, vault.session]);
+  const recoveryMode = payrollRecoveryMode({
+    hasPendingSubmission: recoverableSubmission !== null,
+    hasTransactionHash: Boolean(recoverableSubmission?.transactionHash),
+    executionStage: payrollStage,
+    walletStage: starknet.transaction?.kind === "payroll" ? starknet.transaction.stage : null,
+  });
   const shieldQuote = useMemo(() => {
     try {
       const token = PAYROLL_TOKENS[shieldToken];
@@ -599,22 +623,111 @@ export default function PayrollPage() {
     }
   };
 
-  const resumePayrollRecording = async () => {
+  const resumePayrollRecording = async (submittedHash = recoveryTransactionHash) => {
     setFormError("");
     try {
       if (!vault.client || !recoverableSubmission) throw new Error("No recoverable payroll submission is available.");
       const result = await resumePendingPayrollSubmission({
         client: vault.client,
         pending: recoverableSubmission,
+        transactionHash: submittedHash,
         persistPendingSubmission,
         onStage: setPayrollStage,
       });
       setPayrollReceipt(result);
+      await reconcilePayrollTransaction(result.transactionHash);
+      setRecoveryTransactionHash("");
       await refreshPayrollRuns();
       notify(`Payroll recording recovered · ${result.transactionHash.slice(0, 10)}…`);
     } catch (recoveryError) {
       setPayrollStage(null);
       setFormError(recoveryError instanceof Error ? recoveryError.message : "Payroll recovery failed.");
+    }
+  };
+
+  const cancelPendingPayrollApproval = async () => {
+    setFormError("");
+    try {
+      if (!vault.client || !recoverableSubmission) throw new Error("No recoverable payroll approval is available.");
+      if (recoverableSubmission.transactionHash) {
+        throw new Error("This payroll already has a transaction hash and cannot be cancelled.");
+      }
+      if (!window.confirm(
+        "Cancel this approval only if Ready was rejected or closed and no transaction was submitted. Continue?",
+      )) return;
+      await vault.client.cancelSettlementApproval(recoverableSubmission.settlementId);
+      persistPendingSubmission(null);
+      setRecoveryTransactionHash("");
+      setPayrollStage(null);
+      starknet.clearTransaction();
+      await refreshPayrollRuns();
+      notify("Unsubmitted Ready approval cancelled safely");
+    } catch (cancellationError) {
+      setFormError(cancellationError instanceof Error ? cancellationError.message : "The pending approval could not be cancelled.");
+    }
+  };
+
+  useEffect(() => {
+    if (!vault.client || !recoverableSubmission || recoverableSubmission.transactionHash) {
+      automaticRecoveryRef.current = null;
+      return;
+    }
+    const recoveredHash = payrollRuns.find(({ id }) => id === recoverableSubmission.runId)?.transactionHash;
+    if (!recoveredHash) return;
+    const recoveryKey = `${recoverableSubmission.settlementId}:${recoveredHash}`;
+    if (automaticRecoveryRef.current === recoveryKey) return;
+    automaticRecoveryRef.current = recoveryKey;
+    let stale = false;
+    void resumePendingPayrollSubmission({
+      client: vault.client,
+      pending: recoverableSubmission,
+      transactionHash: recoveredHash,
+      persistPendingSubmission,
+      onStage: setPayrollStage,
+    }).then(async (result) => {
+      if (stale) return;
+      setPayrollReceipt(result);
+      await reconcilePayrollTransaction(result.transactionHash);
+      setRecoveryTransactionHash("");
+      await refreshPayrollRuns();
+      notify(`Ready hash recovered on-chain · ${result.transactionHash.slice(0, 10)}…`);
+    }).catch((recoveryError) => {
+      if (stale) return;
+      automaticRecoveryRef.current = null;
+      setPayrollStage(null);
+      setFormError(recoveryError instanceof Error ? recoveryError.message : "On-chain payroll recovery failed.");
+    });
+    return () => {
+      stale = true;
+    };
+  }, [notify, payrollRuns, persistPendingSubmission, reconcilePayrollTransaction, recoverableSubmission, refreshPayrollRuns, vault.client]);
+
+  const recoverSealedRun = async (run: PayrollRunSummary) => {
+    setFormError("");
+    if (!vault.client || !vault.session) {
+      setFormError("Unlock the encrypted PAYO workspace before recovering this run.");
+      return;
+    }
+    setRecoveringRunId(run.id);
+    try {
+      const result = await recoverSealedProvenPayroll({
+        client: vault.client,
+        organizationId: vault.session.organizationId,
+        runId: run.id,
+        totals: run.totals,
+        principal: vault.session.principal,
+        persistPendingSubmission,
+        onStage: setPayrollStage,
+      });
+      setPayrollReceipt(result);
+      await reconcilePayrollTransaction(result.transactionHash);
+      await refreshPayrollRuns();
+      notify(`Sealed Ready transaction recovered · ${result.transactionHash.slice(0, 10)}…`);
+    } catch (recoveryError) {
+      setPayrollStage(null);
+      setFormError(recoveryError instanceof Error ? recoveryError.message : "The sealed run could not be recovered.");
+    } finally {
+      setRecoveringRunId(null);
     }
   };
 
@@ -1002,8 +1115,62 @@ export default function PayrollPage() {
             </div>
 
             {formError && <div className="runner-error"><X size={16} /><span>{formError}</span></div>}
-            {recoverableSubmission && (
-              <div className="runner-error"><Clock3 size={16} /><span>A submitted transaction still needs durable PAYO recording. Do not submit it again.</span><button type="button" className="button button--soft" disabled={busy} onClick={resumePayrollRecording}>Resume recording</button></div>
+            {recoverableSubmission && (recoveryMode === "action_required" || recoveryMode === "recording_required") && (
+              <div className="runner-error runner-recovery">
+                <Clock3 size={16} />
+                <span>
+                  <strong>{recoverableSubmission.transactionHash ? "Transaction awaiting durable recording" : "Ready approval did not complete"}</strong>
+                  <p>{recoverableSubmission.transactionHash
+                    ? "PAYO has the hash. Resume idempotent recording; never submit the payroll again."
+                    : "PAYO kept the encrypted settlement safe and is checking Mainnet automatically. If Ready shows no submitted transaction, cancel this approval. Use hash recovery only for a transaction visible in Ready history."}</p>
+                  {!recoverableSubmission.transactionHash && showManualHashRecovery && (
+                    <input
+                      value={recoveryTransactionHash}
+                      onChange={(event) => setRecoveryTransactionHash(event.target.value)}
+                      placeholder="0x… transaction hash from Ready"
+                      aria-label="Ready payroll transaction hash"
+                      spellCheck={false}
+                    />
+                  )}
+                </span>
+                <div className="runner-recovery__actions">
+                  {recoverableSubmission.transactionHash ? (
+                    <button
+                      type="button"
+                      className="button button--soft"
+                      onClick={() => void resumePayrollRecording()}
+                    >Resume recording</button>
+                  ) : showManualHashRecovery ? (
+                    <>
+                      <button
+                        type="button"
+                        className="button button--soft"
+                        disabled={!/^0x[0-9a-fA-F]{1,64}$/.test(recoveryTransactionHash.trim())}
+                        onClick={() => void resumePayrollRecording()}
+                      >Record submitted hash</button>
+                      <button
+                        type="button"
+                        className="button button--soft"
+                        onClick={() => { setShowManualHashRecovery(false); setRecoveryTransactionHash(""); }}
+                      >Hide hash recovery</button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="button button--soft"
+                      onClick={() => setShowManualHashRecovery(true)}
+                    >I see a submitted transaction</button>
+                  )}
+                  {!recoverableSubmission.transactionHash && (
+                    <button
+                      type="button"
+                      className="button button--soft"
+                      disabled={starknet.transaction?.stage === "wallet" || starknet.transaction?.stage === "confirming"}
+                      onClick={cancelPendingPayrollApproval}
+                    >No transaction · cancel</button>
+                  )}
+                </div>
+              </div>
             )}
             {payrollStage && !formError && (
               <div className={`transaction-receipt transaction-receipt--${payrollStage === "queued" ? "confirmed" : "confirming"}`}>
@@ -1015,7 +1182,7 @@ export default function PayrollPage() {
             {starknet.transaction && (
               <div className={`transaction-receipt transaction-receipt--${starknet.transaction.stage}`}>
                 <span className="transaction-receipt-icon">{starknet.transaction.stage === "confirmed" ? <CheckCircle2 size={20} /> : starknet.transaction.stage === "failed" ? <X size={19} /> : <LoaderCircle className="spin" size={19} />}</span>
-                <span><small>{starknet.transaction.stage === "wallet" ? starknet.transaction.kind === "registry" ? "READY IS REQUESTING ADMIN APPROVAL" : "READY IS PREPARING THE PROOF" : starknet.transaction.stage === "confirming" ? "SUBMITTED TO MAINNET" : starknet.transaction.stage === "confirmed" ? "TRANSACTION CONFIRMED" : "TRANSACTION NEEDS ATTENTION"}</small><strong>{starknet.transaction.label}</strong>{starknet.transaction.kind === "shield" && starknet.transaction.grossAmount !== undefined && starknet.transaction.walletFee !== undefined && starknet.transaction.token && <p>{`${starknet.transaction.feeQuoteExact ? "" : "Pre-approval estimate · "}${formatTokenAmount(starknet.transaction.grossAmount, starknet.transaction.token)} ${starknet.transaction.token} total − ${formatTokenAmount(starknet.transaction.walletFee, starknet.transaction.feeToken ?? starknet.transaction.token)} ${starknet.transaction.feeToken ?? starknet.transaction.token} private fee = ${formatTokenAmount(starknet.transaction.netAmount ?? null, starknet.transaction.token)} ${starknet.transaction.token} shielded.`}</p>}{starknet.transaction.stage === "wallet" && <p>PAYO sent one request. Rejecting it returns this form to a retryable state.</p>}{starknet.transaction.error && <p>{starknet.transaction.error}</p>}</span>
+                <span><small>{starknet.transaction.stage === "wallet" ? starknet.transaction.kind === "registry" ? "READY IS REQUESTING ADMIN APPROVAL" : "READY IS PREPARING THE PROOF" : starknet.transaction.stage === "confirming" ? "SUBMITTED TO MAINNET" : starknet.transaction.stage === "confirmed" ? "TRANSACTION CONFIRMED" : "TRANSACTION NEEDS ATTENTION"}</small><strong>{starknet.transaction.label}</strong>{starknet.transaction.kind === "shield" && starknet.transaction.grossAmount !== undefined && starknet.transaction.walletFee !== undefined && starknet.transaction.token && <p>{`${starknet.transaction.feeQuoteExact ? "" : "Pre-approval estimate · "}${formatTokenAmount(starknet.transaction.grossAmount, starknet.transaction.token)} ${starknet.transaction.token} total − ${formatTokenAmount(starknet.transaction.walletFee, starknet.transaction.feeToken ?? starknet.transaction.token)} ${starknet.transaction.feeToken ?? starknet.transaction.token} private fee = ${formatTokenAmount(starknet.transaction.netAmount ?? null, starknet.transaction.token)} ${starknet.transaction.token} shielded.`}</p>}{starknet.transaction.kind === "payroll" && starknet.transaction.totals && starknet.transaction.feeReserves && <p>{(["STRK", "USDC"] as PayrollTokenSymbol[]).filter((token) => (starknet.transaction?.totals?.[token] ?? 0n) > 0n).map((token) => `${formatTokenAmount(starknet.transaction?.totals?.[token] ?? null, token)} ${token} payroll + up to ${formatTokenAmount(starknet.transaction?.feeReserves?.[token] ?? null, token)} ${token} fee eligibility reserve`).join(" · ")}. Ready charges exactly one selected fee token for the whole atomic payroll, never both.</p>}{starknet.transaction.stage === "wallet" && <p>PAYO sent one request. Rejecting it leaves a durable approval that can be safely cancelled after Ready closes.</p>}{starknet.transaction.error && <p>{starknet.transaction.error}</p>}</span>
                 {starknet.transaction.hash && <a href={`${STARKNET_MAINNET_EXPLORER}/tx/${starknet.transaction.hash}`} target="_blank" rel="noreferrer">View receipt <ExternalLink size={13} /></a>}
               </div>
             )}
@@ -1037,15 +1204,26 @@ export default function PayrollPage() {
           <div className="stage-run-actions">
             <Link className="button button--ink" href={latestRun ? "/activity" : "#private-payroll"}>{latestRun ? "Open durable activity" : "Prepare first run"} <ArrowRight size={17} /></Link>
             {latestRun?.state === "proven" && !latestRun.transactionHash && (
-              <button
-                type="button"
-                className="button button--soft"
-                disabled={busy || releasingRunId === latestRun.id}
-                onClick={() => void releaseUnsubmittedRun(latestRun)}
-              >
-                {releasingRunId === latestRun.id ? <LoaderCircle className="spin" size={15} /> : <X size={15} />}
-                Release unsubmitted run
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="button button--soft"
+                  disabled={recoveringRunId === latestRun.id}
+                  onClick={() => void recoverSealedRun(latestRun)}
+                >
+                  {recoveringRunId === latestRun.id ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />}
+                  Recover sealed submission
+                </button>
+                <button
+                  type="button"
+                  className="button button--soft"
+                  disabled={busy || releasingRunId === latestRun.id || recoveringRunId === latestRun.id}
+                  onClick={() => void releaseUnsubmittedRun(latestRun)}
+                >
+                  {releasingRunId === latestRun.id ? <LoaderCircle className="spin" size={15} /> : <X size={15} />}
+                  Release only if never submitted
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -1098,13 +1276,13 @@ export default function PayrollPage() {
         <div className="runs-card">
           <div className="table-head"><span>Payroll</span><span>Recipients</span><span>Status</span><span>Total</span><span /></div>
           {visibleRuns.map((run, index) => (
-            <button type="button" className="run-row" key={run.id} onClick={() => notify(`Run ${run.cycleId} · ${runStateLabel(run.state)}`)}>
+            <button type="button" className="run-row" key={run.id} disabled={recoveringRunId === run.id} onClick={() => run.state === "proven" && !run.transactionHash ? void recoverSealedRun(run) : notify(`Run ${run.cycleId} · ${runStateLabel(run.state)}`)}>
               <span className={`run-mark run-mark--${["coral", "blue", "green", "yellow"][index % 4]}`}>{run.cycleId.slice(0, 3).toUpperCase()}</span>
-              <span className="run-name"><strong>{run.cycleId}</strong><small>Due {runDate(run.dueAt)} · updated {runDate(run.updatedAt)}</small></span>
+              <span className="run-name"><strong>{run.cycleId}</strong><small>{run.state === "proven" && !run.transactionHash ? "Tap to recover its canonical sealed transaction" : `Due ${runDate(run.dueAt)} · updated ${runDate(run.updatedAt)}`}</small></span>
               <span className="run-recipients">{run.recipientCount} encrypted {run.recipientCount === 1 ? "recipient" : "recipients"}</span>
               <span className={`run-status run-status--${runCategory(run.state).toLowerCase().replace("attention", "draft")}`}><i />{runStateLabel(run.state)}</span>
               <strong className="run-amount">{formatTokenAmount(run.totals.STRK, "STRK")} STRK · {formatTokenAmount(run.totals.USDC, "USDC")} USDC</strong>
-              <MoreHorizontal className="run-more" size={18} />
+              {recoveringRunId === run.id ? <LoaderCircle className="run-more spin" size={18} /> : run.state === "proven" && !run.transactionHash ? <ShieldCheck className="run-more" size={18} /> : <MoreHorizontal className="run-more" size={18} />}
             </button>
           ))}
           {runsLoading && <div className="empty-row"><LoaderCircle className="spin" size={21} /><strong>Opening encrypted payroll history</strong><span>Manifests are decrypted only in this browser.</span></div>}

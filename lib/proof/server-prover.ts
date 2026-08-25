@@ -23,6 +23,7 @@ import {
   normalizeGaragaProofCalldata,
   serializePayrollPublicInputs,
 } from "./starknet-calldata";
+import { parseProverThreadCount } from "./prover-runtime";
 
 type PinnedAssets = {
   circuit: CompiledCircuit;
@@ -75,7 +76,7 @@ export async function provePayrollOnSelfHostedNode(input: {
   const noir = new Noir(circuit);
   const backend = new UltraHonkBackend(circuit.bytecode, {
     backend: BackendType.Wasm,
-    threads: 1,
+    threads: parseProverThreadCount(process.env.PAYO_PROVER_THREADS),
     memory: { maximum: PAYROLL_MOBILE_WASM_MAXIMUM_PAGES },
   });
   const startedAt = performance.now();

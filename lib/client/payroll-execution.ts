@@ -7,6 +7,7 @@ import { hashRecipientCommitment } from "@/lib/crypto/commitments";
 import { hashCanonicalJson } from "@/lib/crypto/digest";
 import { toHex } from "@/lib/crypto/encoding";
 import {
+  decryptVaultRecord,
   encryptVaultRecord,
   encryptedVaultRecordSchema,
   type EncryptedVaultRecord,
@@ -52,7 +53,7 @@ export type PayrollExecutionStage =
   | "queued";
 
 export type PendingPayrollSubmission = {
-  version: 2;
+  version: 3;
   organizationId: string;
   runId: string;
   proofBundleId: string;
@@ -62,12 +63,13 @@ export type PendingPayrollSubmission = {
   tokenTotalsCommitment: `0x${string}`;
   settlementEnvelope: EncryptedVaultRecord;
   proofShards: [string[], string[]];
-  transactionHash: string;
+  transactionHash?: string;
   createdAt: string;
 };
 
-export type PayrollExecutionResult = Omit<PendingPayrollSubmission, "settlementId"> & {
+export type PayrollExecutionResult = PendingPayrollSubmission & {
   settlementId: string;
+  transactionHash: string;
   verificationQueued: true;
 };
 
@@ -202,7 +204,7 @@ export class PayrollSubmissionPersistenceError extends Error {
   }
 }
 
-const pendingPayrollSubmissionSchema = z.object({
+const pendingPayrollSubmissionV2Schema = z.object({
   version: z.literal(2),
   organizationId: z.string().uuid(),
   runId: z.string().uuid(),
@@ -220,8 +222,17 @@ const pendingPayrollSubmissionSchema = z.object({
   createdAt: z.string().datetime(),
 }).strict();
 
+const pendingPayrollSubmissionV3Schema = pendingPayrollSubmissionV2Schema.extend({
+  version: z.literal(3),
+  transactionHash: z.string().regex(/^0x[0-9a-fA-F]{1,64}$/).optional(),
+}).strict();
+
 export function parsePendingPayrollSubmission(input: unknown): PendingPayrollSubmission {
-  return pendingPayrollSubmissionSchema.parse(input) as PendingPayrollSubmission;
+  const parsed = z.union([
+    pendingPayrollSubmissionV3Schema,
+    pendingPayrollSubmissionV2Schema,
+  ]).parse(input);
+  return { ...parsed, version: 3 } as PendingPayrollSubmission;
 }
 
 type ProvePayroll = (input: {
@@ -289,36 +300,172 @@ async function retryDurableWrite<T>(operation: () => Promise<T>): Promise<T> {
 export async function resumePendingPayrollSubmission(input: {
   client: PayoClient;
   pending: PendingPayrollSubmission;
+  transactionHash?: string;
   persistPendingSubmission?: (submission: PendingPayrollSubmission | null) => void;
   onStage?: (stage: PayrollExecutionStage) => void;
 }): Promise<PayrollExecutionResult> {
   const pending = parsePendingPayrollSubmission(input.pending);
+  const transactionHash = input.transactionHash?.trim() || pending.transactionHash;
+  if (!transactionHash || !/^0x[0-9a-fA-F]{1,64}$/.test(transactionHash)) {
+    throw new Error(
+      "Ready did not return a transaction hash. Copy the submitted hash from Ready before recording this payroll.",
+    );
+  }
+  const submitted = { ...pending, transactionHash };
+  input.persistPendingSubmission?.(submitted);
   input.onStage?.("recording");
   try {
     const response = await retryDurableWrite(() => input.client.createSettlementIntent({
-      id: pending.settlementId,
-      organizationId: pending.organizationId,
-      runId: pending.runId,
-      walletRequestId: pending.walletRequestId,
-      idempotencyKey: pending.idempotencyKey,
-      tokenTotalsCommitment: pending.tokenTotalsCommitment,
-      envelope: pending.settlementEnvelope,
+      id: submitted.settlementId,
+      organizationId: submitted.organizationId,
+      runId: submitted.runId,
+      walletRequestId: submitted.walletRequestId,
+      idempotencyKey: submitted.idempotencyKey,
+      tokenTotalsCommitment: submitted.tokenTotalsCommitment,
+      envelope: submitted.settlementEnvelope,
     }));
-    if (returnedId(response.settlement, "settlement") !== pending.settlementId) {
+    if (returnedId(response.settlement, "settlement") !== submitted.settlementId) {
       throw new Error("PAYO returned a different settlement identifier for this idempotent request.");
     }
     await retryDurableWrite(() => input.client.recordSettlementSubmission(
-      pending.settlementId,
-      pending.transactionHash,
+      submitted.settlementId,
+      submitted.transactionHash,
     ));
     await retryDurableWrite(() => input.client.enqueueProofVerification({
-      settlementId: pending.settlementId,
-      proofBundleId: pending.proofBundleId,
+      settlementId: submitted.settlementId,
+      proofBundleId: submitted.proofBundleId,
+      shards: submitted.proofShards,
+    }));
+  } catch (error) {
+    throw new PayrollSubmissionPersistenceError(
+      `PAYO could not resume submission recording. Recovery run: ${submitted.runId}.`,
+      submitted,
+      { cause: error },
+    );
+  }
+  input.persistPendingSubmission?.(null);
+  input.onStage?.("queued");
+  return { ...submitted, verificationQueued: true };
+}
+
+const sealedRecoveryProofSchema = z.object({
+  shards: z.tuple([
+    z.object({
+      shardIndex: z.literal(0),
+      proofCalldata: z.array(z.string().regex(/^0x[0-9a-fA-F]+$/)).min(1).max(5_000),
+    }).passthrough(),
+    z.object({
+      shardIndex: z.literal(1),
+      proofCalldata: z.array(z.string().regex(/^0x[0-9a-fA-F]+$/)).min(1).max(5_000),
+    }).passthrough(),
+  ]),
+}).passthrough();
+
+/**
+ * Repairs a legacy run produced before approval intents were persisted ahead
+ * of Ready. The server discloses only a canonical seal-event hash and proof
+ * bundle identifier; proof calldata and token totals are decrypted locally.
+ */
+export async function recoverSealedProvenPayroll(input: {
+  client: PayoClient;
+  organizationId: string;
+  runId: string;
+  totals: Readonly<Record<PayrollTokenSymbol, bigint>>;
+  principal: VaultPrincipalKeyPair;
+  persistPendingSubmission?: (submission: PendingPayrollSubmission | null) => void;
+  onStage?: (stage: PayrollExecutionStage) => void;
+}): Promise<PayrollExecutionResult> {
+  input.onStage?.("recording");
+  const { recovery } = await input.client.getSealedPayrollRecovery(input.runId);
+  if (recovery.runId !== input.runId || !/^0x[0-9a-fA-F]{1,64}$/.test(recovery.transactionHash)) {
+    throw new Error("PAYO returned invalid canonical seal recovery evidence.");
+  }
+  const response = await input.client.getEncryptedRecord({
+    organizationId: input.organizationId,
+    recordId: recovery.proofBundleId,
+  }) as { record?: { envelope?: EncryptedVaultRecord } };
+  if (!response.record?.envelope) throw new Error("The encrypted proof bundle is unavailable for recovery.");
+  const proof = sealedRecoveryProofSchema.parse(
+    decryptVaultRecord(response.record.envelope, input.principal),
+  );
+  const settlementId = generateUuidV7();
+  const walletRequestId = generateUuidV7();
+  const idempotencyKey = `payroll-recovery:${input.runId}:${walletRequestId}`;
+  const tokenTotalsCommitment = commitTokenTotals({
+    organizationId: input.organizationId,
+    runId: input.runId,
+    totals: {
+      STRK: input.totals.STRK.toString(),
+      USDC: input.totals.USDC.toString(),
+    },
+  });
+  const timestamp = new Date().toISOString();
+  const settlement = settlementRecordSchema.parse({
+    schemaVersion: 1,
+    id: settlementId,
+    organizationId: input.organizationId,
+    revision: 1,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    runId: input.runId,
+    walletRequestId,
+    idempotencyKey,
+    tokenTotals: {
+      STRK: input.totals.STRK.toString(),
+      USDC: input.totals.USDC.toString(),
+    },
+    tokenTotalsCommitment,
+    state: "approval_pending",
+    noteEvidenceState: "unavailable",
+  });
+  const settlementEnvelope = encryptVaultRecord(
+    settlement,
+    {
+      schemaVersion: 1,
+      organizationId: input.organizationId,
+      recordType: "settlement",
+      recordId: settlementId,
+      revision: 1,
+    },
+    [input.principal],
+  );
+  const pending: PendingPayrollSubmission & { transactionHash: string } = {
+    version: 3,
+    organizationId: input.organizationId,
+    runId: input.runId,
+    proofBundleId: recovery.proofBundleId,
+    settlementId,
+    walletRequestId,
+    idempotencyKey,
+    tokenTotalsCommitment,
+    settlementEnvelope,
+    proofShards: [proof.shards[0].proofCalldata, proof.shards[1].proofCalldata],
+    transactionHash: recovery.transactionHash,
+    createdAt: timestamp,
+  };
+  input.persistPendingSubmission?.(pending);
+  try {
+    const created = await retryDurableWrite(() => input.client.createSettlementIntent({
+      id: settlementId,
+      organizationId: input.organizationId,
+      runId: input.runId,
+      walletRequestId,
+      idempotencyKey,
+      tokenTotalsCommitment,
+      envelope: settlementEnvelope,
+    }));
+    if (returnedId(created.settlement, "settlement") !== settlementId) {
+      throw new Error("PAYO returned a different settlement identifier during seal recovery.");
+    }
+    await retryDurableWrite(() => input.client.recordSettlementSubmission(settlementId, recovery.transactionHash));
+    await retryDurableWrite(() => input.client.enqueueProofVerification({
+      settlementId,
+      proofBundleId: recovery.proofBundleId,
       shards: pending.proofShards,
     }));
   } catch (error) {
     throw new PayrollSubmissionPersistenceError(
-      `PAYO could not resume submission recording. Recovery run: ${pending.runId}.`,
+      `The sealed transaction was found, but PAYO could not finish recording it. Recovery run: ${input.runId}.`,
       pending,
       { cause: error },
     );
@@ -497,21 +644,6 @@ export async function executeProofBoundPayroll(
     totals[recipient.token] += netAtomic;
     return totals;
   }, { STRK: 0n, USDC: 0n });
-  input.onStage?.("wallet");
-  let transactionHash: string;
-  try {
-    transactionHash = await input.submitPayroll(walletRecipients, sealed.invokeAction);
-  } catch (error) {
-    try {
-      await retryDurableWrite(() => input.client.transitionPayrollRun({ runId, state: "cancelled" }));
-    } catch (cancellationError) {
-      throw new Error(
-        `The wallet did not submit payroll, and PAYO could not cancel run ${runId}. Refresh before retrying.`,
-        { cause: cancellationError },
-      );
-    }
-    throw error;
-  }
   const tokenTotalsCommitment = commitTokenTotals({
     organizationId: input.organizationId,
     runId,
@@ -530,9 +662,7 @@ export async function executeProofBoundPayroll(
     idempotencyKey,
     tokenTotals: { STRK: tokenTotals.STRK.toString(), USDC: tokenTotals.USDC.toString() },
     tokenTotalsCommitment,
-    transactionHash,
-    state: "submitted",
-    submittedAt: settlementTimestamp,
+    state: "approval_pending",
     noteEvidenceState: "unavailable",
   });
   const settlementEnvelope = encryptVaultRecord(
@@ -546,8 +676,8 @@ export async function executeProofBoundPayroll(
     },
     [input.principal],
   );
-  const pendingSubmission: PendingPayrollSubmission = {
-    version: 2,
+  const pendingApproval: PendingPayrollSubmission = {
+    version: 3,
     organizationId: input.organizationId,
     runId,
     proofBundleId,
@@ -557,10 +687,13 @@ export async function executeProofBoundPayroll(
     tokenTotalsCommitment,
     settlementEnvelope,
     proofShards: [proof.shards[0].proofCalldata, proof.shards[1].proofCalldata],
-    transactionHash,
     createdAt: new Date().toISOString(),
   };
-  input.persistPendingSubmission?.(pendingSubmission);
+
+  // The approval intent and recovery payload must exist before Ready opens.
+  // A Wallet API implementation may submit on-chain yet never resolve its
+  // request promise; persisting after that promise would strand the run at
+  // `proven` with no settlement or safe hash-recovery path.
   input.onStage?.("recording");
   try {
     const settlementResponse = await retryDurableWrite(() => input.client.createSettlementIntent({
@@ -575,7 +708,30 @@ export async function executeProofBoundPayroll(
     if (returnedId(settlementResponse.settlement, "settlement") !== settlementId) {
       throw new Error("PAYO returned a different settlement identifier for this payroll.");
     }
-    input.persistPendingSubmission?.(pendingSubmission);
+    input.persistPendingSubmission?.(pendingApproval);
+  } catch (error) {
+    throw new PayrollSubmissionPersistenceError(
+      `PAYO could not persist the approval intent, so Ready was not opened. Recovery run: ${runId}.`,
+      pendingApproval,
+      { cause: error },
+    );
+  }
+
+  input.onStage?.("wallet");
+  const transactionHash = await input.submitPayroll(walletRecipients, sealed.invokeAction);
+  if (!/^0x[0-9a-fA-F]{1,64}$/.test(transactionHash)) {
+    throw new PayrollSubmissionPersistenceError(
+      `Ready submitted payroll without returning a valid transaction hash. Recovery run: ${runId}.`,
+      pendingApproval,
+    );
+  }
+  const pendingSubmission: PendingPayrollSubmission & { transactionHash: string } = {
+    ...pendingApproval,
+    transactionHash,
+  };
+  input.persistPendingSubmission?.(pendingSubmission);
+  input.onStage?.("recording");
+  try {
     await retryDurableWrite(() => input.client.recordSettlementSubmission(settlementId, transactionHash));
     await retryDurableWrite(() => input.client.enqueueProofVerification({
       settlementId,

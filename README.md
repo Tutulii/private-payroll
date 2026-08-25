@@ -29,10 +29,10 @@ PAYO labels capabilities according to evidence, not intention.
 | Mainnet STRK shielding with a live privacy-fee quote | Working | Ready + STRK20 |
 | Mainnet private STRK batch payroll, up to 50 recipients | Working | Ready + STRK20 |
 | Confirmation tracking and shielded-balance refresh | Working | Starknet receipt |
-| Native USDC private payroll | Wallet confirmed | Live Mainnet shield and cross-account Ready evidence recorded; SettlementMatch remains later work |
+| Native USDC private payroll | Working | Live proof-bound Mainnet payroll, durable finality, recipient Ready observation, and both verifier shards recorded; SettlementMatch remains later work |
 | Encrypted persistent payroll vault | Built and tested locally | XChaCha20-Poly1305/X25519 envelopes, authenticated API, PostgreSQL migration |
 | PayrollIntegrity ZK proof core | Phase 1 complete; verifier deployed | [Green Phase 1 evidence](./docs/phase1-evidence.md): 45 Noir tests, two linked native and browser ZK proofs, reproducible Garaga verifier, and real Cairo verifier → bundle → seal checks; the proof-bound generated verifier is deployed on Mainnet |
-| PAYO payroll-seal contract | Deployed and live-proven for STRK | The five-contract Mainnet topology is binding-verified. A live Ready STRK payroll reached `confirmed`, the seal reached `proven`, and both real verifier shards succeeded; native-USDC-only and mixed PAYO payroll evidence remains pending in [Phase 2 evidence](./docs/phase2-evidence.md) |
+| PAYO payroll-seal contract | Deployed and live-proven for STRK, USDC, and mixed batches | The five-contract Mainnet topology is binding-verified. Ready STRK-only, native-USDC-only, and mixed STRK/USDC payrolls reached durable `confirmed`, seal `proven`, and two-shard `onchain_verified` states in [Phase 2 evidence](./docs/phase2-evidence.md) |
 | Advanced obligation engine | Built and tested locally | Bounded policy DSL, multi-source FX snapshots, schedules, vesting, and offboarding tests |
 | Compliance proof export | Built and tested locally | Balanced journal and verifier-bound ZIP package |
 | MCP policy gateway | Built and tested locally | Signed capabilities and adversarial tests; generic wallet signing is prohibited |
@@ -115,6 +115,14 @@ The roadmap below is the target, not a completion claim. The evidence-backed sta
 - Add bounded autonomy through a structured-intent signing gateway that never signs arbitrary calldata.
 - Use direct Privacy SDK accounts for agent workflows that require local viewing-key control.
 
+### Post-Phase 4 — ZK Proof Inspector
+
+- Add one privacy-safe evidence screen for each payroll; this is an inspector for the existing proof system, not a replacement prover or verifier.
+- Show the full operational path: proof generated, local verification, private settlement finality, shard 0 verification, shard 1 verification, and final `onchain_verified` state.
+- Decode only public evidence: circuit/proof/VK versions and hashes, commitment roots, shortened run nullifier, chain and PAYO contract bindings, validity window, block numbers, timestamps, confirmation depth, gas, and transaction links.
+- Detect and explain missing, mismatched, reordered, rejected, or stalled shards instead of presenting a generic success state.
+- Export an auditor-safe proof receipt while never exposing witnesses, salaries, recipient identities, payout addresses, agreements, or viewing keys.
+
 ### Phase 5 — Mainnet evidence and release
 
 - Record at least three successful Mainnet transactions that touch STRK20 and PAYO contracts.
@@ -191,6 +199,9 @@ npm test
 npm run lint
 npm run build
 npm run verify:status
+npm run verify:payo-strk
+npm run verify:payo-usdc
+npm run verify:payo-mixed
 ```
 
 `npm run verify:completion` is the release gate. It intentionally fails while any roadmap or architecture requirement lacks integrated code, tests, deployment, or Mainnet evidence.

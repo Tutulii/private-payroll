@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq, or, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { hashCanonicalJson } from "@/lib/crypto/digest";
 import { generateUuidV7 } from "@/lib/domain/records";
 import {
@@ -16,11 +16,36 @@ import {
   auditEvents,
   confirmationJobs,
   idempotencyRequests,
+  indexedChainEvents,
   organizations,
   payrollRuns,
+  proofBundles,
   settlements,
   vaultRecords,
 } from "./schema";
+
+const PAYROLL_SEALED_EVENT_SELECTOR = "0x1b9fd7bf429246efa243b5f4b5eb036c1ab31a548ec13cc42f97a03b34f38ea";
+
+function payrollSealedEventMatches(payload: unknown, runNullifier: string): boolean {
+  let high: bigint;
+  let low: bigint;
+  try {
+    const nullifier = BigInt(runNullifier);
+    high = nullifier >> 128n;
+    low = nullifier & ((1n << 128n) - 1n);
+  } catch {
+    return false;
+  }
+  const keys = payload && typeof payload === "object" && "keys" in payload
+    ? (payload as { keys?: unknown }).keys
+    : undefined;
+  if (!Array.isArray(keys) || keys.length < 3) return false;
+  try {
+    return BigInt(String(keys[1])) === high && BigInt(String(keys[2])) === low;
+  } catch {
+    return false;
+  }
+}
 
 const IDEMPOTENCY_LOCK_MS = 60_000;
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -253,6 +278,244 @@ export async function recordSettlementSubmission(input: {
   });
 }
 
+/**
+ * Recovers a wallet submission when Ready executed the atomic STRK20 request
+ * but did not resolve `wallet_strk20InvokeTransaction` with its transaction
+ * hash. Only a canonical PayrollSealed event whose public run-nullifier keys
+ * match the proven run is accepted; salary, token totals, and recipients are
+ * neither indexed nor inspected.
+ */
+export async function recoverApprovalSubmissionsFromSealEvents(input: {
+  chainId: string;
+  sealAddress: string;
+  limit?: number;
+}) {
+  const limit = input.limit ?? 100;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+    throw new Error("Approval recovery limit must be 1–500.");
+  }
+  const database = getDatabase();
+  const candidates = await database
+    .select({
+      settlementId: settlements.id,
+      runId: settlements.runId,
+      organizationId: settlements.organizationId,
+      runNullifier: payrollRuns.runNullifier,
+    })
+    .from(settlements)
+    .innerJoin(payrollRuns, eq(payrollRuns.id, settlements.runId))
+    .where(and(eq(settlements.state, "approval_pending"), isNull(settlements.transactionHash)))
+    .limit(limit);
+  if (candidates.length === 0) return { recovered: 0 };
+
+  let normalizedSeal: string;
+  try {
+    normalizedSeal = `0x${BigInt(input.sealAddress).toString(16)}`;
+  } catch {
+    throw new Error("A valid PAYO seal address is required for approval recovery.");
+  }
+  const events = await database
+    .select({
+      transactionHash: indexedChainEvents.transactionHash,
+      blockNumber: indexedChainEvents.blockNumber,
+      payload: indexedChainEvents.payload,
+    })
+    .from(indexedChainEvents)
+    .where(and(
+      eq(indexedChainEvents.chainId, input.chainId),
+      eq(indexedChainEvents.contractAddress, normalizedSeal),
+      eq(indexedChainEvents.eventName, PAYROLL_SEALED_EVENT_SELECTOR),
+      eq(indexedChainEvents.canonical, true),
+    ))
+    .orderBy(desc(indexedChainEvents.blockNumber))
+    .limit(1_000);
+
+  let recovered = 0;
+  for (const candidate of candidates) {
+    if (!candidate.runNullifier) continue;
+    const event = events.find(({ payload }) => payrollSealedEventMatches(payload, candidate.runNullifier!));
+    if (!event) continue;
+
+    const now = new Date();
+    const didRecover = await database.transaction(async (transaction) => {
+      const [current] = await transaction
+        .select({ state: settlements.state, transactionHash: settlements.transactionHash })
+        .from(settlements)
+        .where(eq(settlements.id, candidate.settlementId))
+        .limit(1)
+        .for("update");
+      if (!current || current.state !== "approval_pending" || current.transactionHash) return false;
+      const [settlement] = await transaction
+        .update(settlements)
+        .set({
+          state: "submitted",
+          transactionHash: event.transactionHash,
+          submittedAt: now,
+          updatedAt: now,
+        })
+        .where(and(
+          eq(settlements.id, candidate.settlementId),
+          eq(settlements.state, "approval_pending"),
+          isNull(settlements.transactionHash),
+        ))
+        .returning({ id: settlements.id });
+      if (!settlement) return false;
+      const [run] = await transaction
+        .update(payrollRuns)
+        .set({
+          state: "submitted",
+          transactionHash: event.transactionHash,
+          updatedAt: now,
+          version: sql`${payrollRuns.version} + 1`,
+        })
+        .where(and(eq(payrollRuns.id, candidate.runId), eq(payrollRuns.state, "approval_pending")))
+        .returning({ id: payrollRuns.id });
+      if (!run) throw new Error("Payroll state changed during seal-event recovery.");
+      await transaction
+        .insert(confirmationJobs)
+        .values({ id: generateUuidV7(), settlementId: candidate.settlementId })
+        .onConflictDoNothing();
+      await transaction.insert(auditEvents).values({
+        id: generateUuidV7(),
+        organizationId: candidate.organizationId,
+        actorId: "system:seal-indexer",
+        action: "settlement.submission_recovered",
+        subjectId: candidate.settlementId,
+        metadata: {
+          transactionHash: event.transactionHash,
+          blockNumber: event.blockNumber.toString(),
+          evidence: "canonical_payroll_sealed_event",
+        },
+      });
+      return true;
+    });
+    if (didRecover) recovered += 1;
+  }
+  return { recovered };
+}
+
+export async function getSealedRunRecoveryEvidence(input: {
+  runId: string;
+  chainId: string;
+  sealAddress: string;
+  principal: AuthenticatedPrincipal;
+}) {
+  const database = getDatabase();
+  const [run] = await database
+    .select({
+      id: payrollRuns.id,
+      organizationId: payrollRuns.organizationId,
+      state: payrollRuns.state,
+      transactionHash: payrollRuns.transactionHash,
+      runNullifier: payrollRuns.runNullifier,
+    })
+    .from(payrollRuns)
+    .where(eq(payrollRuns.id, input.runId))
+    .limit(1);
+  if (!run) throw new ApiError(404, "Payroll run not found.", "RUN_NOT_FOUND");
+  await requireOrganizationRole(run.organizationId, input.principal, ["admin", "operator"]);
+  if (run.state !== "proven" || run.transactionHash || !run.runNullifier) {
+    throw new ApiError(409, "Only a proven run with no recorded hash can use seal recovery.", "RUN_NOT_RECOVERABLE");
+  }
+  let normalizedSeal: string;
+  try {
+    normalizedSeal = `0x${BigInt(input.sealAddress).toString(16)}`;
+  } catch {
+    throw new Error("A valid PAYO seal address is required for run recovery.");
+  }
+  const [bundle] = await database
+    .select({ id: proofBundles.id })
+    .from(proofBundles)
+    .where(and(
+      eq(proofBundles.runId, run.id),
+      eq(proofBundles.organizationId, run.organizationId),
+    ))
+    .orderBy(desc(proofBundles.createdAt))
+    .limit(1);
+  if (!bundle) throw new ApiError(409, "The encrypted proof bundle is missing.", "PROOF_BUNDLE_MISSING");
+  const events = await database
+    .select({
+      transactionHash: indexedChainEvents.transactionHash,
+      blockNumber: indexedChainEvents.blockNumber,
+      payload: indexedChainEvents.payload,
+    })
+    .from(indexedChainEvents)
+    .where(and(
+      eq(indexedChainEvents.chainId, input.chainId),
+      eq(indexedChainEvents.contractAddress, normalizedSeal),
+      eq(indexedChainEvents.eventName, PAYROLL_SEALED_EVENT_SELECTOR),
+      eq(indexedChainEvents.canonical, true),
+    ))
+    .orderBy(desc(indexedChainEvents.blockNumber))
+    .limit(1_000);
+  const evidence = events.find(({ payload }) => payrollSealedEventMatches(payload, run.runNullifier!));
+  if (!evidence) {
+    throw new ApiError(404, "No canonical PayrollSealed event matches this run.", "SEALED_SUBMISSION_NOT_FOUND");
+  }
+  return {
+    runId: run.id,
+    proofBundleId: bundle.id,
+    transactionHash: evidence.transactionHash,
+    blockNumber: evidence.blockNumber.toString(),
+  };
+}
+
+export async function cancelSettlementApproval(input: {
+  settlementId: string;
+  principal: AuthenticatedPrincipal;
+}) {
+  const database = getDatabase();
+  const now = new Date();
+  return database.transaction(async (transaction) => {
+    const [existing] = await transaction
+      .select()
+      .from(settlements)
+      .where(eq(settlements.id, input.settlementId))
+      .limit(1)
+      .for("update");
+    if (!existing) throw new ApiError(404, "Settlement not found.", "SETTLEMENT_NOT_FOUND");
+    await requireOrganizationRoleWith(transaction, existing.organizationId, input.principal, ["admin", "operator"]);
+    if (existing.transactionHash || existing.state !== "approval_pending") {
+      throw new ApiError(
+        409,
+        "Only an approval with no recorded transaction hash can be cancelled.",
+        "SETTLEMENT_CANCELLATION_UNSAFE",
+      );
+    }
+    assertSettlementTransition(existing.state, "failed");
+    const [settlement] = await transaction
+      .update(settlements)
+      .set({
+        state: "failed",
+        lastErrorCode: "WALLET_APPROVAL_CANCELLED",
+        lastErrorMessage: "The operator confirmed that Ready did not submit a transaction.",
+        updatedAt: now,
+      })
+      .where(and(
+        eq(settlements.id, input.settlementId),
+        eq(settlements.state, "approval_pending"),
+        isNull(settlements.transactionHash),
+      ))
+      .returning();
+    if (!settlement) throw new ApiError(409, "Settlement state changed; refresh before cancelling.", "SETTLEMENT_STATE_CONFLICT");
+    const [run] = await transaction
+      .update(payrollRuns)
+      .set({ state: "cancelled", updatedAt: now, version: sql`${payrollRuns.version} + 1` })
+      .where(and(eq(payrollRuns.id, existing.runId), eq(payrollRuns.state, "approval_pending")))
+      .returning({ id: payrollRuns.id });
+    if (!run) throw new ApiError(409, "Payroll state changed during cancellation.", "RUN_STATE_CONFLICT");
+    await transaction.insert(auditEvents).values({
+      id: generateUuidV7(),
+      organizationId: existing.organizationId,
+      actorId: input.principal.principalId,
+      action: "settlement.approval_cancelled",
+      subjectId: existing.id,
+      metadata: { runId: existing.runId },
+    });
+    return settlement;
+  });
+}
+
 export async function getSettlement(settlementId: string, principal: AuthenticatedPrincipal) {
   const [settlement] = await getDatabase().select().from(settlements).where(eq(settlements.id, settlementId)).limit(1);
   if (!settlement) throw new ApiError(404, "Settlement not found.", "SETTLEMENT_NOT_FOUND");
@@ -411,7 +674,15 @@ export async function applySettlementObservation(
     }
 
     const settlementState = observation.state;
-    if (settlementState !== current.state) {
+    // A worker may first observe a transaction only after it already has the
+    // final confirmation depth. Preserve the strict state machine while
+    // accepting that valid monotonic fast-forward instead of requiring the RPC
+    // to have exposed an earlier, shallower receipt to this worker.
+    const skippedConfirmedState = current.state === "submitted" && settlementState === "finalized";
+    if (skippedConfirmedState) {
+      assertSettlementTransition("submitted", "confirmed");
+      assertSettlementTransition("confirmed", "finalized");
+    } else if (settlementState !== current.state) {
       assertSettlementTransition(current.state, settlementState);
     }
     await transaction
@@ -466,18 +737,32 @@ export async function applySettlementObservation(
         updatedAt: now,
       })
       .where(eq(confirmationJobs.id, job.id));
-    await transaction.insert(auditEvents).values({
-      id: generateUuidV7(),
-      organizationId: current.organizationId,
-      actorId: "system:confirmation-worker",
-      action: `settlement.${settlementState}`,
-      subjectId: current.id,
-      metadata: {
-        transactionHash: current.transactionHash,
-        confirmationDepth: observation.confirmationDepth,
-        errorCode: observation.errorCode ?? null,
+    await transaction.insert(auditEvents).values([
+      ...(skippedConfirmedState ? [{
+        id: generateUuidV7(),
+        organizationId: current.organizationId,
+        actorId: "system:confirmation-worker",
+        action: "settlement.confirmed",
+        subjectId: current.id,
+        metadata: {
+          transactionHash: current.transactionHash,
+          confirmationDepth: observation.confirmationDepth,
+          evidence: "finalized_receipt_fast_forward",
+        },
+      }] : []),
+      {
+        id: generateUuidV7(),
+        organizationId: current.organizationId,
+        actorId: "system:confirmation-worker",
+        action: `settlement.${settlementState}`,
+        subjectId: current.id,
+        metadata: {
+          transactionHash: current.transactionHash,
+          confirmationDepth: observation.confirmationDepth,
+          errorCode: observation.errorCode ?? null,
+        },
       },
-    });
+    ]);
     return { state: settlementState };
   });
 }

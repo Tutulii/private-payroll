@@ -1,0 +1,80 @@
+{
+  "evidenceVersion": "payo-proof-bound-payroll-mainnet-v1",
+  "network": "SN_MAIN",
+  "wallet": {
+    "name": "Ready",
+    "walletApiVersion": "0.10.3"
+  },
+  "batch": {
+    "kind": "mixed-strk-usdc",
+    "tokens": [
+      {
+        "symbol": "STRK",
+        "address": "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
+        "decimals": 18
+      },
+      {
+        "symbol": "USDC",
+        "address": "0x033068f6539f8e6e6b131e6b2b814e6c34a5224bc66947c47dab9dfee93b35fb",
+        "decimals": 6
+      }
+    ]
+  },
+  "contracts": {
+    "pool": "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+    "generatedVerifier": "0x475cc47caf5d8b5b3a719915ceef5ae3e959f8754f2c0faa634d2e8c73d06db",
+    "bundleVerifier": "0x2755c2260220f44c319249402887ca50c8b968ab43364e90de54f5afd66759",
+    "payrollSeal": "0x4bde3263ff117f245f9ebea20670b363550951f61cf54f236c449f70181c01f"
+  },
+  "payroll": {
+    "transactionHash": "0x7e41fd161a1d034b4d58348b3ee6eb7a4451cd29ce9e05f556cee868e3e510c",
+    "blockNumber": 13845714,
+    "executionStatus": "SUCCEEDED",
+    "finalityStatus": "ACCEPTED_ON_L1"
+  },
+  "run": {
+    "id": "01a03931-6dcf-71ce-b11b-a3ee0e854ade",
+    "nullifierHigh": "0x440852aa0505a8751d612686ef0c5c46",
+    "nullifierLow": "0x9b7f65612f81bec70438fe59ab97f322",
+    "durableState": "confirmed",
+    "proofVerificationState": "onchain_verified",
+    "proofJobState": "complete",
+    "onchainStatus": 2,
+    "onchainStatusLabel": "proven",
+    "shardVerified": [true, true]
+  },
+  "verifierShards": [
+    {
+      "index": 0,
+      "transactionHash": "0x674f62dc7490f97e4609e7d103a5824616ea5bcd7e28a91028429f4dae401ff",
+      "blockNumber": 13845729,
+      "executionStatus": "SUCCEEDED",
+      "finalityStatus": "ACCEPTED_ON_L1"
+    },
+    {
+      "index": 1,
+      "transactionHash": "0x557919c7cb3ce93fbdcd0918cf91d96dd02c4a2f49b63baa26d18e9fc0d5b54",
+      "blockNumber": 13845739,
+      "executionStatus": "SUCCEEDED",
+      "finalityStatus": "ACCEPTED_ON_L1"
+    }
+  ],
+  "privateFlowAttestation": {
+    "source": "authorized_ready_operator_and_recipient_wallet_observation",
+    "assets": ["STRK", "USDC"],
+    "recipientRelationship": "registered_recipient_wallet",
+    "recipientBalanceObservation": "confirmed",
+    "publicSettlementProof": "unavailable_by_design"
+  },
+  "privacy": {
+    "recipient": "withheld",
+    "salaryAmount": "withheld",
+    "reason": "STRK20 hides private recipients and amounts; repository evidence records only public proof and settlement state."
+  },
+  "topologyVerification": {
+    "passed": true,
+    "blockNumber": 13853114,
+    "verifiedAt": "2026-08-25T17:26:22.790Z"
+  },
+  "observedAt": "2026-08-25T13:58:28.540Z"
+}

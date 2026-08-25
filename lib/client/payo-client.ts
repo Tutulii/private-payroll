@@ -266,6 +266,17 @@ export class PayoClient {
     );
   }
 
+  async getSealedPayrollRecovery(runId: string) {
+    return this.request<{
+      recovery: {
+        runId: string;
+        proofBundleId: string;
+        transactionHash: string;
+        blockNumber: string;
+      };
+    }>(`/api/v1/runs/${encodeURIComponent(runId)}/seal-recovery`);
+  }
+
   async getFxSnapshots(tokens: readonly ("STRK" | "USDC")[]) {
     return this.request<{ blockNumber: number; snapshots: FxSnapshot[] }>(
       `/api/v1/fx-snapshots?tokens=${encodeURIComponent([...new Set(tokens)].join(","))}`,
@@ -571,6 +582,13 @@ export class PayoClient {
   async getSettlement(settlementId: string) {
     return this.request<{ settlement: Record<string, unknown> }>(
       `/api/v1/settlements/${encodeURIComponent(settlementId)}`,
+    );
+  }
+
+  async cancelSettlementApproval(settlementId: string) {
+    return this.request<{ settlement: Record<string, unknown> }>(
+      `/api/v1/settlements/${encodeURIComponent(settlementId)}`,
+      { method: "DELETE" },
     );
   }
 

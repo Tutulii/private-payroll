@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildFxSnapshot } from "@/lib/domain/fx";
-import { generateVaultPrincipal, decryptVaultRecord } from "@/lib/crypto/vault";
+import { decryptVaultRecord, encryptVaultRecord, generateVaultPrincipal } from "@/lib/crypto/vault";
 import { hashProofCalldata } from "@/lib/proof/starknet-calldata";
 import { buildPayrollIntegrityInputsFromSerialized } from "@/lib/proof/input-builder";
 import {
@@ -14,6 +14,7 @@ import { prepareEncryptedPayee } from "./payee-directory";
 import {
   executeProofBoundPayroll,
   preparePayrollObligationRoot,
+  recoverSealedProvenPayroll,
   resumePendingPayrollSubmission,
 } from "./payroll-execution";
 
@@ -78,6 +79,8 @@ function client(ready = true) {
       Promise.resolve({ settlement: { id } })),
     recordSettlementSubmission: vi.fn().mockResolvedValue({ settlement: {} }),
     enqueueProofVerification: vi.fn().mockResolvedValue({ proofVerification: {} }),
+    getSealedPayrollRecovery: vi.fn(),
+    getEncryptedRecord: vi.fn(),
   };
 }
 
@@ -195,7 +198,8 @@ describe("proof-bound payroll browser orchestration", () => {
     const createdSettlementId = mockClient.createSettlementIntent.mock.calls[0][0].id;
     expect(mockClient.recordSettlementSubmission).toHaveBeenCalledWith(createdSettlementId, "0xfeed");
     expect(mockClient.enqueueProofVerification.mock.calls[0][0].shards).toHaveLength(2);
-    expect(input.persistPendingSubmission).toHaveBeenNthCalledWith(1, expect.objectContaining({ transactionHash: "0xfeed" }));
+    expect(input.persistPendingSubmission).toHaveBeenNthCalledWith(1, expect.not.objectContaining({ transactionHash: expect.anything() }));
+    expect(input.persistPendingSubmission).toHaveBeenNthCalledWith(2, expect.objectContaining({ transactionHash: "0xfeed" }));
     expect(input.persistPendingSubmission).toHaveBeenLastCalledWith(null);
     expect(result).toMatchObject({ settlementId: createdSettlementId, transactionHash: "0xfeed", verificationQueued: true });
   });
@@ -265,14 +269,17 @@ describe("proof-bound payroll browser orchestration", () => {
     });
   });
 
-  it("does not create a settlement when the wallet rejects approval", async () => {
+  it("persists a recoverable approval before the wallet and never guesses that a rejection is unsubmitted", async () => {
     const mockClient = client();
     const input = await executionInput(mockClient);
     input.submitPayroll.mockRejectedValue(new Error("User rejected"));
     await expect(executeProofBoundPayroll(input)).rejects.toThrow("User rejected");
-    expect(mockClient.createSettlementIntent).not.toHaveBeenCalled();
-    expect(input.persistPendingSubmission).not.toHaveBeenCalled();
-    expect(mockClient.transitionPayrollRun).toHaveBeenLastCalledWith(expect.objectContaining({ state: "cancelled" }));
+    expect(mockClient.createSettlementIntent).toHaveBeenCalledTimes(1);
+    expect(input.persistPendingSubmission).toHaveBeenCalledWith(
+      expect.not.objectContaining({ transactionHash: expect.anything() }),
+    );
+    expect(mockClient.recordSettlementSubmission).not.toHaveBeenCalled();
+    expect(mockClient.transitionPayrollRun).not.toHaveBeenCalledWith(expect.objectContaining({ state: "cancelled" }));
   });
 
   it("uses an explicit next revision for a retried cancelled cycle", async () => {
@@ -289,7 +296,7 @@ describe("proof-bound payroll browser orchestration", () => {
     const result = await executeProofBoundPayroll(input);
     expect(result.settlementId).toMatch(/^[0-9a-f-]{36}$/);
 
-    const pending = input.persistPendingSubmission.mock.calls.find(([value]) => value?.settlementId)?.[0];
+    const pending = input.persistPendingSubmission.mock.calls.find(([value]) => value?.transactionHash)?.[0];
     expect(pending).toBeTruthy();
     const persistence = vi.fn();
     await expect(resumePendingPayrollSubmission({
@@ -298,5 +305,59 @@ describe("proof-bound payroll browser orchestration", () => {
       persistPendingSubmission: persistence,
     })).resolves.toMatchObject({ settlementId: result.settlementId, verificationQueued: true });
     expect(persistence).toHaveBeenLastCalledWith(null);
+  });
+
+  it("recovers a legacy proven run from canonical seal evidence without opening the wallet", async () => {
+    const mockClient = client();
+    const input = await executionInput(mockClient);
+    const proofBundleId = "0198ddf0-9c00-7000-8000-000000000099";
+    mockClient.getSealedPayrollRecovery.mockResolvedValue({
+      recovery: {
+        runId: "0198ddf0-9c00-7000-8000-000000000088",
+        proofBundleId,
+        transactionHash: "0xfeed",
+        blockNumber: "123",
+      },
+    });
+    mockClient.getEncryptedRecord.mockResolvedValue({
+      record: {
+        envelope: encryptVaultRecord(
+          {
+            shards: [
+              { shardIndex: 0, proofCalldata: ["0x1", "0x2"] },
+              { shardIndex: 1, proofCalldata: ["0x3", "0x4"] },
+            ],
+          },
+          {
+            schemaVersion: 1,
+            organizationId,
+            recordType: "proof-bundle",
+            recordId: proofBundleId,
+            revision: 1,
+          },
+          [principal],
+        ),
+      },
+    });
+    const persistence = vi.fn();
+
+    const result = await recoverSealedProvenPayroll({
+      client: mockClient as unknown as PayoClient,
+      organizationId,
+      runId: "0198ddf0-9c00-7000-8000-000000000088",
+      totals: { STRK: 10n, USDC: 20n },
+      principal,
+      persistPendingSubmission: persistence,
+    });
+
+    expect(input.submitPayroll).not.toHaveBeenCalled();
+    expect(mockClient.createSettlementIntent).toHaveBeenCalledTimes(1);
+    expect(mockClient.recordSettlementSubmission).toHaveBeenCalledWith(result.settlementId, "0xfeed");
+    expect(mockClient.enqueueProofVerification).toHaveBeenCalledWith(expect.objectContaining({
+      proofBundleId,
+      shards: [["0x1", "0x2"], ["0x3", "0x4"]],
+    }));
+    expect(persistence).toHaveBeenLastCalledWith(null);
+    expect(result).toMatchObject({ transactionHash: "0xfeed", verificationQueued: true });
   });
 });

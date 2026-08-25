@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { uuidV7Schema } from "@/lib/domain/records";
 import {
+  cancelSettlementApproval,
   getSettlement,
   recordSettlementSubmission,
 } from "@/lib/persistence/settlement-repository";
@@ -32,6 +33,21 @@ export async function PATCH(request: Request, context: SettlementContext) {
       settlement: await recordSettlementSubmission({
         settlementId: uuidV7Schema.parse(id),
         transactionHash,
+        principal,
+      }),
+    });
+  } catch (error) {
+    return apiFailure(error);
+  }
+}
+
+export async function DELETE(request: Request, context: SettlementContext) {
+  try {
+    const principal = await requirePrincipal(request);
+    const { id } = await context.params;
+    return Response.json({
+      settlement: await cancelSettlementApproval({
+        settlementId: uuidV7Schema.parse(id),
         principal,
       }),
     });
