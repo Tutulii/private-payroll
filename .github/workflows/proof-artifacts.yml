@@ -240,6 +240,13 @@ jobs:
 
       - name: Run application checks
         run: |
+          # The Cairo and Devnet stages above intentionally replace these files
+          # with this run's randomized UltraHonk proofs. Restore the committed
+          # known vectors before running application tests that assert their
+          # fixed Cairo-compatible Poseidon hashes.
+          git restore --source=HEAD -- \
+            contracts/integrity_verifier/tests/proof_calldata-shard-0.txt \
+            contracts/integrity_verifier/tests/proof_calldata-shard-1.txt
           npm run typecheck
           npm test
 
