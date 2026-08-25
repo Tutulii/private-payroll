@@ -660,42 +660,58 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     async (hash: string, pending: PrivateTransaction, requestToken: symbol) => {
       try {
         await mainnetProvider.waitForTransaction(hash, { retries: 400, retryInterval: 3000 });
-        let balanceRefreshed = false;
-        let balanceRefreshError = "";
-        let refreshedBalances: Record<PayrollTokenSymbol, bigint> | null = null;
-        if (walletAccount) {
-          try {
-            refreshedBalances = await refreshBalanceForAccount(walletAccount);
-            balanceRefreshed = true;
-          } catch (refreshError) {
-            balanceRefreshError = describeError(refreshError);
-          }
-        }
-        const confirmed = { ...pending };
-        if (
-          pending.kind === "shield"
-          && pending.token
-          && pending.grossAmount !== undefined
-          && pending.shieldedBalanceBefore !== undefined
-          && refreshedBalances
-        ) {
-          const after = refreshedBalances[pending.token];
-          const actualNet = after >= pending.shieldedBalanceBefore
-            ? after - pending.shieldedBalanceBefore
-            : 0n;
-          if (actualNet <= pending.grossAmount) {
-            confirmed.netAmount = actualNet;
-            confirmed.walletFee = pending.grossAmount - actualNet;
-            confirmed.feeQuoteExact = true;
-          }
-        }
+        // Chain finality is authoritative. Publish it before asking Ready for a
+        // refreshed private balance: some Wallet API versions leave that
+        // follow-up request unresolved even though the transaction succeeded.
         setTransaction({
-          ...confirmed,
+          ...pending,
           stage: "confirmed",
           hash,
-          balanceRefreshed,
-          balanceRefreshError: balanceRefreshError || undefined,
+          balanceRefreshed: false,
         });
+        if (privateActionLockRef.current === requestToken) {
+          privateActionLockRef.current = null;
+        }
+        if (walletAccount) {
+          try {
+            const refreshedBalances = await refreshBalanceForAccount(walletAccount);
+            const confirmed = { ...pending };
+            if (
+              pending.kind === "shield"
+              && pending.token
+              && pending.grossAmount !== undefined
+              && pending.shieldedBalanceBefore !== undefined
+            ) {
+              const after = refreshedBalances[pending.token];
+              const actualNet = after >= pending.shieldedBalanceBefore
+                ? after - pending.shieldedBalanceBefore
+                : 0n;
+              if (actualNet <= pending.grossAmount) {
+                confirmed.netAmount = actualNet;
+                confirmed.walletFee = pending.grossAmount - actualNet;
+                confirmed.feeQuoteExact = true;
+              }
+            }
+            setTransaction((current) => current?.hash === hash
+              ? {
+                  ...current,
+                  ...confirmed,
+                  stage: "confirmed",
+                  hash,
+                  balanceRefreshed: true,
+                  balanceRefreshError: undefined,
+                }
+              : current);
+          } catch (refreshError) {
+            setTransaction((current) => current?.hash === hash
+              ? {
+                  ...current,
+                  balanceRefreshed: false,
+                  balanceRefreshError: describeError(refreshError),
+                }
+              : current);
+          }
+        }
       } catch (confirmationError) {
         setTransaction({
           ...pending,
@@ -951,25 +967,26 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     // second request.
     privateActionLockRef.current = null;
     setError("");
-    let balanceRefreshed = false;
-    let balanceRefreshError = "";
-    if (walletAccount) {
-      try {
-        await refreshBalanceForAccount(walletAccount);
-        balanceRefreshed = true;
-      } catch (refreshError) {
-        balanceRefreshError = describeError(refreshError);
-      }
-    }
     setTransaction((current) => ({
       ...(current?.kind === "payroll"
         ? current
         : { kind: "payroll" as const, label: "Private payroll recovered on-chain" }),
       stage: "confirmed",
       hash: transactionHash,
-      balanceRefreshed,
-      balanceRefreshError: balanceRefreshError || undefined,
+      balanceRefreshed: false,
+      balanceRefreshError: undefined,
     }));
+    if (walletAccount) {
+      void refreshBalanceForAccount(walletAccount).then(() => {
+        setTransaction((current) => current?.kind === "payroll" && current.hash === transactionHash
+          ? { ...current, balanceRefreshed: true, balanceRefreshError: undefined }
+          : current);
+      }).catch((refreshError) => {
+        setTransaction((current) => current?.kind === "payroll" && current.hash === transactionHash
+          ? { ...current, balanceRefreshed: false, balanceRefreshError: describeError(refreshError) }
+          : current);
+      });
+    }
   }, [refreshBalanceForAccount, walletAccount]);
 
   const scheduleObligationRoot = useCallback(async (
