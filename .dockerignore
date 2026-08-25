@@ -1,0 +1,13 @@
+node_modules/
+.next/
+out/
+.env*
+!.env.example
+*.log
+*.tsbuildinfo
+target/
+.snfoundry_cache/
+.DS_Store
+circuits/payroll_integrity/Prover.toml
+circuits/payroll_integrity/Prover-shard-1.toml
+public/fixtures/encrypted-payroll-witness-v1.json
