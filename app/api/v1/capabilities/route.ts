@@ -1,5 +1,7 @@
 import { z } from "zod";
+import { encryptedVaultRecordSchema } from "@/lib/crypto/vault";
 import { signedCapabilitySchema, verifySignedCapability } from "@/lib/domain/capability";
+import { uuidV7Schema } from "@/lib/domain/records";
 import {
   getAgentCapability,
   registerAgentCapability,
@@ -8,7 +10,18 @@ import {
 import { ApiError, requirePrincipal } from "@/lib/server/auth";
 import { apiFailure, readJson } from "@/lib/server/http";
 
-const revokeSchema = z.object({ capabilityId: z.string().min(8).max(128) }).strict();
+const encryptedCapabilityCreateSchema = z.object({
+  signedCapability: signedCapabilitySchema,
+  recordId: uuidV7Schema,
+  revision: z.literal(1),
+  envelope: encryptedVaultRecordSchema,
+}).strict();
+const revokeSchema = z.object({
+  capabilityId: uuidV7Schema,
+  organizationId: uuidV7Schema,
+  revision: z.number().int().min(2),
+  envelope: encryptedVaultRecordSchema,
+}).strict();
 
 export async function GET(request: Request) {
   try {
@@ -24,9 +37,9 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const principal = await requirePrincipal(request);
-    const parsed = signedCapabilitySchema.parse(await readJson(request));
-    const signedCapability = verifySignedCapability(parsed);
-    const capability = await registerAgentCapability(signedCapability, principal);
+    const parsed = encryptedCapabilityCreateSchema.parse(await readJson(request));
+    const signedCapability = verifySignedCapability(parsed.signedCapability);
+    const capability = await registerAgentCapability({ ...parsed, signedCapability }, principal);
     return Response.json({ capability }, { status: 201 });
   } catch (error) {
     return apiFailure(error);
@@ -36,8 +49,8 @@ export async function POST(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const principal = await requirePrincipal(request);
-    const { capabilityId } = revokeSchema.parse(await readJson(request));
-    return Response.json({ capability: await revokeAgentCapability(capabilityId, principal) });
+    const input = revokeSchema.parse(await readJson(request));
+    return Response.json({ capability: await revokeAgentCapability(input, principal) });
   } catch (error) {
     return apiFailure(error);
   }

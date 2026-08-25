@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { generateUuidV7, uuidV7Schema, vaultRecoveryPackageSchema } from "./records";
+import {
+  generateUuidV7,
+  remediationRecordSchema,
+  uuidV7Schema,
+  vaultRecoveryPackageSchema,
+  wageClaimRecordSchema,
+} from "./records";
 
 describe("canonical record schemas", () => {
   it("generates deterministic RFC 9562 UUIDv7 identifiers", () => {
@@ -26,5 +32,39 @@ describe("canonical record schemas", () => {
       ciphertext: "Y2lwaGVydGV4dC1mb3ItcGF5by1yZWNvdmVyeQ==",
       createdAt: "2026-08-24T00:00:00.000Z",
     })).toThrow();
+  });
+
+  it("does not allow a wage claim to leave draft without proof evidence", () => {
+    const identifier = generateUuidV7(1_775_000_000_000, new Uint8Array(10));
+    expect(() => wageClaimRecordSchema.parse({
+      schemaVersion: 1,
+      id: identifier,
+      organizationId: identifier,
+      revision: 1,
+      createdAt: "2026-08-24T00:00:00.000Z",
+      updatedAt: "2026-08-24T00:00:00.000Z",
+      agreementId: identifier,
+      runId: identifier,
+      claimNullifier: `0x${"01".repeat(32)}`,
+      claimSalt: `0x${"02".repeat(32)}`,
+      claimKind: "missing_obligation",
+      state: "submitted",
+    })).toThrow(/proof bundle/i);
+  });
+
+  it("does not allow remediation submission without settlement evidence", () => {
+    const identifier = generateUuidV7(1_775_000_000_000, new Uint8Array(10));
+    expect(() => remediationRecordSchema.parse({
+      schemaVersion: 1,
+      id: identifier,
+      organizationId: identifier,
+      revision: 1,
+      createdAt: "2026-08-24T00:00:00.000Z",
+      updatedAt: "2026-08-24T00:00:00.000Z",
+      claimId: identifier,
+      remediationNullifier: `0x${"03".repeat(32)}`,
+      remediationSalt: `0x${"04".repeat(32)}`,
+      state: "submitted",
+    })).toThrow(/settlement/i);
   });
 });

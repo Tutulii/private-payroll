@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { hashTextCommitment } from "@/lib/crypto/commitments";
 
 export const payrollTokenSchema = z.enum(["STRK", "USDC"]);
 export type PayrollTokenSymbol = z.infer<typeof payrollTokenSchema>;
@@ -42,7 +43,7 @@ export const PAYROLL_STATE_TRANSITIONS: Readonly<
 > = {
   draft: ["calculated", "cancelled"],
   calculated: ["proven", "draft"],
-  proven: ["approval_pending", "calculated"],
+  proven: ["approval_pending", "calculated", "cancelled"],
   approval_pending: ["submitted", "cancelled"],
   submitted: ["confirmed", "failed"],
   confirmed: ["reconciled", "disputed"],
@@ -78,6 +79,17 @@ export type CalculatedPayrollLine = PrivatePayrollLine & {
 
 function sumAtomic(values: readonly string[]): bigint {
   return values.reduce((total, value) => total + BigInt(atomicAmountSchema.parse(value)), 0n);
+}
+
+export function comparePayrollAgreementIds(left: string, right: string): number {
+  const leftCommitment = hashTextCommitment("PAYO_AGREEMENT_ID_V1", left);
+  const rightCommitment = hashTextCommitment("PAYO_AGREEMENT_ID_V1", right);
+  for (let index = 0; index < leftCommitment.length; index += 1) {
+    if (leftCommitment[index] !== rightCommitment[index]) {
+      return leftCommitment[index] - rightCommitment[index];
+    }
+  }
+  return 0;
 }
 
 export function calculatePayrollLine(input: PrivatePayrollLine): CalculatedPayrollLine {
@@ -123,7 +135,7 @@ export function calculatePayrollManifest(lines: readonly PrivatePayrollLine[]) {
   }
 
   return {
-    lines: calculated.sort((a, b) => a.agreementId.localeCompare(b.agreementId)),
+    lines: calculated.sort((a, b) => comparePayrollAgreementIds(a.agreementId, b.agreementId)),
     totals: {
       STRK: totals.STRK.toString(),
       USDC: totals.USDC.toString(),
@@ -139,8 +151,16 @@ export const encryptedRunCreateSchema = z.object({
   dueAt: z.string().datetime(),
   ciphertext: z.string().min(24),
   envelope: z.record(z.string(), z.unknown()),
-  manifestRoot: z.string().regex(/^0x[0-9a-fA-F]{64}$/).optional(),
-  runNullifier: z.string().regex(/^0x[0-9a-fA-F]{64}$/).optional(),
+  agreementRoot: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+  manifestRoot: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+  policyRoot: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+  fxRoot: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+  runNullifier: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+  lineRecords: z.array(z.object({
+    id: z.string().min(8).max(128),
+    revision: z.literal(1),
+    envelope: z.record(z.string(), z.unknown()),
+  }).strict()).min(1).max(50),
 }).strict();
 export type EncryptedRunCreate = z.infer<typeof encryptedRunCreateSchema>;
 

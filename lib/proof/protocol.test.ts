@@ -2,10 +2,15 @@ import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
+  classifyProofFailure,
   mapPayrollPublicInputs,
   PAYROLL_INTEGRITY_CIRCUIT_SHA256,
+  PAYROLL_INTEGRITY_VERIFICATION_KEY_SHA256,
+  PAYROLL_MOBILE_WASM_MAXIMUM_PAGES,
+  payrollProverBackendOptions,
   safeProofFailure,
 } from "./protocol";
+import { decodeVerificationKeyHex } from "./starknet-calldata";
 
 describe("proof-worker privacy protocol", () => {
   it("returns only the 16 deployment-bound inputs plus the shard index", () => {
@@ -32,10 +37,43 @@ describe("proof-worker privacy protocol", () => {
     expect(PAYROLL_INTEGRITY_CIRCUIT_SHA256).toBe(digest);
   });
 
+  it("pins the proof-bound verification key served to the browser worker", () => {
+    const document = readFileSync(
+      new URL("../../public/circuits/payroll_integrity-v1.vk.hex", import.meta.url),
+      "utf8",
+    );
+    const verificationKey = decodeVerificationKeyHex(document);
+    const digest = `0x${createHash("sha256").update(verificationKey).digest("hex")}`;
+    expect(verificationKey).toHaveLength(1_888);
+    expect(PAYROLL_INTEGRITY_VERIFICATION_KEY_SHA256).toBe(digest);
+  });
+
   it("never reflects prover errors or witness values to the main thread", () => {
     const privateSalary = "salary=987654321";
     const failure = safeProofFailure("request-1", "WITNESS_INVALID");
     expect(JSON.stringify(failure)).not.toContain(privateSalary);
     expect(failure.message).toBe("The encrypted payroll witness did not satisfy PayrollIntegrity.");
+  });
+
+  it("uses a measured one-thread WASM ceiling on mobile without weakening desktop isolation", () => {
+    expect(payrollProverBackendOptions({
+      userAgent: "Mozilla/5.0 (Linux; Android 16; Mobile)",
+      crossOriginIsolated: false,
+      hardwareConcurrency: 8,
+    })).toEqual({ threads: 1, memory: { maximum: PAYROLL_MOBILE_WASM_MAXIMUM_PAGES } });
+    expect(payrollProverBackendOptions({
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64)",
+      crossOriginIsolated: true,
+      hardwareConcurrency: 16,
+    })).toEqual({ threads: 4 });
+  });
+
+  it("maps memory exhaustion to an actionable error without reflecting backend details", () => {
+    const code = classifyProofFailure(new Error("bad alloc salary=987654321"), "PROVING_FAILED");
+    const failure = safeProofFailure("request-2", code);
+    expect(failure.code).toBe("PROVING_RESOURCE_EXHAUSTED");
+    expect(JSON.stringify(failure)).not.toContain("987654321");
+    expect(classifyProofFailure(new Error("ordinary prover failure"), "PROVING_FAILED"))
+      .toBe("PROVING_FAILED");
   });
 });

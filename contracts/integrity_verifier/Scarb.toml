@@ -19,7 +19,9 @@ payo_contracts = { path = ".." }
 [target-defaults.test]
 build-external-contracts = [
     "payo_contracts::integrity_bundle_verifier::PayoIntegrityBundleVerifier",
+    "payo_contracts::obligation_registry::PayoObligationRootRegistry",
     "payo_contracts::payroll_seal::PayoPayrollSeal",
+    "payo_contracts::policy_registry::PayoPolicyRegistry",
 ]
 
 [[target.starknet-contract]]

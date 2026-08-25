@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { encryptedVaultRecordSchema } from "@/lib/crypto/vault";
-import { agentCapabilitySchema } from "./capability";
+import { vaultRecoveryPackageSchema } from "@/lib/crypto/vault";
+import { signedCapabilitySchema } from "./capability";
 import { employmentAgreementSchema, offboardingPaySchema } from "./obligations";
 import {
   atomicAmountSchema,
@@ -8,6 +8,9 @@ import {
   payrollTokenSchema,
   proofPackageSchema,
 } from "./payroll";
+import { settlementStateSchema } from "./settlement";
+
+export { vaultRecoveryPackageSchema };
 
 export const uuidV7Schema = z
   .string()
@@ -64,9 +67,18 @@ export const organizationRecordSchema = z.object({
 export const principalRecordSchema = recordHeaderSchema.extend({
   kind: z.enum(["admin", "operator", "reviewer", "worker", "agent", "auditor", "signer"]),
   displayName: z.string().min(1).max(160),
-  vaultPublicKey: z.string().min(16),
+  accessState: z.enum(["directory_only", "vault_grantee"]),
+  vaultPrincipalId: z.string().min(1).max(256).optional(),
+  vaultPublicKey: z.string().min(16).optional(),
   status: z.enum(["active", "revoked"]),
-}).strict();
+}).strict().superRefine((principal, context) => {
+  if (principal.accessState === "vault_grantee" && (!principal.vaultPrincipalId || !principal.vaultPublicKey)) {
+    context.addIssue({ code: "custom", path: ["vaultPublicKey"], message: "A vault grantee requires its wrapping identity and public key." });
+  }
+  if (principal.accessState === "directory_only" && (principal.vaultPrincipalId || principal.vaultPublicKey)) {
+    context.addIssue({ code: "custom", path: ["accessState"], message: "A directory-only principal cannot claim vault access." });
+  }
+});
 
 export const payeeRecordSchema = recordHeaderSchema.extend({
   principalId: uuidV7Schema,
@@ -82,6 +94,9 @@ export const payeeRecordSchema = recordHeaderSchema.extend({
 export const payAgreementRecordSchema = recordHeaderSchema.extend({
   payeeId: uuidV7Schema,
   agreement: employmentAgreementSchema,
+  recipientCommitment: commitmentSchema,
+  recipientSalt: commitmentSchema,
+  agreementSalt: commitmentSchema,
   agreementCommitment: commitmentSchema,
   supersedesAgreementId: uuidV7Schema.optional(),
   effectiveFrom: z.string().datetime(),
@@ -127,8 +142,13 @@ export const settlementRecordSchema = recordHeaderSchema.extend({
   runId: uuidV7Schema,
   walletRequestId: z.string().min(1).max(256),
   idempotencyKey: z.string().min(16).max(256),
+  tokenTotals: z.object({
+    STRK: atomicAmountSchema,
+    USDC: atomicAmountSchema,
+  }).strict(),
+  tokenTotalsCommitment: commitmentSchema,
   transactionHash: starknetAddressSchema.optional(),
-  state: z.enum(["approval_pending", "submitted", "confirmed", "reorged", "failed", "reconciled"]),
+  state: settlementStateSchema,
   submittedAt: z.string().datetime().optional(),
   confirmedAt: z.string().datetime().optional(),
   settlementRoot: commitmentSchema.optional(),
@@ -141,6 +161,18 @@ export const receiptRecordSchema = recordHeaderSchema.extend({
   scope: z.enum(["employer", "worker", "auditor", "tax"]),
   granteePrincipalId: uuidV7Schema,
   packageCommitment: commitmentSchema,
+  evidence: z.object({
+    settlementState: settlementStateSchema,
+    transactionHash: starknetAddressSchema,
+    tokenTotals: z.object({
+      STRK: atomicAmountSchema,
+      USDC: atomicAmountSchema,
+    }).strict(),
+    tokenTotalsCommitment: commitmentSchema,
+    confirmationDepth: z.number().int().nonnegative(),
+    blockNumber: atomicAmountSchema.optional(),
+    issuedAt: z.string().datetime(),
+  }).strict(),
   expiresAt: z.string().datetime().optional(),
   revokedAt: z.string().datetime().optional(),
 }).strict();
@@ -167,28 +199,50 @@ export const disclosureGrantRecordSchema = recordHeaderSchema.extend({
 
 export const agentCapabilityRecordSchema = recordHeaderSchema.extend({
   principalId: uuidV7Schema,
-  capability: agentCapabilitySchema,
+  signedCapability: signedCapabilitySchema,
   capabilityHash: commitmentSchema,
-  encryptedEnvelope: encryptedVaultRecordSchema,
   revokedAt: z.string().datetime().optional(),
-}).strict();
+}).strict().superRefine((record, context) => {
+  if (record.signedCapability.capability.id !== record.id) {
+    context.addIssue({ code: "custom", path: ["signedCapability", "capability", "id"], message: "The signed capability must use the encrypted record identifier." });
+  }
+  if (record.signedCapability.capability.organizationId !== record.organizationId) {
+    context.addIssue({ code: "custom", path: ["signedCapability", "capability", "organizationId"], message: "The signed capability belongs to another organization." });
+  }
+  if (record.signedCapability.capability.principalId !== record.principalId) {
+    context.addIssue({ code: "custom", path: ["signedCapability", "capability", "principalId"], message: "The signed capability belongs to another principal." });
+  }
+});
 
 export const wageClaimRecordSchema = recordHeaderSchema.extend({
   agreementId: uuidV7Schema,
   runId: uuidV7Schema,
   claimNullifier: commitmentSchema,
+  claimSalt: commitmentSchema,
   claimKind: z.enum(["missing_obligation", "below_committed_floor", "incomplete_final_pay"]),
-  proofBundleId: uuidV7Schema,
+  proofBundleId: uuidV7Schema.optional(),
   state: z.enum(["draft", "proven", "submitted", "accepted", "remediated", "rejected"]),
-}).strict();
+}).strict().superRefine((claim, context) => {
+  if (claim.state !== "draft" && !claim.proofBundleId) {
+    context.addIssue({ code: "custom", path: ["proofBundleId"], message: "A non-draft claim requires its proof bundle." });
+  }
+});
 
 export const remediationRecordSchema = recordHeaderSchema.extend({
   claimId: uuidV7Schema,
-  settlementId: uuidV7Schema,
-  proofBundleId: uuidV7Schema,
+  settlementId: uuidV7Schema.optional(),
+  proofBundleId: uuidV7Schema.optional(),
   remediationNullifier: commitmentSchema,
+  remediationSalt: commitmentSchema,
   state: z.enum(["draft", "submitted", "confirmed", "proved"]),
-}).strict();
+}).strict().superRefine((remediation, context) => {
+  if (remediation.state !== "draft" && !remediation.settlementId) {
+    context.addIssue({ code: "custom", path: ["settlementId"], message: "Submitted remediation requires a settlement." });
+  }
+  if (remediation.state === "proved" && !remediation.proofBundleId) {
+    context.addIssue({ code: "custom", path: ["proofBundleId"], message: "Proved remediation requires a proof bundle." });
+  }
+});
 
 export const auditEventRecordSchema = z.object({
   schemaVersion: z.literal(1),
@@ -200,21 +254,6 @@ export const auditEventRecordSchema = z.object({
   result: z.enum(["allowed", "denied", "failed"]),
   reasonCode: z.string().min(1).max(120).optional(),
   metadata: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])),
-  createdAt: z.string().datetime(),
-}).strict();
-
-export const vaultRecoveryPackageSchema = z.object({
-  packageVersion: z.literal("payo-vault-recovery-v1"),
-  organizationId: uuidV7Schema,
-  algorithm: z.literal("ARGON2ID+XCHACHA20-POLY1305"),
-  kdf: z.object({
-    salt: z.string().min(16),
-    memoryKiB: z.number().int().min(65_536),
-    iterations: z.number().int().min(3),
-    parallelism: z.number().int().min(1).max(8),
-  }).strict(),
-  nonce: z.string().min(16),
-  ciphertext: z.string().min(24),
   createdAt: z.string().datetime(),
 }).strict();
 

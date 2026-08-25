@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildFxSnapshot, fxSnapshotCommitment, toCircuitFxSnapshot } from "./fx";
+import {
+  buildFxSnapshot,
+  fxCatalogPublicationWindow,
+  fxSnapshotCommitment,
+  toCircuitFxSnapshot,
+} from "./fx";
 
 const now = new Date("2026-08-23T10:00:00.000Z");
 const quotes = [
@@ -55,5 +60,23 @@ describe("FX snapshots", () => {
     });
     expect(() => toCircuitFxSnapshot(snapshot)).toThrow("requires 6-decimal");
     expect(() => fxSnapshotCommitment(snapshot)).toThrow("requires 6-decimal");
+  });
+
+  it("uses the shared freshness intersection for a mixed-token FX root", () => {
+    const strk = buildFxSnapshot({
+      baseToken: "STRK", referenceCurrency: "USD", quoteDecimals: 6, haircutBps: 0,
+      maximumAgeSeconds: 60, minimumSources: 3, quotes, now,
+    });
+    const usdc = buildFxSnapshot({
+      baseToken: "USDC", referenceCurrency: "USD", quoteDecimals: 6, haircutBps: 0,
+      maximumAgeSeconds: 30, minimumSources: 3,
+      quotes: quotes.map((quote) => ({ ...quote, observedAt: "2026-08-23T09:59:50.000Z" })),
+      now,
+    });
+    expect(fxCatalogPublicationWindow([strk, usdc])).toEqual({
+      observedAt: 1_787_479_190,
+      maximumAgeSeconds: 30,
+      expiresAt: 1_787_479_220,
+    });
   });
 });

@@ -53,5 +53,6 @@ describe("payroll domain", () => {
   it("enforces explicit workflow transitions", () => {
     expect(() => assertPayrollTransition("calculated", "confirmed")).toThrow("Invalid payroll transition");
     expect(() => assertPayrollTransition("calculated", "proven")).not.toThrow();
+    expect(() => assertPayrollTransition("proven", "cancelled")).not.toThrow();
   });
 });

@@ -25,6 +25,7 @@ import {
 } from "../lib/proof/commitments";
 
 const ZERO = `0x${"00".repeat(32)}`;
+const STARKNET_FIELD_BOUND = 1n << 251n;
 const byteArray = (hex: string) =>
   Array.from(Buffer.from(hex.replace(/^0x/, "").padStart(64, "0"), "hex"));
 const u128 = (value: bigint | number | string) => BigInt(value).toString();
@@ -120,10 +121,25 @@ const recipientCommitment = toHex(
 const scheduleCommitment = `0x${"04".repeat(32)}`;
 const lineSalt = `0x${"05".repeat(32)}`;
 const agreementSalt = `0x${"06".repeat(32)}`;
-const validityStart = 1_010;
-const validityExpiry = 2_000;
-const dueAt = 1_000;
-const validUntil = 3_000;
+const validityStart = Number.parseInt(process.env.PAYO_PROOF_VALIDITY_START ?? "1010", 10);
+const validityExpiry = Number.parseInt(process.env.PAYO_PROOF_VALIDITY_EXPIRY ?? "2000", 10);
+const dueAt = Number.parseInt(process.env.PAYO_PROOF_DUE_AT ?? "1000", 10);
+const validUntil = Number.parseInt(process.env.PAYO_PROOF_VALID_UNTIL ?? "3000", 10);
+const proofChainId = BigInt(process.env.PAYO_PROOF_CHAIN_ID ?? "1");
+const proofSealAddress = BigInt(process.env.PAYO_PROOF_SEAL_ADDRESS ?? "0x12345");
+if (
+  ![validityStart, validityExpiry, dueAt, validUntil].every(Number.isSafeInteger)
+  || dueAt > validityStart
+  || validityStart > validityExpiry
+  || validityExpiry - validityStart > 3_600
+  || validUntil < validityExpiry
+) throw new Error("The requested proof fixture has an invalid due/validity window.");
+if (
+  proofChainId <= 0n
+  || proofChainId >= STARKNET_FIELD_BOUND
+  || proofSealAddress <= 0n
+  || proofSealAddress >= STARKNET_FIELD_BOUND
+) throw new Error("The requested proof chain ID or seal address is outside the Starknet field.");
 
 const calculatedLine = calculatePayrollLine({
   agreementId: "phase1-proof-agreement",
@@ -147,17 +163,17 @@ const fxSnapshot = buildFxSnapshot({
     {
       source: "pragma-source-a",
       priceAtomic: "1000000",
-      observedAt: "1970-01-01T00:16:30.000Z",
+      observedAt: new Date((validityStart - 20) * 1_000).toISOString(),
     },
     {
       source: "pragma-source-b",
       priceAtomic: "1000000",
-      observedAt: "1970-01-01T00:16:35.000Z",
+      observedAt: new Date((validityStart - 15) * 1_000).toISOString(),
     },
     {
       source: "pragma-source-c",
       priceAtomic: "1000000",
-      observedAt: "1970-01-01T00:16:40.000Z",
+      observedAt: new Date((validityStart - 10) * 1_000).toISOString(),
     },
   ],
   now: new Date(validityStart * 1000),
@@ -303,8 +319,8 @@ async function buildProver(shardIndex: 0 | 1) {
   ];
 
   const prover = {
-    chain_id: "1",
-    seal_address: "0x12345",
+    chain_id: proofChainId.toString(),
+    seal_address: proofSealAddress.toString(),
     proof_version: "1",
     schema_version: "1",
     agreement_root_high: agreementRoot.high,
@@ -411,8 +427,8 @@ async function writeProofInput() {
         outputPath,
         secondaryOutputPath,
         publicInputs: {
-          chainId: "1",
-          sealAddress: "0x12345",
+          chainId: proofChainId.toString(),
+          sealAddress: `0x${proofSealAddress.toString(16)}`,
           proofVersion: "1",
           schemaVersion: "1",
           agreementRoot: shardZero.agreementRoot,

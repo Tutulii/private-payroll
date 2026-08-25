@@ -29,10 +29,10 @@ PAYO labels capabilities according to evidence, not intention.
 | Mainnet STRK shielding with a live privacy-fee quote | Working | Ready + STRK20 |
 | Mainnet private STRK batch payroll, up to 50 recipients | Working | Ready + STRK20 |
 | Confirmation tracking and shielded-balance refresh | Working | Starknet receipt |
-| Native USDC private payroll | Safety-gated | Full token path exists; UI disabled until live pool compatibility passes |
+| Native USDC private payroll | Wallet confirmed | Live Mainnet shield and cross-account Ready evidence recorded; SettlementMatch remains later work |
 | Encrypted persistent payroll vault | Built and tested locally | XChaCha20-Poly1305/X25519 envelopes, authenticated API, PostgreSQL migration |
-| PayrollIntegrity ZK proof core | Phase 1 complete; not deployed | [Green Phase 1 evidence](./docs/phase1-evidence.md): 45 Noir tests, two linked native and browser ZK proofs, reproducible Garaga verifier, and real Cairo verifier → bundle → seal checks |
-| PAYO payroll-seal contract | Built and tested locally | Real two-proof verifier → bundle → seal integration passes; contracts are not deployed |
+| PayrollIntegrity ZK proof core | Phase 1 complete; verifier deployed | [Green Phase 1 evidence](./docs/phase1-evidence.md): 45 Noir tests, two linked native and browser ZK proofs, reproducible Garaga verifier, and real Cairo verifier → bundle → seal checks; the proof-bound generated verifier is deployed on Mainnet |
+| PAYO payroll-seal contract | Deployed and live-proven for STRK | The five-contract Mainnet topology is binding-verified. A live Ready STRK payroll reached `confirmed`, the seal reached `proven`, and both real verifier shards succeeded; native-USDC-only and mixed PAYO payroll evidence remains pending in [Phase 2 evidence](./docs/phase2-evidence.md) |
 | Advanced obligation engine | Built and tested locally | Bounded policy DSL, multi-source FX snapshots, schedules, vesting, and offboarding tests |
 | Compliance proof export | Built and tested locally | Balanced journal and verifier-bound ZIP package |
 | MCP policy gateway | Built and tested locally | Signed capabilities and adversarial tests; generic wallet signing is prohibited |
@@ -175,10 +175,13 @@ Copy `.env.example` to `.env.local` and provide only the values required by the 
 ```bash
 NEXT_PUBLIC_PRIVY_APP_ID=your-privy-app-id
 NEXT_PUBLIC_STARKNET_RPC_URL=https://your-mainnet-rpc
-PRIVY_APP_SECRET=your-rotated-server-only-secret
 ```
 
-Privy secrets are server credentials. Never prefix them with `NEXT_PUBLIC_`, expose them in client code, or commit them. Any secret shared outside a secure secret manager must be rotated.
+PAYO verifies Privy access tokens against the app's public HTTPS JWKS, so normal
+login and encrypted API access require no App Secret. A secret is required only
+for future privileged Privy server APIs. Never prefix such a secret with
+`NEXT_PUBLIC_`, expose it in client code, or commit it; any exposed secret must
+be rotated.
 
 ### Verify
 
@@ -197,6 +200,25 @@ Database migration:
 ```bash
 npm run db:migrate
 ```
+
+Database integration tests require a disposable, migrated test database and
+intentionally refuse to run without an explicit URL:
+
+```bash
+PAYO_TEST_DATABASE_URL=postgresql://... DATABASE_URL=postgresql://... npm run test:db
+```
+
+Never use the production database for this command.
+
+Durable confirmation, proof-relay, and event-indexing workers:
+
+```bash
+npm run workers
+```
+
+Use a process supervisor in hosted environments. The full Mainnet database,
+relayer, secret, indexer, and incident precautions are in
+[the Phase 2 deployment runbook](./docs/phase2-mainnet-deployment.md).
 
 Circuit, proof, and contract verification:
 

@@ -23,5 +23,3 @@ jobs:
       - run: npm run lint
       - run: npm run verify:status
       - run: npm run build
-        env:
-          NEXT_PUBLIC_ENABLE_EXPERIMENTAL_USDC: "false"

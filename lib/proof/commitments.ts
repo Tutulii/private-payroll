@@ -27,6 +27,13 @@ type ProofCommitter = {
     pathBits: boolean[];
   };
   proofCatalogRoot(leaf: string): `0x${string}`;
+  buildProofCatalog(commitments: readonly string[]): {
+    root: `0x${string}`;
+    memberships: Array<{
+      siblings: `0x${string}`[];
+      pathBits: boolean[];
+    }>;
+  };
   proofAgreementCommitment(input: AgreementTermsCommitmentInput): `0x${string}`;
   proofPayrollCommitment(
     line: CalculatedPayrollLine,
@@ -137,6 +144,46 @@ export async function createProofCommitter(): Promise<ProofCommitter> {
     return current;
   };
 
+  const buildProofCatalog = (commitments: readonly string[]) => {
+    if (commitments.length === 0 || commitments.length > PAYO_MERKLE_LEAF_COUNT) {
+      throw new Error(`A proof catalog requires 1–${PAYO_MERKLE_LEAF_COUNT} commitments.`);
+    }
+    const seen = new Set<string>();
+    const leaves: `0x${string}`[] = Array.from(
+      { length: PAYO_MERKLE_LEAF_COUNT },
+      (_, index) => {
+        if (index >= commitments.length) return PAYO_PROOF_EMPTY_LEAF;
+        const canonical = toHex(normalizedHexBytes(commitments[index], 32));
+        if (seen.has(canonical)) throw new Error("Proof catalog commitments must be unique.");
+        seen.add(canonical);
+        return proofCatalogLeaf(canonical);
+      },
+    );
+    const memberships = commitments.map((_, originalIndex) => {
+      const siblings: `0x${string}`[] = [];
+      const pathBits: boolean[] = [];
+      let index = originalIndex;
+      let level = [...leaves];
+      while (level.length > 1) {
+        const isRight = index % 2 === 1;
+        siblings.push(level[isRight ? index - 1 : index + 1]);
+        pathBits.push(isRight);
+        level = Array.from({ length: level.length / 2 }, (_, node) =>
+          proofMerkleNode(level[node * 2], level[node * 2 + 1]),
+        );
+        index = Math.floor(index / 2);
+      }
+      return { siblings, pathBits };
+    });
+    let level = [...leaves];
+    while (level.length > 1) {
+      level = Array.from({ length: level.length / 2 }, (_, index) =>
+        proofMerkleNode(level[index * 2], level[index * 2 + 1]),
+      );
+    }
+    return { root: level[0], memberships };
+  };
+
   const proofAgreementCommitment = (
     input: AgreementTermsCommitmentInput,
   ): `0x${string}` => {
@@ -212,6 +259,7 @@ export async function createProofCommitter(): Promise<ProofCommitter> {
     buildProofFixedMerkleRoot,
     firstProofCatalogMembership,
     proofCatalogRoot,
+    buildProofCatalog,
     proofAgreementCommitment,
     proofPayrollCommitment,
   };

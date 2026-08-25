@@ -1,0 +1,17 @@
+.git
+.github
+.next
+node_modules
+.env
+.env.*
+!.env.example
+circuits/payroll_integrity/target
+contracts/target
+contracts/integrity_verifier/target
+evidence
+test-results
+playwright-report
+*.jpg
+*.jpeg
+*.png
+*.log

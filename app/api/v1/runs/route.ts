@@ -30,7 +30,20 @@ export async function POST(request: Request) {
     ) {
       throw new ApiError(400, "Encrypted envelope AAD does not match the payroll run.", "AAD_MISMATCH");
     }
-    const run = await createEncryptedRun({ ...input, envelope }, principal);
+    const lineRecords = input.lineRecords.map((line) => {
+      const lineEnvelope = encryptedVaultRecordSchema.parse(line.envelope);
+      if (
+        lineEnvelope.aad.organizationId !== input.organizationId
+        || lineEnvelope.aad.recordId !== line.id
+        || lineEnvelope.aad.revision !== line.revision
+        || lineEnvelope.aad.recordType !== "payroll-line"
+      ) throw new ApiError(400, "Encrypted payroll-line AAD does not match its storage identity.", "AAD_MISMATCH");
+      return { ...line, envelope: lineEnvelope };
+    });
+    if (new Set(lineRecords.map(({ id }) => id)).size !== lineRecords.length) {
+      throw new ApiError(400, "Encrypted payroll-line identifiers must be unique.", "PAYROLL_LINE_DUPLICATE");
+    }
+    const run = await createEncryptedRun({ ...input, envelope, lineRecords }, principal);
     return Response.json({ run }, { status: 201 });
   } catch (error) {
     return apiFailure(error);

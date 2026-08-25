@@ -24,4 +24,20 @@ describe("PAYO circuit-internal proof commitments", () => {
       ),
     ).toThrow("at most 50");
   });
+
+  it("builds distinct catalog memberships that reconstruct one shared root", () => {
+    const commitments = [`0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`];
+    const catalog = committer.buildProofCatalog(commitments);
+    for (const [entryIndex, commitment] of commitments.entries()) {
+      let current = committer.proofCatalogLeaf(commitment);
+      for (const [level, sibling] of catalog.memberships[entryIndex].siblings.entries()) {
+        current = catalog.memberships[entryIndex].pathBits[level]
+          ? committer.proofMerkleNode(sibling, current)
+          : committer.proofMerkleNode(current, sibling);
+      }
+      expect(current).toBe(catalog.root);
+    }
+    expect(() => committer.buildProofCatalog([commitments[0], commitments[0]]))
+      .toThrow("unique");
+  });
 });

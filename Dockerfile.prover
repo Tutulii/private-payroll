@@ -1,0 +1,40 @@
+FROM node:24.17.0-bookworm-slim AS dependencies
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+
+FROM dependencies AS builder
+WORKDIR /app
+ARG NEXT_PUBLIC_PRIVY_APP_ID
+ARG NEXT_PUBLIC_STARKNET_RPC_URL
+ARG NEXT_PUBLIC_PAYO_SEAL_ADDRESS
+ARG NEXT_PUBLIC_PAYO_POLICY_REGISTRY_ADDRESS
+ARG NEXT_PUBLIC_PAYO_OBLIGATION_REGISTRY_ADDRESS
+ARG NEXT_PUBLIC_PAYO_PROVER_URL
+ENV NEXT_PUBLIC_PRIVY_APP_ID=${NEXT_PUBLIC_PRIVY_APP_ID}
+ENV NEXT_PUBLIC_STARKNET_RPC_URL=${NEXT_PUBLIC_STARKNET_RPC_URL}
+ENV NEXT_PUBLIC_PAYO_SEAL_ADDRESS=${NEXT_PUBLIC_PAYO_SEAL_ADDRESS}
+ENV NEXT_PUBLIC_PAYO_POLICY_REGISTRY_ADDRESS=${NEXT_PUBLIC_PAYO_POLICY_REGISTRY_ADDRESS}
+ENV NEXT_PUBLIC_PAYO_OBLIGATION_REGISTRY_ADDRESS=${NEXT_PUBLIC_PAYO_OBLIGATION_REGISTRY_ADDRESS}
+ENV NEXT_PUBLIC_PAYO_PROVER_URL=${NEXT_PUBLIC_PAYO_PROVER_URL}
+COPY . .
+RUN npm run build
+
+FROM node:24.17.0-bookworm-slim AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/next.config.ts ./next.config.ts
+COPY --from=builder /app/drizzle ./drizzle
+COPY --from=builder /app/scripts/migrate-database.mjs ./scripts/migrate-database.mjs
+COPY --from=builder /app/scripts/run-phase2-workers.mjs ./scripts/run-phase2-workers.mjs
+COPY --from=builder /app/scripts/start-fly-runtime.mjs ./scripts/start-fly-runtime.mjs
+RUN chmod -R a+rX package.json package-lock.json .next public next.config.ts drizzle scripts
+USER node
+EXPOSE 3000
+CMD ["npm", "start"]

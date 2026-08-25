@@ -9,6 +9,7 @@ declare module "lucide-react" {
   export type LucideIcon = ComponentType<LucideProps>;
 
   export const ArrowRight: LucideIcon;
+  export const ArrowLeft: LucideIcon;
   export const ArrowDownLeft: LucideIcon;
   export const ArrowUpRight: LucideIcon;
   export const Bot: LucideIcon;
@@ -43,6 +44,7 @@ declare module "lucide-react" {
   export const Send: LucideIcon;
   export const Settings: LucideIcon;
   export const ShieldCheck: LucideIcon;
+  export const ShieldAlert: LucideIcon;
   export const Sparkles: LucideIcon;
   export const SlidersHorizontal: LucideIcon;
   export const UserPlus: LucideIcon;

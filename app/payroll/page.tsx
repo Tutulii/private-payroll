@@ -9,82 +9,145 @@ import {
   Download,
   ExternalLink,
   LoaderCircle,
+  LockKeyhole,
   MoreHorizontal,
   PencilLine,
   Play,
-  Plus,
   ShieldCheck,
   Sparkles,
   Users,
   WalletCards,
+  KeyRound,
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  formatStrk,
   formatTokenAmount,
   parseTokenAmount,
   PAYROLL_TOKENS,
   shortStarknetAddress,
   STARKNET_MAINNET_EXPLORER,
   STRK20_SETUP_URL,
+  type ShieldFeeQuote,
   type PayrollTokenSymbol,
   useStarknetWallet,
 } from "../starknet/starknet-wallet";
 import { useAppShell } from "../ui/app-shell";
+import { usePayoVault } from "../vault/payo-vault";
+import {
+  executeProofBoundPayroll,
+  derivePayrollCycleId,
+  parsePendingPayrollSubmission,
+  preparePayrollObligationRoot,
+  resumePendingPayrollSubmission,
+  type PayrollExecutionStage,
+  type PendingPayrollSubmission,
+} from "@/lib/client/payroll-execution";
+import { decryptVaultRecord, type EncryptedVaultRecord } from "@/lib/crypto/vault";
+import {
+  agreementScheduleCommitment,
+  loadEncryptedPayAgreements,
+  lockedPayrollScheduleCommitments,
+  synchronizeConfirmedRecurringAgreements,
+  type PayAgreementDirectoryRecord,
+} from "@/lib/client/agreement-directory";
+import {
+  loadEncryptedPayees,
+  type PayeeDirectoryRecord,
+} from "@/lib/client/payee-directory";
+import { isScheduleDue } from "@/lib/domain/obligations";
 
-type PayrollStatus = "Ready" | "Completed" | "Draft";
-
-const runs: Array<{
-  month: string;
-  detail: string;
-  recipients: string;
-  amount: string;
-  status: PayrollStatus;
-  tone: string;
-}> = [
-  { month: "August 2026", detail: "Scheduled for Aug 27", recipients: "12 people · 4 agents", amount: "$12,640", status: "Ready", tone: "coral" },
-  { month: "July 2026", detail: "Paid Jul 28", recipients: "11 people · 4 agents", amount: "$12,210", status: "Completed", tone: "blue" },
-  { month: "June 2026", detail: "Paid Jun 27", recipients: "10 people · 3 agents", amount: "$11,480", status: "Completed", tone: "green" },
-  { month: "Launch sprint", detail: "Last edited Aug 20", recipients: "3 contractors", amount: "$1,850", status: "Draft", tone: "yellow" },
-];
-
-const filters = ["All", "Ready", "Completed", "Draft"] as const;
-
-type DraftRecipient = {
-  id: number;
-  name: string;
-  address: string;
-  amount: string;
-  token: PayrollTokenSymbol;
+type PayrollRunSummary = {
+  id: string;
+  cycleId: string;
+  state: string;
+  dueAt: string;
+  updatedAt: string;
+  transactionHash: string | null;
+  revision: number;
+  recipientCount: number;
+  totals: Record<PayrollTokenSymbol, bigint>;
+  lines: Array<{ agreementId: string; scheduleCommitment: string }>;
 };
 
-const firstRecipient: DraftRecipient = {
-  id: 1,
-  name: "",
-  address: "",
-  amount: "0.001",
-  token: "STRK",
-};
+const filters = ["All", "Pending", "Confirmed", "Attention"] as const;
+const MIN_RECOVERY_PASSWORD_LENGTH = 12;
+
+function runStateLabel(state: string) {
+  return state.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
+}
+
+function runDate(value: string, options?: Intl.DateTimeFormatOptions) {
+  return new Intl.DateTimeFormat(undefined, options ?? { month: "short", day: "numeric", year: "numeric" })
+    .format(new Date(value));
+}
 
 export default function PayrollPage() {
   const { openPayroll, notify } = useAppShell();
   const starknet = useStarknetWallet();
+  const {
+    isConnected: shieldWalletConnected,
+    isMainnet: shieldWalletMainnet,
+    publicBalances: shieldPublicBalances,
+    quoteShieldToken: requestShieldQuote,
+    isObligationRootActive: readObligationRootActive,
+  } = starknet;
+  const vault = usePayoVault();
   const [filter, setFilter] = useState<(typeof filters)[number]>("All");
   const [shieldToken, setShieldToken] = useState<PayrollTokenSymbol>("STRK");
   const [shieldAmount, setShieldAmount] = useState("");
-  const [recipients, setRecipients] = useState<DraftRecipient[]>([firstRecipient]);
+  const [shieldFeeQuote, setShieldFeeQuote] = useState<ShieldFeeQuote | null>(null);
+  const [shieldQuoteError, setShieldQuoteError] = useState("");
+  const [isQuotingShield, setIsQuotingShield] = useState(false);
+  const [payees, setPayees] = useState<PayeeDirectoryRecord[]>([]);
+  const [agreements, setAgreements] = useState<PayAgreementDirectoryRecord[]>([]);
+  const [selectedAgreementIds, setSelectedAgreementIds] = useState<string[]>([]);
   const [formError, setFormError] = useState("");
-  const [nextRecipientId, setNextRecipientId] = useState(2);
+  const [workspaceName, setWorkspaceName] = useState("");
+  const [recoveryPassword, setRecoveryPassword] = useState("");
+  const [workspaceError, setWorkspaceError] = useState("");
+  const [secondAdminOrganizationId, setSecondAdminOrganizationId] = useState("");
+  const [secondAdminPassword, setSecondAdminPassword] = useState("");
+  const [showVaultSecurity, setShowVaultSecurity] = useState(false);
+  const [rotationPassword, setRotationPassword] = useState("");
+  const [revokePrincipalId, setRevokePrincipalId] = useState("");
+  const [payrollStage, setPayrollStage] = useState<PayrollExecutionStage | null>(null);
+  const [payrollReceipt, setPayrollReceipt] = useState<PendingPayrollSubmission | null>(null);
+  const [recoverableSubmission, setRecoverableSubmission] = useState<PendingPayrollSubmission | null>(null);
+  const [releasingRunId, setReleasingRunId] = useState<string | null>(null);
+  const [payrollRuns, setPayrollRuns] = useState<PayrollRunSummary[]>([]);
+  const [obligationSchedule, setObligationSchedule] = useState<{
+    root: string;
+    transactionHash: string | null;
+    validAfter: number | null;
+    state: "active" | "scheduled";
+  } | null>(null);
+  const [obligationRootChecking, setObligationRootChecking] = useState(false);
+  const [runsLoading, setRunsLoading] = useState(false);
+  const [dashboardLoadedAt] = useState(() => Date.now());
 
-  const visibleRuns = filter === "All" ? runs : runs.filter((run) => run.status === filter);
-  const busy = starknet.transaction?.stage === "wallet" || starknet.transaction?.stage === "confirming";
+  const runCategory = (state: string) => ["confirmed", "reconciled"].includes(state)
+    ? "Confirmed"
+    : ["failed", "cancelled", "disputed"].includes(state)
+      ? "Attention"
+      : "Pending";
+  const visibleRuns = filter === "All"
+    ? payrollRuns
+    : payrollRuns.filter((run) => runCategory(run.state) === filter);
+  const selectedOrganization = vault.organizations.find(({ id }) => id === vault.selectedOrganizationId);
+  const hasActivePayee = payees.some(({ status }) => status === "active");
+  const hasActiveAgreement = agreements.some((agreement) =>
+    !agreement.effectiveUntil
+    && payees.some(({ id, status }) => id === agreement.payeeId && status === "active"));
+  const payrollBusy = payrollStage !== null && payrollStage !== "queued";
+  const busy = payrollBusy || starknet.transaction?.stage === "wallet" || starknet.transaction?.stage === "confirming";
   const privacyChecking = starknet.privacyCapability === "checking";
   const privacyUnsupported = starknet.privacyCapability === "unsupported";
   const registrationRequired = starknet.privacyCapability === "uninitialized";
   const balanceUnavailable = starknet.privacyCapability === "error";
   const canRunPayroll = starknet.privacyCapability === "available";
+  const selfHostedProverUrl = process.env.NEXT_PUBLIC_PAYO_PROVER_URL;
   const treasuryLabel = starknet.privacyCapability === "uninitialized"
     ? "Not initialized"
     : privacyUnsupported
@@ -103,62 +166,357 @@ export default function PayrollPage() {
         : starknet.privacyCapability === "error"
           ? "Ready could not read this balance. Retry the balance check before shielding."
           : "Shield public STRK before it can be sent privately.";
-  const payrollTotals = useMemo(() => {
-    try {
-      return recipients.reduce<Record<PayrollTokenSymbol, bigint>>((totals, recipient) => {
-        totals[recipient.token] += parseTokenAmount(recipient.amount, recipient.token);
-        return totals;
-      }, { STRK: 0n, USDC: 0n });
-    } catch {
-      return null;
+  const lockedScheduleKeys = useMemo(
+    () => lockedPayrollScheduleCommitments(payrollRuns),
+    [payrollRuns],
+  );
+  const dueObligations = useMemo(() => agreements.flatMap((agreement) => {
+    const payee = payees.find(({ id }) => id === agreement.payeeId);
+    const scheduleKey = `${agreement.agreement.id}:${agreementScheduleCommitment(agreement.agreement)}`;
+    if (
+      !payee
+      || payee.status !== "active"
+      || agreement.effectiveUntil
+      || lockedScheduleKeys.has(scheduleKey)
+      || !isScheduleDue(agreement.agreement.schedule, new Date(dashboardLoadedAt))
+    ) return [];
+    return [{ agreement, payee }];
+  }).slice(0, 50), [agreements, dashboardLoadedAt, lockedScheduleKeys, payees]);
+  const selectedObligations = useMemo(() => dueObligations.filter(({ agreement }) =>
+    selectedAgreementIds.includes(agreement.id)), [dueObligations, selectedAgreementIds]);
+  const payrollTotals = useMemo(() => selectedObligations.reduce<Record<PayrollTokenSymbol, bigint>>(
+    (totals, { agreement }) => {
+      totals[agreement.agreement.settlementToken] += agreement.agreement.earningsAtomic
+        .reduce((sum, amount) => sum + BigInt(amount), 0n);
+      return totals;
+    },
+    { STRK: 0n, USDC: 0n },
+  ), [selectedObligations]);
+
+  const refreshPayrollRuns = useCallback(async () => {
+    if (!vault.client || !vault.session) {
+      setPayrollRuns([]);
+      setPayees([]);
+      setAgreements([]);
+      setSelectedAgreementIds([]);
+      return;
     }
-  }, [recipients]);
+    setRunsLoading(true);
+    try {
+      const [listing, loadedPayees, loadedAgreements] = await Promise.all([
+        vault.client.listPayrollRuns(vault.session.organizationId),
+        loadEncryptedPayees({
+          client: vault.client,
+          organizationId: vault.session.organizationId,
+          principal: vault.session.principal,
+        }),
+        loadEncryptedPayAgreements({
+          client: vault.client,
+          organizationId: vault.session.organizationId,
+          principal: vault.session.principal,
+        }),
+      ]);
+      const decrypted = await Promise.all(listing.runs.map(async (candidate) => {
+        const run = candidate as {
+          id?: unknown;
+          cycleId?: unknown;
+          state?: unknown;
+          dueAt?: unknown;
+          updatedAt?: unknown;
+          transactionHash?: unknown;
+          revision?: unknown;
+        };
+        if (
+          typeof run.id !== "string"
+          || typeof run.cycleId !== "string"
+          || typeof run.state !== "string"
+          || typeof run.dueAt !== "string"
+          || typeof run.updatedAt !== "string"
+          || typeof run.revision !== "number"
+        ) throw new Error("PAYO returned incomplete payroll-run metadata.");
+        const response = await vault.client!.getEncryptedRecord({
+          organizationId: vault.session!.organizationId,
+          recordId: run.id,
+        }) as { record: { envelope?: EncryptedVaultRecord } };
+        if (!response.record.envelope) throw new Error("An encrypted payroll manifest is missing.");
+        const privateRun = decryptVaultRecord<{
+          manifest?: {
+            lines?: Array<{ agreementId?: unknown; scheduleCommitment?: unknown }>;
+            totals?: { STRK?: unknown; USDC?: unknown };
+          };
+        }>(response.record.envelope, vault.session!.principal);
+        const strk = privateRun.manifest?.totals?.STRK;
+        const usdc = privateRun.manifest?.totals?.USDC;
+        if (
+          typeof strk !== "string"
+          || typeof usdc !== "string"
+          || !Array.isArray(privateRun.manifest?.lines)
+        ) throw new Error("An encrypted payroll manifest has an invalid shape.");
+        const lines = privateRun.manifest.lines.map((line) => {
+          if (
+            !line
+            || typeof line.agreementId !== "string"
+            || typeof line.scheduleCommitment !== "string"
+            || !/^0x[0-9a-fA-F]{64}$/.test(line.scheduleCommitment)
+          ) throw new Error("An encrypted payroll line is missing its schedule binding.");
+          return { agreementId: line.agreementId, scheduleCommitment: line.scheduleCommitment };
+        });
+        return {
+          id: run.id,
+          cycleId: run.cycleId,
+          state: run.state,
+          dueAt: run.dueAt,
+          updatedAt: run.updatedAt,
+          transactionHash: typeof run.transactionHash === "string" ? run.transactionHash : null,
+          revision: run.revision,
+          recipientCount: lines.length,
+          totals: { STRK: BigInt(strk), USDC: BigInt(usdc) },
+          lines,
+        } satisfies PayrollRunSummary;
+      }));
+      const synchronizedAgreements = await synchronizeConfirmedRecurringAgreements({
+        client: vault.client,
+        agreements: loadedAgreements,
+        runs: decrypted,
+        principal: vault.session.principal,
+      });
+      setPayrollRuns(decrypted);
+      setPayees(loadedPayees);
+      setAgreements(synchronizedAgreements);
+      const locked = lockedPayrollScheduleCommitments(decrypted);
+      const dueIds = synchronizedAgreements.flatMap((agreement) => {
+        const payee = loadedPayees.find(({ id }) => id === agreement.payeeId);
+        return payee?.status === "active"
+          && !agreement.effectiveUntil
+          && !locked.has(`${agreement.agreement.id}:${agreementScheduleCommitment(agreement.agreement)}`)
+          && isScheduleDue(agreement.agreement.schedule, new Date())
+          ? [agreement.id]
+          : [];
+      }).slice(0, 50);
+      setSelectedAgreementIds((current) => current.length
+        ? current.filter((id) => dueIds.includes(id))
+        : dueIds);
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "Encrypted payroll history could not be loaded.");
+    } finally {
+      setRunsLoading(false);
+    }
+  }, [vault.client, vault.session]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void refreshPayrollRuns(), 0);
+    return () => window.clearTimeout(timer);
+  }, [refreshPayrollRuns]);
+
+  useEffect(() => {
+    let stale = false;
+    const timer = window.setTimeout(() => {
+      if (
+        !vault.session
+        || !shieldWalletConnected
+        || !shieldWalletMainnet
+        || selectedObligations.length === 0
+      ) {
+        setObligationRootChecking(false);
+        setObligationSchedule(null);
+        return;
+      }
+
+      setObligationRootChecking(true);
+      void preparePayrollObligationRoot({
+        organizationId: vault.session.organizationId,
+        obligations: selectedObligations,
+      })
+        .then(async (planned) => ({
+          planned,
+          active: await readObligationRootActive(planned.root),
+        }))
+        .then(({ planned, active }) => {
+          if (stale) return;
+          setObligationSchedule(active
+            ? {
+                root: planned.root,
+                transactionHash: null,
+                validAfter: null,
+                state: "active",
+              }
+            : null);
+        })
+        .catch(() => {
+          if (!stale) setObligationSchedule(null);
+        })
+        .finally(() => {
+          if (!stale) setObligationRootChecking(false);
+        });
+    }, 0);
+
+    return () => {
+      stale = true;
+      window.clearTimeout(timer);
+    };
+  }, [readObligationRootActive, selectedObligations, shieldWalletConnected, shieldWalletMainnet, vault.session]);
+
+  useEffect(() => {
+    let stale = false;
+    const timeout = window.setTimeout(() => {
+      if (stale) return;
+      setShieldFeeQuote(null);
+      setShieldQuoteError("");
+      setIsQuotingShield(false);
+      if (
+        !shieldWalletConnected
+        || !shieldWalletMainnet
+        || privacyChecking
+        || privacyUnsupported
+        || registrationRequired
+      ) return;
+
+      let grossAmount: bigint;
+      try {
+        grossAmount = parseTokenAmount(shieldAmount, shieldToken);
+      } catch {
+        return;
+      }
+      const publicBalance = shieldPublicBalances[shieldToken];
+      if (publicBalance === null || grossAmount > publicBalance) return;
+
+      setIsQuotingShield(true);
+      void requestShieldQuote(shieldToken, shieldAmount)
+        .then((quote) => {
+          if (!stale) setShieldFeeQuote(quote);
+        })
+        .catch((quoteError) => {
+          if (!stale) {
+            setShieldQuoteError(
+              quoteError instanceof Error ? quoteError.message : "The live private-fee quote is unavailable.",
+            );
+          }
+        })
+        .finally(() => {
+          if (!stale) setIsQuotingShield(false);
+        });
+    }, 650);
+    return () => {
+      stale = true;
+      window.clearTimeout(timeout);
+    };
+  }, [
+    privacyChecking,
+    privacyUnsupported,
+    registrationRequired,
+    requestShieldQuote,
+    shieldAmount,
+    shieldPublicBalances,
+    shieldToken,
+    shieldWalletConnected,
+    shieldWalletMainnet,
+  ]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (!vault.session) {
+        setRecoverableSubmission(null);
+        return;
+      }
+      const storageKey = `payo:pending-settlement:v1:${vault.session.organizationId}`;
+      const serialized = localStorage.getItem(storageKey);
+      if (!serialized) {
+        setRecoverableSubmission(null);
+        return;
+      }
+      try {
+        setRecoverableSubmission(parsePendingPayrollSubmission(JSON.parse(serialized)));
+      } catch {
+        setRecoverableSubmission(null);
+        setFormError("A local payroll recovery record is corrupt. Keep it for support; do not submit this payroll again.");
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [vault.session]);
+
+  const persistPendingSubmission = (submission: PendingPayrollSubmission | null) => {
+    if (!vault.session) throw new Error("The PAYO workspace locked during settlement recording.");
+    const storageKey = `payo:pending-settlement:v1:${vault.session.organizationId}`;
+    if (submission) localStorage.setItem(storageKey, JSON.stringify(submission));
+    else localStorage.removeItem(storageKey);
+    setRecoverableSubmission(submission);
+  };
   const shieldQuote = useMemo(() => {
     try {
       const token = PAYROLL_TOKENS[shieldToken];
       const grossAmount = parseTokenAmount(shieldAmount, token);
       const publicTokenBalance = starknet.publicBalances[shieldToken];
-      const netAmount = starknet.privacyFee === null
-        ? null
-        : token.feeBehavior === "deduct-from-strk-shield"
-          ? grossAmount - starknet.privacyFee
-          : grossAmount;
+      const matchingQuote = shieldFeeQuote?.token === shieldToken
+        && shieldFeeQuote.grossAmount === grossAmount
+        ? shieldFeeQuote
+        : null;
+      const netAmount = matchingQuote?.netAmount ?? null;
       const shortfall = publicTokenBalance !== null && grossAmount > publicTokenBalance
         ? grossAmount - publicTokenBalance
-        : 0n;
-      const feeShortfall = shieldToken === "USDC" && starknet.privacyFee !== null && starknet.publicBalances.STRK !== null && starknet.privacyFee > starknet.publicBalances.STRK
-        ? starknet.privacyFee - starknet.publicBalances.STRK
         : 0n;
       return {
         grossAmount,
         netAmount,
+        walletFee: matchingQuote?.walletFee ?? null,
+        exact: matchingQuote?.exact ?? false,
+        source: matchingQuote?.source ?? null,
         shortfall,
-        feeShortfall,
-        hasSufficientBalance: publicTokenBalance !== null && shortfall === 0n && feeShortfall === 0n,
-        isValid: netAmount !== null && netAmount > 0n && publicTokenBalance !== null && shortfall === 0n && feeShortfall === 0n,
+        hasSufficientBalance: publicTokenBalance !== null && shortfall === 0n,
+        isValid: netAmount !== null && netAmount > 0n && publicTokenBalance !== null && shortfall === 0n,
       };
     } catch {
-      return { grossAmount: null, netAmount: null, shortfall: 0n, feeShortfall: 0n, hasSufficientBalance: false, isValid: false };
+      return { grossAmount: null, netAmount: null, walletFee: null, exact: false, source: null, shortfall: 0n, hasSufficientBalance: false, isValid: false };
     }
-  }, [shieldAmount, shieldToken, starknet.privacyFee, starknet.publicBalances]);
+  }, [shieldAmount, shieldFeeQuote, shieldToken, starknet.publicBalances]);
 
-  const updateRecipient = (id: number, field: keyof Omit<DraftRecipient, "id">, value: string) => {
-    setRecipients((current) => current.map((recipient) => recipient.id === id ? { ...recipient, [field]: value } : recipient));
+  const toggleAgreement = (id: string) => {
+    setObligationSchedule(null);
+    setSelectedAgreementIds((current) => current.includes(id)
+      ? current.filter((candidate) => candidate !== id)
+      : [...current, id]);
   };
 
-  const addRecipient = () => {
-    setRecipients((current) => [...current, { id: nextRecipientId, name: "", address: "", amount: shieldToken === "USDC" ? "1" : "0.001", token: shieldToken }]);
-    setNextRecipientId((current) => current + 1);
-  };
-
-  const removeRecipient = (id: number) => {
-    setRecipients((current) => current.filter((recipient) => recipient.id !== id));
+  const scheduleSelectedObligationRoot = async () => {
+    setFormError("");
+    try {
+      if (!vault.session) throw new Error("Unlock the encrypted workspace first.");
+      if (!starknet.isConnected || !starknet.isMainnet) {
+        throw new Error("Connect the obligation-registry administrator on Starknet Mainnet first.");
+      }
+      if (selectedObligations.length === 0) throw new Error("Select at least one due agreement.");
+      const planned = await preparePayrollObligationRoot({
+        organizationId: vault.session.organizationId,
+        obligations: selectedObligations,
+      });
+      if (await starknet.isObligationRootActive(planned.root)) {
+        setObligationSchedule({
+          root: planned.root,
+          transactionHash: null,
+          validAfter: null,
+          state: "active",
+        });
+        notify("This private obligation root is already active");
+        return;
+      }
+      const scheduled = await starknet.scheduleObligationRoot(planned.root);
+      setObligationSchedule({
+        root: planned.root,
+        transactionHash: scheduled.transactionHash,
+        validAfter: scheduled.validAfter,
+        state: "active",
+      });
+      notify(`Obligation root active · ${scheduled.transactionHash.slice(0, 10)}…`);
+    } catch (scheduleError) {
+      setFormError(scheduleError instanceof Error ? scheduleError.message : "The obligation root was not scheduled.");
+    }
   };
 
   const shieldTreasury = async () => {
     setFormError("");
     try {
-      const hash = await starknet.shieldToken(shieldToken, shieldAmount);
+      if (!shieldFeeQuote) throw new Error("Wait for the live private-fee quote before shielding.");
+      starknet.clearTransaction();
+      const hash = await starknet.shieldToken(shieldToken, shieldAmount, shieldFeeQuote);
       notify(`Shield transaction submitted · ${hash.slice(0, 10)}…`);
     } catch (shieldError) {
       setFormError(shieldError instanceof Error ? shieldError.message : "Shielding was not completed.");
@@ -167,21 +525,269 @@ export default function PayrollPage() {
 
   const submitPayroll = async () => {
     setFormError("");
+    setPayrollReceipt(null);
     try {
-      if (payrollTotals !== null) {
-        for (const token of Object.keys(PAYROLL_TOKENS) as PayrollTokenSymbol[]) {
-          const available = starknet.shieldedBalances[token];
-          if (available !== null && payrollTotals[token] > available) {
-            throw new Error(`The shielded ${token} treasury does not cover this payroll.`);
-          }
+      if (!vault.session || !vault.client) {
+        throw new Error("Unlock the encrypted PAYO workspace before preparing payroll.");
+      }
+      if (!starknet.isConnected || !starknet.isMainnet) {
+        throw new Error("Connect Ready on Starknet Mainnet before preparing payroll.");
+      }
+      const sealAddress = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
+      if (!sealAddress) throw new Error("The proof-bound PAYO seal is not deployed/configured.");
+      if (selectedObligations.length === 0) throw new Error("Select at least one due encrypted agreement.");
+      const plannedObligations = await preparePayrollObligationRoot({
+        organizationId: vault.session.organizationId,
+        obligations: selectedObligations,
+      });
+      if (!(await starknet.isObligationRootActive(plannedObligations.root))) {
+        throw new Error(
+          "This exact encrypted obligation root is not active. Activate it below before generating a proof.",
+        );
+      }
+      for (const token of Object.keys(PAYROLL_TOKENS) as PayrollTokenSymbol[]) {
+        const available = starknet.shieldedBalances[token];
+        if (available === null) throw new Error(`The shielded ${token} balance is unavailable.`);
+        if (payrollTotals[token] > available) {
+          throw new Error(`The shielded ${token} treasury does not cover this payroll.`);
         }
       }
-      const hash = await starknet.runPrivatePayroll(recipients.map(({ address, amount, token }) => ({ address, amount, token })));
-      notify(`Private payroll submitted · ${hash.slice(0, 10)}…`);
+      const result = await executeProofBoundPayroll({
+        client: vault.client,
+        organizationId: vault.session.organizationId,
+        organizationSecret: vault.session.organizationSecret,
+        principal: vault.session.principal,
+        chainId: starknet.chainId,
+        sealAddress,
+        obligations: selectedObligations,
+        runRevision: Math.max(
+          0,
+          ...payrollRuns
+            .filter(({ cycleId }) => cycleId === derivePayrollCycleId(vault.session!.organizationId, selectedObligations))
+            .map(({ revision }) => revision),
+        ) + 1,
+        submitPayroll: starknet.runProofBoundPayroll,
+        prove: selfHostedProverUrl
+          ? async ({ encryptedWitness, principal, onProgress }) => {
+              onProgress?.("loading");
+              onProgress?.("proving");
+              return vault.client!.provePayrollIntegrityRemotely({
+                proverBaseUrl: selfHostedProverUrl,
+                encryptedWitness,
+                principal,
+              });
+            }
+          : undefined,
+        onStage: setPayrollStage,
+        persistPendingSubmission,
+        authorizeFxRoot: async ({ root, publicationWindow }) => {
+          if (await starknet.isFxRootActive(root)) return;
+          await starknet.publishFxRoot({
+            root,
+            observedAt: publicationWindow.observedAt,
+            maximumAgeSeconds: publicationWindow.maximumAgeSeconds,
+          });
+        },
+      });
+      setPayrollReceipt(result);
+      await refreshPayrollRuns();
+      notify(`Proof-bound private payroll submitted · ${result.transactionHash.slice(0, 10)}…`);
     } catch (payrollError) {
+      setPayrollStage(null);
       setFormError(payrollError instanceof Error ? payrollError.message : "Payroll was not submitted.");
+      await refreshPayrollRuns();
     }
   };
+
+  const resumePayrollRecording = async () => {
+    setFormError("");
+    try {
+      if (!vault.client || !recoverableSubmission) throw new Error("No recoverable payroll submission is available.");
+      const result = await resumePendingPayrollSubmission({
+        client: vault.client,
+        pending: recoverableSubmission,
+        persistPendingSubmission,
+        onStage: setPayrollStage,
+      });
+      setPayrollReceipt(result);
+      await refreshPayrollRuns();
+      notify(`Payroll recording recovered · ${result.transactionHash.slice(0, 10)}…`);
+    } catch (recoveryError) {
+      setPayrollStage(null);
+      setFormError(recoveryError instanceof Error ? recoveryError.message : "Payroll recovery failed.");
+    }
+  };
+
+  const releaseUnsubmittedRun = async (run: PayrollRunSummary) => {
+    setFormError("");
+    if (!vault.client) {
+      setFormError("Unlock the encrypted PAYO workspace before releasing this run.");
+      return;
+    }
+    if (run.state !== "proven" || run.transactionHash) {
+      setFormError("Only a proven run with no submitted transaction can be released.");
+      return;
+    }
+    if (!window.confirm(
+      "Release this unsubmitted run? First close or reject any open Ready request. The encrypted proof stays in PAYO, but this agreement will become available for a fresh payroll attempt.",
+    )) return;
+    setReleasingRunId(run.id);
+    try {
+      await vault.client.transitionPayrollRun({ runId: run.id, state: "cancelled" });
+      await refreshPayrollRuns();
+      notify("Unsubmitted run released · the agreement is ready to retry");
+    } catch (releaseError) {
+      setFormError(releaseError instanceof Error ? releaseError.message : "The unsubmitted run could not be released.");
+    } finally {
+      setReleasingRunId(null);
+    }
+  };
+
+  const payrollStageLabel: Record<PayrollExecutionStage, string> = {
+    fx: "Reading live FX",
+    authorizing: "Authorizing fresh FX",
+    loading: "Loading pinned circuit",
+    executing: "Building private witness",
+    proving: "Generating ZK proof",
+    verifying: "Verifying locally",
+    encoding: "Encoding Starknet proof",
+    preflight: "Checking on-chain registries",
+    persisting: "Encrypting payroll records",
+    wallet: "Approve in Ready",
+    recording: "Recording submission",
+    queued: "Verification queued",
+  };
+
+  const createWorkspace = async () => {
+    setWorkspaceError("");
+    const normalizedWorkspaceName = workspaceName.trim();
+    if (!normalizedWorkspaceName) {
+      setWorkspaceError("Enter an organization name before creating the encrypted workspace.");
+      return;
+    }
+    if (recoveryPassword.length < MIN_RECOVERY_PASSWORD_LENGTH) {
+      const remainingCharacters = MIN_RECOVERY_PASSWORD_LENGTH - recoveryPassword.length;
+      setWorkspaceError(`Recovery password needs ${remainingCharacters} more ${remainingCharacters === 1 ? "character" : "characters"} (12 minimum).`);
+      return;
+    }
+    try {
+      await vault.createWorkspace(normalizedWorkspaceName, recoveryPassword);
+      setRecoveryPassword("");
+      notify("Encrypted workspace created and recovery package downloaded");
+    } catch (workspaceFailure) {
+      setWorkspaceError(workspaceFailure instanceof Error ? workspaceFailure.message : "Workspace creation failed.");
+    }
+  };
+
+  const unlockWorkspace = async () => {
+    setWorkspaceError("");
+    try {
+      await vault.unlockWorkspace(recoveryPassword);
+      setRecoveryPassword("");
+      notify("Encrypted workspace unlocked for this session");
+    } catch (workspaceFailure) {
+      setWorkspaceError(workspaceFailure instanceof Error ? workspaceFailure.message : "Workspace unlock failed.");
+    }
+  };
+
+  const importRecoveryPackage = async (file: File | undefined) => {
+    if (!file) return;
+    setWorkspaceError("");
+    try {
+      if (file.size > 256_000) throw new Error("Recovery package is unexpectedly large.");
+      vault.importRecoveryPackage(JSON.parse(await file.text()));
+      notify("Recovery package imported into this browser");
+    } catch (importFailure) {
+      setWorkspaceError(importFailure instanceof Error ? importFailure.message : "Recovery package import failed.");
+    }
+  };
+
+  const createSecondAdminRequest = async () => {
+    setWorkspaceError("");
+    try {
+      await vault.createSecondAdminRequest(secondAdminOrganizationId, secondAdminPassword);
+      setSecondAdminPassword("");
+      notify("Encrypted recovery-admin request downloaded");
+    } catch (requestFailure) {
+      setWorkspaceError(requestFailure instanceof Error ? requestFailure.message : "Recovery-admin request failed.");
+    }
+  };
+
+  const addSecondAdministrator = async (file: File | undefined) => {
+    if (!file) return;
+    setWorkspaceError("");
+    try {
+      if (file.size > 256_000) throw new Error("Recovery-admin request is unexpectedly large.");
+      await vault.addSecondAdministrator(JSON.parse(await file.text()));
+      notify("Second recovery administrator added with an encrypted vault-key grant");
+    } catch (grantFailure) {
+      setWorkspaceError(grantFailure instanceof Error ? grantFailure.message : "Second-admin grant failed.");
+    }
+  };
+
+  const rotateVaultKeys = async () => {
+    setWorkspaceError("");
+    try {
+      await vault.rotateVault(
+        rotationPassword,
+        revokePrincipalId.trim() ? [revokePrincipalId.trim()] : [],
+      );
+      setRotationPassword("");
+      setRevokePrincipalId("");
+      setShowVaultSecurity(false);
+      notify("Vault keys rotated and a new recovery package downloaded");
+    } catch (rotationFailure) {
+      setWorkspaceError(rotationFailure instanceof Error ? rotationFailure.message : "Vault rotation failed.");
+    }
+  };
+
+  const confirmRecoverySaved = async () => {
+    setWorkspaceError("");
+    try {
+      await vault.confirmRecoverySaved();
+      notify("Recovery package confirmed. Production payroll is now enabled.");
+    } catch (recoveryFailure) {
+      setWorkspaceError(recoveryFailure instanceof Error ? recoveryFailure.message : "Recovery confirmation failed.");
+    }
+  };
+
+  const exportPayrollHistory = () => {
+    if (!vault.session) {
+      setFormError("Unlock the encrypted workspace before exporting private payroll history.");
+      return;
+    }
+    const exportBody = {
+      format: "payo-private-run-history-v1",
+      organizationId: vault.session.organizationId,
+      generatedAt: new Date().toISOString(),
+      privacyWarning: "This locally generated file contains decrypted aggregate payroll totals. Store it securely.",
+      runs: payrollRuns.map((run) => ({
+        ...run,
+        totals: { STRK: run.totals.STRK.toString(), USDC: run.totals.USDC.toString() },
+      })),
+    };
+    const blob = new Blob([`${JSON.stringify(exportBody, null, 2)}\n`], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `payo-private-runs-${vault.session.organizationId}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    notify("Private payroll history exported locally");
+  };
+
+  const latestRun = payrollRuns[0] ?? null;
+  const confirmedRuns = payrollRuns.filter(({ state }) => ["confirmed", "reconciled"].includes(state));
+  const resolvedRuns = payrollRuns.filter(({ state }) =>
+    ["confirmed", "reconciled", "failed", "cancelled", "disputed"].includes(state));
+  const successfulRuns = resolvedRuns.filter(({ state }) => ["confirmed", "reconciled"].includes(state));
+  const paidTotals = confirmedRuns.reduce<Record<PayrollTokenSymbol, bigint>>((totals, run) => ({
+    STRK: totals.STRK + run.totals.STRK,
+    USDC: totals.USDC + run.totals.USDC,
+  }), { STRK: 0n, USDC: 0n });
+  const plannedRuns = payrollRuns
+    .filter(({ state, dueAt }) => runCategory(state) === "Pending" && new Date(dueAt).getTime() >= dashboardLoadedAt)
+    .sort((left, right) => new Date(left.dueAt).getTime() - new Date(right.dueAt).getTime());
 
   return (
     <div className="product-page payroll-page">
@@ -192,15 +798,81 @@ export default function PayrollPage() {
           <p>Prepare salaries for people and agents, review the batch, and settle through STRK20 without publishing everyone’s compensation.</p>
         </div>
         <div className="page-heading__actions">
-          <button type="button" className="button button--soft" onClick={() => notify("Payroll report exported")}><Download size={17} /> Export</button>
+          <button type="button" className="button button--soft" onClick={exportPayrollHistory} disabled={!vault.session || payrollRuns.length === 0}><Download size={17} /> Export private report</button>
           <button type="button" className="button button--ink" onClick={openPayroll}><Play size={17} /> Run payroll</button>
         </div>
       </section>
 
       <section className="private-payroll-runner reveal reveal--two" id="private-payroll">
         <div className="runner-heading">
-          <div><span className="sticker sticker--yellow">LIVE · MAINNET</span><h3>Private payroll runner</h3><p>Run private STRK payroll now. Native USDC is built but stays locked until its live pool compatibility check passes.</p></div>
+          <div><span className="sticker sticker--yellow">LIVE · MAINNET</span><h3>Private payroll runner</h3><p>Run private STRK or native USDC payroll with passive live fee reserves and proof-bound PAYO enforcement.</p></div>
           <div className="runner-network"><span className={starknet.isConnected && starknet.isMainnet ? "connection-dot connection-dot--live" : "connection-dot"} /><span><small>Payroll signer</small><strong>{starknet.isConnected ? `${starknet.walletName} · ${starknet.networkName}` : "Ready not connected"}</strong></span></div>
+        </div>
+
+        <div className={`vault-gate ${vault.session ? "vault-gate--ready" : ""}`}>
+          <span className="vault-gate__icon">{vault.session ? <LockKeyhole size={21} /> : <KeyRound size={21} />}</span>
+          {!vault.configured ? (
+            <div className="vault-gate__copy"><small>ENCRYPTED WORKSPACE</small><strong>Server identity is not configured</strong><p>Add the Privy server configuration before storing production payroll records.</p></div>
+          ) : !vault.ready || vault.loading ? (
+            <div className="vault-gate__copy"><small>ENCRYPTED WORKSPACE</small><strong>Opening the private desk…</strong><p>Keys remain in this browser session.</p></div>
+          ) : !vault.authenticated ? (
+            <><div className="vault-gate__copy"><small>ENCRYPTED WORKSPACE</small><strong>Sign in to protect payroll records</strong><p>Privy authenticates access; PAYO encrypts salaries locally before storage.</p></div><button type="button" className="button button--ink" onClick={vault.login}>Sign in</button></>
+          ) : vault.organizations.length === 0 ? (
+            <>
+              <div className="vault-gate__copy"><small>NEW ENCRYPTED WORKSPACE</small><strong>Create your private payroll vault</strong><p>A recovery file downloads once. PAYO cannot reset a lost vault password.</p></div>
+              <div className="vault-gate__form">
+                <input value={workspaceName} maxLength={160} placeholder="Organization name" aria-label="Organization name" onChange={(event) => setWorkspaceName(event.target.value)} />
+                <div className="vault-gate__field">
+                  <input
+                    type="password"
+                    value={recoveryPassword}
+                    minLength={MIN_RECOVERY_PASSWORD_LENGTH}
+                    maxLength={1024}
+                    autoComplete="new-password"
+                    placeholder="Recovery password"
+                    aria-label="New vault recovery password"
+                    aria-describedby="workspace-password-help"
+                    aria-invalid={recoveryPassword.length > 0 && recoveryPassword.length < MIN_RECOVERY_PASSWORD_LENGTH}
+                    onChange={(event) => {
+                      setRecoveryPassword(event.target.value);
+                      setWorkspaceError("");
+                    }}
+                  />
+                  <span
+                    id="workspace-password-help"
+                    className={`vault-gate__hint ${recoveryPassword.length >= MIN_RECOVERY_PASSWORD_LENGTH ? "vault-gate__hint--ready" : ""}`}
+                    aria-live="polite"
+                  >
+                    {recoveryPassword.length === 0
+                      ? "Use at least 12 characters. It cannot be reset."
+                      : recoveryPassword.length < MIN_RECOVERY_PASSWORD_LENGTH
+                        ? `${recoveryPassword.length}/12 characters · add ${MIN_RECOVERY_PASSWORD_LENGTH - recoveryPassword.length} more.`
+                        : `${recoveryPassword.length} characters · ready.`}
+                  </span>
+                </div>
+                <button type="button" className="button button--ink" disabled={vault.loading} onClick={createWorkspace}>Create &amp; download</button>
+                <span className="label">OR JOIN AS RECOVERY ADMIN</span>
+                <input value={secondAdminOrganizationId} placeholder="Organization UUID" aria-label="Organization ID for recovery-admin request" onChange={(event) => setSecondAdminOrganizationId(event.target.value)} />
+                <input type="password" value={secondAdminPassword} minLength={12} maxLength={1024} autoComplete="new-password" placeholder="Your recovery password · 12+" aria-label="Second administrator recovery password" onChange={(event) => setSecondAdminPassword(event.target.value)} />
+                <button type="button" className="button button--soft" disabled={!secondAdminOrganizationId.trim() || secondAdminPassword.length < 12 || vault.loading} onClick={createSecondAdminRequest}>Download admin request</button>
+              </div>
+            </>
+          ) : !vault.session ? (
+            <>
+              <div className="vault-gate__copy"><small>WORKSPACE LOCKED</small><strong>Unlock locally to prepare payroll</strong><p>The password and decrypted vault key are never sent to PAYO.</p></div>
+              <div className="vault-gate__form vault-gate__form--unlock">
+                {vault.organizations.length > 1 && <select value={vault.selectedOrganizationId} aria-label="PAYO organization" onChange={(event) => vault.selectOrganization(event.target.value)}>{vault.organizations.map((organization) => <option value={organization.id} key={organization.id}>{organization.id.slice(0, 8)} · {organization.role}</option>)}</select>}
+                <input type="password" value={recoveryPassword} minLength={12} maxLength={1024} autoComplete="current-password" placeholder="Recovery password" aria-label="Vault recovery password" onChange={(event) => setRecoveryPassword(event.target.value)} />
+                <button type="button" className="button button--ink" disabled={recoveryPassword.length < 12 || vault.loading} onClick={unlockWorkspace}>Unlock</button>
+                <label className="button button--soft vault-gate__import">Import recovery<input type="file" accept="application/json,.json" onChange={(event) => { void importRecoveryPackage(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>
+              </div>
+            </>
+          ) : !vault.recoveryReady ? (
+            <><div className="vault-gate__copy"><small>RECOVERY CONFIRMATION REQUIRED</small><strong>Keep the downloaded recovery file somewhere safe</strong><p>Production payroll stays locked until you confirm the encrypted package was saved.</p></div><div className="vault-gate__actions"><button type="button" className="button button--soft" onClick={vault.downloadRecoveryPackage}>Download again</button><button type="button" className="button button--ink" onClick={confirmRecoverySaved}>I saved it securely</button><button type="button" className="button button--soft" onClick={vault.lockWorkspace}>Lock</button></div></>
+          ) : (
+            <><div className="vault-gate__copy"><small>ENCRYPTED WORKSPACE · UNLOCKED</small><strong>Private records stay client-encrypted</strong><p>{selectedOrganization?.recoveryState === "second_admin" ? "Second-admin recovery is active." : "Recovery package is configured."} Plaintext payroll exists only in this browser session.</p></div><div className="vault-gate__actions">{selectedOrganization?.role === "admin" && selectedOrganization.recoveryState !== "second_admin" && <label className="button button--soft vault-gate__import">Add recovery admin<input type="file" accept="application/json,.json" onChange={(event) => { void addSecondAdministrator(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>}{selectedOrganization?.role === "admin" && <button type="button" className="button button--soft" onClick={() => setShowVaultSecurity((current) => !current)}>Rotate / revoke</button>}<button type="button" className="button button--soft" onClick={vault.lockWorkspace}>Lock workspace</button></div>{showVaultSecurity && selectedOrganization?.role === "admin" && <div className="vault-gate__form"><span className="label">FRESH DEK ROTATION</span><input type="password" value={rotationPassword} minLength={12} maxLength={1024} autoComplete="new-password" placeholder="New recovery password · 12+" aria-label="New vault rotation password" onChange={(event) => setRotationPassword(event.target.value)} /><input value={revokePrincipalId} placeholder="Optional principal ID to revoke" aria-label="Principal ID to revoke during key rotation" onChange={(event) => setRevokePrincipalId(event.target.value)} /><p>Every latest record is re-encrypted locally. A revoked administrator is removed in the same database transaction.</p><button type="button" className="button button--ink" disabled={rotationPassword.length < 12 || vault.loading} onClick={rotateVaultKeys}>Rotate keys &amp; download</button></div>}</>
+          )}
+          {(workspaceError || vault.error) && <p className="vault-gate__error">{workspaceError || vault.error}</p>}
         </div>
 
         <div className="runner-grid">
@@ -235,14 +907,14 @@ export default function PayrollPage() {
                       <b>{shieldToken}</b>
                     </label>
                     <div className={`shield-quote ${shieldQuote.isValid ? "shield-quote--ready" : ""} ${shieldQuote.shortfall > 0n ? "shield-quote--insufficient" : ""}`}>
-                      <div className="shield-quote__heading"><span>LIVE SHIELD QUOTE</span><i>{starknet.isRefreshingPrivacyFee || starknet.isRefreshingPublicBalance ? "Refreshing…" : "Mainnet live"}</i></div>
+                      <div className="shield-quote__heading"><span>LIVE SHIELD QUOTE</span><i>{isQuotingShield || starknet.isRefreshingPublicBalance ? "Reading Mainnet…" : shieldFeeQuote?.exact ? "Pool verified" : shieldFeeQuote ? "Live estimate" : "Mainnet live"}</i></div>
                       <div className="shield-quote__row"><span>Public {shieldToken} balance</span><strong>{formatTokenAmount(starknet.publicBalances[shieldToken], shieldToken)} {shieldToken}</strong></div>
                       <div className="shield-quote__row"><span>Total {shieldToken}</span><strong>{formatTokenAmount(shieldQuote.grossAmount, shieldToken)} {shieldToken}</strong></div>
-                      <div className="shield-quote__row"><span>STRK20 privacy fee</span><strong>{starknet.privacyFee === null ? "—" : `− ${formatStrk(starknet.privacyFee)} STRK`}</strong></div>
-                      <div className="shield-quote__row shield-quote__row--net"><span>Arrives shielded</span><strong>{shieldQuote.netAmount !== null && shieldQuote.netAmount > 0n ? formatTokenAmount(shieldQuote.netAmount, shieldToken) : "0"} {shieldToken}</strong></div>
-                      <p>{starknet.privacyFeeError ? <>Live fee unavailable. <button type="button" onClick={() => starknet.refreshPrivacyFee().catch((feeError) => setFormError(feeError instanceof Error ? feeError.message : "Fee refresh failed"))}>Retry</button></> : starknet.publicBalanceError ? <>Wallet balance unavailable. <button type="button" onClick={() => starknet.refreshPublicBalance().catch((balanceError) => setFormError(balanceError instanceof Error ? balanceError.message : "Balance refresh failed"))}>Retry</button></> : shieldQuote.shortfall > 0n ? `Insufficient ${shieldToken} · short by ${formatTokenAmount(shieldQuote.shortfall, shieldToken)} ${shieldToken}.` : shieldQuote.feeShortfall > 0n ? `USDC shielding needs ${formatStrk(shieldQuote.feeShortfall)} more public STRK for the privacy fee.` : shieldToken === "STRK" && starknet.privacyFee !== null && shieldQuote.grossAmount !== null && shieldQuote.grossAmount <= starknet.privacyFee ? `Enter more than ${formatStrk(starknet.privacyFee)} STRK.` : shieldToken === "USDC" ? "USDC arrives intact; the privacy fee is paid separately in public STRK." : "Ready shows any separate network execution estimate before approval."}</p>
+                      <div className="shield-quote__row"><span>{shieldQuote.exact ? "STRK20 Mainnet fee" : "Conservative fee reserve"}</span><strong>{shieldQuote.walletFee === null ? "—" : `− ${formatTokenAmount(shieldQuote.walletFee, shieldToken)} ${shieldToken}`}</strong></div>
+                      <div className="shield-quote__row shield-quote__row--net"><span>{shieldQuote.exact ? "Arrives shielded" : "Estimated shielded"}</span><strong>{shieldQuote.netAmount !== null && shieldQuote.netAmount > 0n ? formatTokenAmount(shieldQuote.netAmount, shieldToken) : "0"} {shieldToken}</strong></div>
+                      <p>{starknet.publicBalanceError ? <>Wallet balance unavailable. <button type="button" onClick={() => starknet.refreshPublicBalance().catch((balanceError) => setFormError(balanceError instanceof Error ? balanceError.message : "Balance refresh failed"))}>Retry</button></> : shieldQuote.shortfall > 0n ? `Insufficient ${shieldToken} · short by ${formatTokenAmount(shieldQuote.shortfall, shieldToken)} ${shieldToken}.` : shieldQuoteError ? shieldQuoteError : isQuotingShield ? "Reading the public STRK20 fee and paymaster price. Ready will not open for a quote." : shieldFeeQuote?.exact ? "Read directly from the STRK20 Mainnet pool. Ready opens only after you click Shield." : shieldFeeQuote ? "Based on the live pool fee and AVNU token price with a safety buffer. Ready shows the final reserve before approval." : "Enter an amount to read the live fee without opening Ready."}</p>
                     </div>
-                    <button type="button" className="button button--soft button--wide" disabled={!starknet.isConnected || !starknet.isMainnet || !shieldQuote.isValid || starknet.privacyFee === null || starknet.publicBalances[shieldToken] === null || busy || privacyChecking || privacyUnsupported || starknet.isRefreshingPrivacyFee || starknet.isRefreshingPublicBalance} onClick={shieldTreasury}>{starknet.transaction?.kind === "shield" && busy ? <><LoaderCircle className="spin" size={16} /> {starknet.transaction.stage === "wallet" ? "Approve in Ready" : "Confirming"}</> : shieldQuote.shortfall > 0n || shieldQuote.feeShortfall > 0n ? <>Insufficient balance</> : <><ShieldCheck size={16} /> Shield {shieldQuote.isValid ? `${formatTokenAmount(shieldQuote.netAmount, shieldToken)} ${shieldToken}` : "treasury"}</>}</button>
+                    <button type="button" className="button button--soft button--wide" disabled={!starknet.isConnected || !starknet.isMainnet || !shieldQuote.isValid || starknet.publicBalances[shieldToken] === null || busy || privacyChecking || privacyUnsupported || isQuotingShield || starknet.isRefreshingPublicBalance} onClick={shieldTreasury}>{starknet.transaction?.kind === "shield" && busy ? <><LoaderCircle className="spin" size={16} /> {starknet.transaction.stage === "wallet" ? "Approve in Ready" : "Confirming"}</> : shieldQuote.shortfall > 0n ? <>Insufficient balance</> : <><ShieldCheck size={16} /> Shield {shieldQuote.isValid ? `${shieldQuote.exact ? "" : "~"}${formatTokenAmount(shieldQuote.netAmount, shieldToken)} ${shieldToken}` : "treasury"}</>}</button>
                   </>
                 )}
               </div>
@@ -255,32 +927,95 @@ export default function PayrollPage() {
           </aside>
 
           <div className="payroll-composer">
-            <div className="composer-top"><div><span className="label">RECIPIENTS</span><h4>Who gets paid?</h4></div><button type="button" className="button button--soft" onClick={addRecipient} disabled={recipients.length >= 50 || busy}><Plus size={15} /> Add recipient</button></div>
+            <div className="composer-top"><div><span className="label">DUE AGREEMENTS</span><h4>Which obligations settle?</h4></div><Link className="button button--soft" href="/team">Manage agreements <ArrowRight size={15} /></Link></div>
             <div className="recipient-labels"><span>Recipient</span><span>Starknet address</span><span>Private amount</span><span /></div>
             <div className="recipient-list">
-              {recipients.map((recipient, index) => (
-                <div className="recipient-editor" key={recipient.id}>
+              {dueObligations.map(({ agreement, payee }, index) => {
+                const selected = selectedAgreementIds.includes(agreement.id);
+                const total = agreement.agreement.earningsAtomic.reduce((sum, amount) => sum + BigInt(amount), 0n);
+                return (
+                <div className={`recipient-editor ${selected ? "recipient-editor--selected" : "recipient-editor--excluded"}`} key={agreement.id}>
                   <span className="recipient-index">{index + 1}</span>
-                  <label><span>Name / label</span><input value={recipient.name} placeholder={index === 0 ? "e.g. Maya Chen" : "Recipient name"} onChange={(event) => updateRecipient(recipient.id, "name", event.target.value)} /></label>
-                  <label className="recipient-address"><span>Starknet address</span><input value={recipient.address} placeholder="0x…" spellCheck={false} onChange={(event) => updateRecipient(recipient.id, "address", event.target.value)} /></label>
-                  <label className="recipient-amount"><span>Amount</span><input inputMode="decimal" value={recipient.amount} onChange={(event) => updateRecipient(recipient.id, "amount", event.target.value)} /><select value={recipient.token} aria-label={`Token for recipient ${index + 1}`} onChange={(event) => updateRecipient(recipient.id, "token", event.target.value as PayrollTokenSymbol)}><option value="STRK">STRK</option><option value="USDC" disabled={!PAYROLL_TOKENS.USDC.privacyEnabled}>USDC{PAYROLL_TOKENS.USDC.privacyEnabled ? "" : " · live test pending"}</option></select></label>
-                  <button type="button" className="recipient-remove" aria-label={`Remove recipient ${index + 1}`} disabled={recipients.length === 1 || busy} onClick={() => removeRecipient(recipient.id)}><X size={15} /></button>
+                  <label><span>Encrypted contributor</span><input value={payee.displayName} readOnly /></label>
+                  <label className="recipient-address"><span>Registered Starknet address</span><input value={payee.recipientAddress} spellCheck={false} readOnly /></label>
+                  <label className="recipient-amount"><span>Committed amount</span><input value={formatTokenAmount(total, agreement.agreement.settlementToken)} readOnly /><select value={agreement.agreement.settlementToken} aria-label={`Committed token for recipient ${index + 1}`} disabled><option value={agreement.agreement.settlementToken}>{agreement.agreement.settlementToken}</option></select></label>
+                  <button type="button" className="recipient-remove" aria-label={`${selected ? "Exclude" : "Include"} ${payee.displayName}`} disabled={busy} onClick={() => toggleAgreement(agreement.id)}>{selected ? <CheckCircle2 size={15} /> : <X size={15} />}</button>
                 </div>
-              ))}
+              );})}
+              {!runsLoading && vault.session && dueObligations.length === 0 && (
+                <div className="directory-empty payroll-empty-guide">
+                  <CalendarDays size={24} />
+                  <strong>{!hasActivePayee ? "Add a payroll recipient" : !hasActiveAgreement ? "Add their private pay agreement" : "No agreement is due yet"}</strong>
+                  <p>{!hasActivePayee
+                    ? "PAYO sends from proof-bound agreements, so the first payment starts with a registered recipient."
+                    : !hasActiveAgreement
+                      ? "The recipient exists. Commit their amount, token, classification, cadence, and first due time."
+                      : "The agreement exists, but its committed next-due time is still in the future."}</p>
+                  <ol aria-label="Private payroll setup progress">
+                    <li className={hasActivePayee ? "payroll-empty-guide__done" : "payroll-empty-guide__current"}><b>1</b> Add recipient</li>
+                    <li className={hasActiveAgreement ? "payroll-empty-guide__done" : hasActivePayee ? "payroll-empty-guide__current" : ""}><b>2</b> Add pay agreement</li>
+                    <li className={hasActiveAgreement ? "payroll-empty-guide__current" : ""}><b>3</b> Authorize &amp; send</li>
+                  </ol>
+                  <Link className="button button--ink" href="/team#team-directory">
+                    {!hasActivePayee ? "Add first recipient" : !hasActiveAgreement ? "Add pay agreement" : "Review due time"} <ArrowRight size={15} />
+                  </Link>
+                </div>
+              )}
             </div>
 
-            <div className="recipient-note"><ShieldCheck size={17} /><span><strong>Before payday</strong><small>Each destination must be a valid Starknet account accepted by STRK20. Ready will reject an ineligible recipient before signing.</small></span></div>
+            <div className="recipient-note"><ShieldCheck size={17} /><span><strong>Authoritative proof-bound obligations</strong><small>Amounts, recipient salts, schedule commitments, classifications, and policy roots come from the encrypted agreements. They cannot be edited inside a payroll run. Active policy, FX, obligation, and verifier roots are required before Ready can open.</small></span></div>
+            <div className="obligation-root-control">
+              <span><strong>{obligationRootChecking ? "Checking authorization" : obligationSchedule?.state === "active" ? "Obligation root active" : obligationSchedule?.state === "scheduled" ? "Activation confirming" : "Activate before payroll"}</strong><small>{obligationRootChecking ? "Reading the exact selected agreement root from the Mainnet registry." : obligationSchedule?.state === "active" ? "The selected encrypted agreement set is authorized on-chain." : obligationSchedule?.validAfter ? `Submitted at ${new Date(obligationSchedule.validAfter * 1_000).toLocaleString()}. Changing the selection creates a different root.` : "The registry administrator can authorize this exact encrypted agreement set immediately in one transaction."}</small></span>
+              <button type="button" className="button button--soft" disabled={!vault.session || !starknet.isConnected || !starknet.isMainnet || selectedObligations.length === 0 || busy || obligationRootChecking} onClick={scheduleSelectedObligationRoot}>{obligationRootChecking ? <><LoaderCircle className="spin" size={15} /> Checking</> : starknet.transaction?.kind === "registry" && busy ? <><LoaderCircle className="spin" size={15} /> {starknet.transaction.stage === "wallet" ? "Approve in Ready" : "Confirming"}</> : obligationSchedule?.state === "active" ? <>Check again <ShieldCheck size={15} /></> : <>Authorize batch <Clock3 size={15} /></>}</button>
+            </div>
 
             <div className="composer-summary">
-              <div><small>Recipients</small><strong>{recipients.length}</strong></div><div><small>Private total</small><strong>{payrollTotals ? `${formatTokenAmount(payrollTotals.STRK, "STRK")} STRK · ${formatTokenAmount(payrollTotals.USDC, "USDC")} USDC` : "—"}</strong></div><div><small>Shielded treasury</small><strong>{formatTokenAmount(starknet.shieldedBalances.STRK, "STRK")} STRK · {formatTokenAmount(starknet.shieldedBalances.USDC, "USDC")} USDC</strong></div>
-              <button type="button" className="button button--ink" disabled={!starknet.isConnected || !starknet.isMainnet || !canRunPayroll || busy || payrollTotals === null} onClick={submitPayroll}>{starknet.transaction?.kind === "payroll" && busy ? <><LoaderCircle className="spin" size={17} /> {starknet.transaction.stage === "wallet" ? "Approve in Ready" : "Confirming on Mainnet"}</> : <>Approve private payroll <ArrowRight size={17} /></>}</button>
+              <div><small>Selected obligations</small><strong>{selectedObligations.length}</strong></div><div><small>Private total</small><strong>{`${formatTokenAmount(payrollTotals.STRK, "STRK")} STRK · ${formatTokenAmount(payrollTotals.USDC, "USDC")} USDC`}</strong></div><div><small>Shielded treasury</small><strong>{formatTokenAmount(starknet.shieldedBalances.STRK, "STRK")} STRK · {formatTokenAmount(starknet.shieldedBalances.USDC, "USDC")} USDC</strong></div>
+              {dueObligations.length === 0 ? (
+                <Link className="button button--ink" href="/team#team-directory">Set up first payment <ArrowRight size={17} /></Link>
+              ) : (
+                <button
+                  type="button"
+                  className="button button--ink"
+                  disabled={!vault.session || !vault.recoveryReady || !starknet.isConnected || !starknet.isMainnet || busy || obligationRootChecking || selectedObligations.length === 0 || (obligationSchedule?.state === "active" && !canRunPayroll)}
+                  onClick={obligationSchedule?.state === "active" ? submitPayroll : scheduleSelectedObligationRoot}
+                >
+                  {obligationRootChecking
+                    ? <><LoaderCircle className="spin" size={17} /> Checking authorization</>
+                    : payrollStage && payrollStage !== "queued"
+                    ? <><LoaderCircle className="spin" size={17} /> {payrollStageLabel[payrollStage]}</>
+                    : starknet.transaction?.kind === "registry" && busy
+                      ? <><LoaderCircle className="spin" size={17} /> {starknet.transaction.stage === "wallet" ? "Approve authorization in Ready" : "Confirming authorization"}</>
+                      : starknet.transaction?.kind === "payroll" && busy
+                        ? <><LoaderCircle className="spin" size={17} /> {starknet.transaction.stage === "wallet" ? "Approve in Ready" : "Confirming on Mainnet"}</>
+                        : !vault.session
+                          ? <>Unlock workspace <KeyRound size={17} /></>
+                          : !vault.recoveryReady
+                            ? <>Confirm recovery <KeyRound size={17} /></>
+                            : selectedObligations.length === 0
+                              ? <>Select a due agreement <CalendarDays size={17} /></>
+                              : obligationSchedule?.state !== "active"
+                                ? <>Authorize batch in Ready <ShieldCheck size={17} /></>
+                                : <>Prove &amp; approve payroll <ArrowRight size={17} /></>}
+                </button>
+              )}
             </div>
 
             {formError && <div className="runner-error"><X size={16} /><span>{formError}</span></div>}
+            {recoverableSubmission && (
+              <div className="runner-error"><Clock3 size={16} /><span>A submitted transaction still needs durable PAYO recording. Do not submit it again.</span><button type="button" className="button button--soft" disabled={busy} onClick={resumePayrollRecording}>Resume recording</button></div>
+            )}
+            {payrollStage && !formError && (
+              <div className={`transaction-receipt transaction-receipt--${payrollStage === "queued" ? "confirmed" : "confirming"}`}>
+                <span className="transaction-receipt-icon">{payrollStage === "queued" ? <CheckCircle2 size={20} /> : <LoaderCircle className="spin" size={19} />}</span>
+                <span><small>PAYROLLINTEGRITY · TWO SHARDS{selfHostedProverUrl ? " · SELF-HOSTED PROVER" : ""}</small><strong>{payrollStageLabel[payrollStage]}</strong><p>{payrollStage === "queued" ? "The settlement is durable; the relayer will verify both proof shards after finality." : selfHostedProverUrl ? "The encrypted request is opened only in your authenticated self-hosted prover's volatile memory; no wallet key is shared." : "Salary inputs stay encrypted while PAYO prepares the proof-bound settlement."}</p></span>
+                {payrollReceipt && <a href={`${STARKNET_MAINNET_EXPLORER}/tx/${payrollReceipt.transactionHash}`} target="_blank" rel="noreferrer">View receipt <ExternalLink size={13} /></a>}
+              </div>
+            )}
             {starknet.transaction && (
               <div className={`transaction-receipt transaction-receipt--${starknet.transaction.stage}`}>
                 <span className="transaction-receipt-icon">{starknet.transaction.stage === "confirmed" ? <CheckCircle2 size={20} /> : starknet.transaction.stage === "failed" ? <X size={19} /> : <LoaderCircle className="spin" size={19} />}</span>
-                <span><small>{starknet.transaction.stage === "wallet" ? "READY IS PREPARING THE PROOF" : starknet.transaction.stage === "confirming" ? "SUBMITTED TO MAINNET" : starknet.transaction.stage === "confirmed" ? "TRANSACTION CONFIRMED" : "TRANSACTION NEEDS ATTENTION"}</small><strong>{starknet.transaction.label}</strong>{starknet.transaction.kind === "shield" && starknet.transaction.grossAmount !== undefined && starknet.transaction.privacyFee !== undefined && <p>{starknet.transaction.token === "USDC" ? `${formatTokenAmount(starknet.transaction.grossAmount, "USDC")} USDC shields while ${formatStrk(starknet.transaction.privacyFee)} public STRK covers the privacy fee.` : `${formatStrk(starknet.transaction.grossAmount)} STRK total − ${formatStrk(starknet.transaction.privacyFee)} STRK privacy fee = ${formatStrk(starknet.transaction.netAmount ?? null)} STRK shielded.`}</p>}{starknet.transaction.stage === "wallet" && <p>Payo sent one request. Reject any repeated Ready prompt for this same transaction.</p>}{starknet.transaction.error && <p>{starknet.transaction.error}</p>}</span>
+                <span><small>{starknet.transaction.stage === "wallet" ? starknet.transaction.kind === "registry" ? "READY IS REQUESTING ADMIN APPROVAL" : "READY IS PREPARING THE PROOF" : starknet.transaction.stage === "confirming" ? "SUBMITTED TO MAINNET" : starknet.transaction.stage === "confirmed" ? "TRANSACTION CONFIRMED" : "TRANSACTION NEEDS ATTENTION"}</small><strong>{starknet.transaction.label}</strong>{starknet.transaction.kind === "shield" && starknet.transaction.grossAmount !== undefined && starknet.transaction.walletFee !== undefined && starknet.transaction.token && <p>{`${starknet.transaction.feeQuoteExact ? "" : "Pre-approval estimate · "}${formatTokenAmount(starknet.transaction.grossAmount, starknet.transaction.token)} ${starknet.transaction.token} total − ${formatTokenAmount(starknet.transaction.walletFee, starknet.transaction.feeToken ?? starknet.transaction.token)} ${starknet.transaction.feeToken ?? starknet.transaction.token} private fee = ${formatTokenAmount(starknet.transaction.netAmount ?? null, starknet.transaction.token)} ${starknet.transaction.token} shielded.`}</p>}{starknet.transaction.stage === "wallet" && <p>PAYO sent one request. Rejecting it returns this form to a retryable state.</p>}{starknet.transaction.error && <p>{starknet.transaction.error}</p>}</span>
                 {starknet.transaction.hash && <a href={`${STARKNET_MAINNET_EXPLORER}/tx/${starknet.transaction.hash}`} target="_blank" rel="noreferrer">View receipt <ExternalLink size={13} /></a>}
               </div>
             )}
@@ -290,50 +1025,63 @@ export default function PayrollPage() {
 
       <section className="payroll-stage-card reveal reveal--three">
         <div className="payroll-stage__copy">
-          <div className="stage-status"><span /> READY TO REVIEW</div>
-          <h3>August payroll</h3>
-          <p>All 16 recipients are registered and the private treasury is funded. One review stands between your team and payday.</p>
-          <div className="stage-people" aria-label="12 humans and 4 agents">
-            {["MC", "TB", "AJ", "SO", "AI", "AI"].map((initials, index) => (
-              <span className={initials === "AI" ? "stage-person stage-person--agent" : "stage-person"} key={`${initials}-${index}`}>{initials}</span>
+          <div className="stage-status"><span /> {latestRun ? runStateLabel(latestRun.state).toUpperCase() : "NO PRIVATE RUNS"}</div>
+          <h3>{latestRun?.cycleId ?? "Your first payroll"}</h3>
+          <p>{latestRun ? `${latestRun.recipientCount} encrypted ${latestRun.recipientCount === 1 ? "recipient" : "recipients"}. Due ${runDate(latestRun.dueAt)}. No salary data was read by the server.` : "Create a proof-bound payroll above. Its encrypted manifest and durable status will appear here."}</p>
+          <div className="stage-people" aria-label={latestRun ? `${latestRun.recipientCount} encrypted recipients` : "No recipients"}>
+            {Array.from({ length: Math.min(latestRun?.recipientCount ?? 0, 6) }, (_, index) => (
+              <span className="stage-person" key={index}><LockKeyhole size={13} /></span>
             ))}
-            <b>+10</b>
+            {(latestRun?.recipientCount ?? 0) > 6 && <b>+{latestRun!.recipientCount - 6}</b>}
           </div>
-          <button type="button" className="button button--ink" onClick={openPayroll}>Review 16 payments <ArrowRight size={17} /></button>
+          <div className="stage-run-actions">
+            <Link className="button button--ink" href={latestRun ? "/activity" : "#private-payroll"}>{latestRun ? "Open durable activity" : "Prepare first run"} <ArrowRight size={17} /></Link>
+            {latestRun?.state === "proven" && !latestRun.transactionHash && (
+              <button
+                type="button"
+                className="button button--soft"
+                disabled={busy || releasingRunId === latestRun.id}
+                onClick={() => void releaseUnsubmittedRun(latestRun)}
+              >
+                {releasingRunId === latestRun.id ? <LoaderCircle className="spin" size={15} /> : <X size={15} />}
+                Release unsubmitted run
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="payday-calendar" aria-hidden="true">
           <span className="calendar-spark calendar-spark--one">✦</span>
           <span className="calendar-spark calendar-spark--two">✦</span>
           <div className="calendar-rings"><i /><i /><i /></div>
-          <div className="calendar-top">AUGUST</div>
-          <strong>27</strong>
-          <span>THURSDAY · PAYDAY</span>
+          <div className="calendar-top">{latestRun ? runDate(latestRun.dueAt, { month: "long" }).toUpperCase() : "PAYDAY"}</div>
+          <strong>{latestRun ? runDate(latestRun.dueAt, { day: "numeric" }) : "—"}</strong>
+          <span>{latestRun ? `${runDate(latestRun.dueAt, { weekday: "long" }).toUpperCase()} · PRIVATE` : "AWAITING A RUN"}</span>
           <div className="calendar-face"><i /><i /><b /></div>
           <div className="calendar-feet"><i /><i /></div>
         </div>
 
         <div className="payroll-stage__summary">
-          <div><span>Total payroll</span><strong>$12,640.00</strong><small>Illustrative monthly plan</small></div>
-          <div className="stage-summary-row"><span><Users size={15} /> Recipients</span><b>16</b></div>
-          <div className="stage-summary-row"><span><CircleDollarSign size={15} /> Average payment</span><b>$790</b></div>
-          <div className="stage-summary-row"><span><CalendarDays size={15} /> Scheduled</span><b>Aug 27</b></div>
-          <div className="funds-check"><CheckCircle2 size={17} /><span><strong>Treasury is ready</strong><small>$35,600.80 remains after payroll</small></span></div>
+          <div><span>Encrypted total</span><strong>{latestRun ? `${formatTokenAmount(latestRun.totals.STRK, "STRK")} STRK` : "—"}</strong><small>{latestRun ? `${formatTokenAmount(latestRun.totals.USDC, "USDC")} native USDC` : "Locally decrypted only"}</small></div>
+          <div className="stage-summary-row"><span><Users size={15} /> Recipients</span><b>{latestRun?.recipientCount ?? 0}</b></div>
+          <div className="stage-summary-row"><span><ShieldCheck size={15} /> State</span><b>{latestRun ? runStateLabel(latestRun.state) : "None"}</b></div>
+          <div className="stage-summary-row"><span><CalendarDays size={15} /> Due</span><b>{latestRun ? runDate(latestRun.dueAt, { month: "short", day: "numeric" }) : "—"}</b></div>
+          <div className="funds-check"><CheckCircle2 size={17} /><span><strong>{latestRun?.transactionHash ? "Transaction recorded" : "No public amount exposed"}</strong><small>{latestRun?.transactionHash ? shortStarknetAddress(latestRun.transactionHash) : "Totals stay in the encrypted manifest"}</small></span></div>
         </div>
       </section>
 
       <section className="payroll-stats reveal reveal--four">
         <article className="mini-stat mini-stat--yellow">
           <span className="mini-stat__icon"><CircleDollarSign size={18} /></span>
-          <div><small>Paid this year</small><strong>$84,390</strong><em>7 private runs</em></div>
+          <div><small>Confirmed private value</small><strong>{formatTokenAmount(paidTotals.STRK, "STRK")} STRK</strong><em>{formatTokenAmount(paidTotals.USDC, "USDC")} native USDC</em></div>
         </article>
         <article className="mini-stat mini-stat--blue">
           <span className="mini-stat__icon"><Users size={18} /></span>
-          <div><small>Active recipients</small><strong>16</strong><em>12 people · 4 agents</em></div>
+          <div><small>Latest recipients</small><strong>{latestRun?.recipientCount ?? 0}</strong><em>From locally decrypted manifest</em></div>
         </article>
         <article className="mini-stat mini-stat--green">
           <span className="mini-stat__icon"><ShieldCheck size={18} /></span>
-          <div><small>Payment success</small><strong>100%</strong><em>Nothing needs attention</em></div>
+          <div><small>Resolved success</small><strong>{resolvedRuns.length ? `${Math.floor(successfulRuns.length * 100 / resolvedRuns.length)}%` : "—"}</strong><em>{resolvedRuns.length ? `${successfulRuns.length} of ${resolvedRuns.length} resolved runs` : "No resolved runs yet"}</em></div>
         </article>
       </section>
 
@@ -349,24 +1097,25 @@ export default function PayrollPage() {
 
         <div className="runs-card">
           <div className="table-head"><span>Payroll</span><span>Recipients</span><span>Status</span><span>Total</span><span /></div>
-          {visibleRuns.map((run) => (
-            <button type="button" className="run-row" key={run.month} onClick={() => notify(`${run.month} opened`)}>
-              <span className={`run-mark run-mark--${run.tone}`}>{run.month.slice(0, 3).toUpperCase()}</span>
-              <span className="run-name"><strong>{run.month}</strong><small>{run.detail}</small></span>
-              <span className="run-recipients">{run.recipients}</span>
-              <span className={`run-status run-status--${run.status.toLowerCase()}`}><i />{run.status}</span>
-              <strong className="run-amount">{run.amount}</strong>
+          {visibleRuns.map((run, index) => (
+            <button type="button" className="run-row" key={run.id} onClick={() => notify(`Run ${run.cycleId} · ${runStateLabel(run.state)}`)}>
+              <span className={`run-mark run-mark--${["coral", "blue", "green", "yellow"][index % 4]}`}>{run.cycleId.slice(0, 3).toUpperCase()}</span>
+              <span className="run-name"><strong>{run.cycleId}</strong><small>Due {runDate(run.dueAt)} · updated {runDate(run.updatedAt)}</small></span>
+              <span className="run-recipients">{run.recipientCount} encrypted {run.recipientCount === 1 ? "recipient" : "recipients"}</span>
+              <span className={`run-status run-status--${runCategory(run.state).toLowerCase().replace("attention", "draft")}`}><i />{runStateLabel(run.state)}</span>
+              <strong className="run-amount">{formatTokenAmount(run.totals.STRK, "STRK")} STRK · {formatTokenAmount(run.totals.USDC, "USDC")} USDC</strong>
               <MoreHorizontal className="run-more" size={18} />
             </button>
           ))}
-          {visibleRuns.length === 0 && <div className="empty-row"><Sparkles size={21} /><strong>No payrolls here yet.</strong><span>Try a different status.</span></div>}
+          {runsLoading && <div className="empty-row"><LoaderCircle className="spin" size={21} /><strong>Opening encrypted payroll history</strong><span>Manifests are decrypted only in this browser.</span></div>}
+          {!runsLoading && visibleRuns.length === 0 && <div className="empty-row"><Sparkles size={21} /><strong>No payrolls here yet.</strong><span>{payrollRuns.length ? "Try a different status." : "The first durable private run will appear here."}</span></div>}
         </div>
       </section>
 
       <section className="rhythm-card reveal reveal--five">
         <div className="rhythm-icon"><Clock3 size={24} /><span>↻</span></div>
-        <div><span className="label">MONTHLY RHYTHM</span><h3>Your next three paydays are planned.</h3><p>August 27 · September 28 · October 28</p></div>
-        <button type="button" className="button button--soft" onClick={() => notify("Payroll schedule opened")}><PencilLine size={16} /> Edit schedule</button>
+        <div><span className="label">DURABLE SCHEDULE</span><h3>{plannedRuns.length ? `${plannedRuns.length} upcoming private ${plannedRuns.length === 1 ? "run" : "runs"}.` : "No upcoming run is stored."}</h3><p>{plannedRuns.length ? plannedRuns.slice(0, 3).map(({ cycleId, dueAt }) => `${cycleId} · ${runDate(dueAt, { month: "short", day: "numeric" })}`).join("  ·  ") : "Create a payroll when the next obligation becomes due."}</p></div>
+        <button type="button" className="button button--soft" onClick={openPayroll}><PencilLine size={16} /> Prepare payroll</button>
       </section>
     </div>
   );

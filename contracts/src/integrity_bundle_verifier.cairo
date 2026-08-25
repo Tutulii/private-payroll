@@ -15,6 +15,13 @@ pub trait IIntegrityBundleVerifier<TContractState> {
         self: @TContractState, shard_0_proof: Span<felt252>, shard_1_proof: Span<felt252>,
     ) -> Result<Span<u256>, felt252>;
 
+    /// Verifies one shard for the two-transaction sealed-hash fallback. The seal
+    /// validates the returned 17 public inputs and will not mark a run proven
+    /// until both ordered shard hashes have been verified.
+    fn verify_payroll_integrity_shard(
+        self: @TContractState, shard_proof: Span<felt252>,
+    ) -> Result<Span<u256>, felt252>;
+
     fn get_underlying_verifier(self: @TContractState) -> ContractAddress;
 }
 
@@ -65,6 +72,15 @@ pub mod PayoIntegrityBundleVerifier {
                 combined.append(*input);
             }
             Result::Ok(combined.span())
+        }
+
+        fn verify_payroll_integrity_shard(
+            self: @ContractState, shard_proof: Span<felt252>,
+        ) -> Result<Span<u256>, felt252> {
+            let verifier = IGaragaIntegrityVerifierDispatcher {
+                contract_address: self.underlying_verifier.read(),
+            };
+            verifier.verify_ultra_keccak_zk_honk_proof(shard_proof)
         }
 
         fn get_underlying_verifier(self: @ContractState) -> ContractAddress {

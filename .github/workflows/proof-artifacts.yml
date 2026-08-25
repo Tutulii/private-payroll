@@ -63,6 +63,20 @@ jobs:
         run: |
           test "$(snforge --version)" = "snforge 0.57.0"
 
+      - name: Install pinned standalone Starknet Devnet
+        run: |
+          payo_devnet_version="$(node -p 'require("./toolchains.lock.json").starknet.starknetDevnet')"
+          payo_devnet_sha="$(node -p 'require("./toolchains.lock.json").starknet.starknetDevnetLinuxX64Sha256')"
+          payo_devnet_archive="/tmp/starknet-devnet-${payo_devnet_version}.tar.gz"
+          curl --fail --location --retry 3 \
+            "https://github.com/starknet-io/starknet-devnet/releases/download/v${payo_devnet_version}/starknet-devnet-x86_64-unknown-linux-gnu.tar.gz" \
+            --output "$payo_devnet_archive"
+          echo "${payo_devnet_sha}  ${payo_devnet_archive}" | sha256sum --check
+          mkdir -p /tmp/payo-starknet-devnet
+          tar -xzf "$payo_devnet_archive" -C /tmp/payo-starknet-devnet
+          echo "/tmp/payo-starknet-devnet" >> "$GITHUB_PATH"
+          test "$(/tmp/payo-starknet-devnet/starknet-devnet --version)" = "starknet-devnet ${payo_devnet_version}"
+
       - name: Reserve low-memory prover swap
         run: |
           swapon --show
@@ -103,6 +117,31 @@ jobs:
           /usr/bin/time -v -o circuits/payroll_integrity/target/prover-benchmark-resource.txt \
             npm run proof:prove
 
+      - name: Generate deployment-bound full-topology inputs
+        env:
+          PAYO_PROOF_VALIDITY_START: "86500"
+          PAYO_PROOF_VALIDITY_EXPIRY: "87500"
+          PAYO_PROOF_DUE_AT: "86400"
+          PAYO_PROOF_VALID_UNTIL: "90000"
+        run: npm run proof:input -- circuits/payroll_integrity/Prover-phase2.toml
+
+      - name: Execute both full-topology witnesses
+        working-directory: circuits/payroll_integrity
+        run: |
+          nargo execute witness-phase2-shard-0 --prover-name Prover-phase2
+          nargo execute witness-phase2-shard-1 --prover-name Prover-phase2-shard-1
+
+      - name: Generate and self-verify both full-topology proofs
+        env:
+          PAYO_PROOF_ARTIFACT_PROFILE: phase2
+          PAYO_PROOF_FIXTURE_OUTPUT_DIR: /tmp/payo-phase2-fixtures
+        run: |
+          /usr/bin/time -v -o circuits/payroll_integrity/target/prover-benchmark-phase2-resource.txt \
+            npm run proof:prove
+          cmp \
+            circuits/payroll_integrity/target/native3-shard-0/vk \
+            circuits/payroll_integrity/target/phase2-shard-0/vk
+
       - name: Reproduce the Garaga verifier from the proof-bound key
         run: |
           mkdir -p /tmp/payo-garaga-generated
@@ -118,7 +157,7 @@ jobs:
 
       - name: Validate freshly generated Starknet calldata
         run: |
-          node -e 'const fs=require("fs"); for (const shard of [0,1]) { const manifest=JSON.parse(fs.readFileSync(`circuits/payroll_integrity/target/prover-benchmark-shard-${shard}.json`)); for (const prefix of ["circuits/payroll_integrity/target", "contracts/integrity_verifier/tests"]) { const path=`${prefix}/proof_calldata-shard-${shard}.txt`; const values=fs.readFileSync(path,"utf8").trim().split(/\s+/); if (values.length !== manifest.calldataFelts) throw new Error(`${path} has ${values.length} felts; expected ${manifest.calldataFelts}`); if (values.some((value) => !/^0x[0-9a-f]+$/i.test(value))) throw new Error(`${path} contains malformed calldata`); } }'
+          node -e 'const fs=require("fs"); for (const profile of ["native3","phase2"]) for (const shard of [0,1]) { const suffix=profile==="native3"?`shard-${shard}`:`phase2-shard-${shard}`; const manifest=JSON.parse(fs.readFileSync(`circuits/payroll_integrity/target/prover-benchmark-${suffix}.json`)); const paths=[`circuits/payroll_integrity/target/proof_calldata-${suffix}.txt`]; if (profile==="native3") paths.push(`contracts/integrity_verifier/tests/proof_calldata-shard-${shard}.txt`); for (const path of paths) { const values=fs.readFileSync(path,"utf8").trim().split(/\s+/); if (values.length !== manifest.calldataFelts) throw new Error(`${path} has ${values.length} felts; expected ${manifest.calldataFelts}`); if (values.some((value) => !/^0x[0-9a-f]+$/i.test(value))) throw new Error(`${path} contains malformed calldata`); } }'
 
       - name: Build and test committed real proof fixtures in Cairo
         working-directory: contracts/integrity_verifier
@@ -136,6 +175,10 @@ jobs:
             contracts/integrity_verifier/tests/proof_calldata-shard-0.txt
           cp circuits/payroll_integrity/target/proof_calldata-shard-1.txt \
             contracts/integrity_verifier/tests/proof_calldata-shard-1.txt
+          cp /tmp/payo-phase2-fixtures/proof_calldata-phase2-shard-0.txt \
+            contracts/integrity_verifier/tests/proof_calldata-phase2-shard-0.txt
+          cp /tmp/payo-phase2-fixtures/proof_calldata-phase2-shard-1.txt \
+            contracts/integrity_verifier/tests/proof_calldata-phase2-shard-1.txt
           cd contracts/integrity_verifier
           snforge test
 
@@ -144,6 +187,56 @@ jobs:
         run: |
           scarb build
           snforge test
+
+      - name: Pass dynamically deployment-bound proofs through standalone RPC Devnet
+        run: |
+          starknet-devnet \
+            --accounts 3 \
+            --seed 20260824 \
+            --start-time 100 \
+            --port 5050 \
+            --state-archive-capacity full \
+            --proof-mode none \
+            > /tmp/payo-starknet-devnet.log 2>&1 &
+          payo_devnet_pid=$!
+          trap 'kill "$payo_devnet_pid"' EXIT
+          for payo_attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:5050/is_alive > /dev/null; then break; fi
+            if ! kill -0 "$payo_devnet_pid" 2>/dev/null; then
+              cat /tmp/payo-starknet-devnet.log
+              exit 1
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:5050/is_alive > /dev/null
+
+          npm run phase2:devnet:check-artifacts
+          node scripts/test-phase2-devnet.mjs deploy
+          payo_deployment="circuits/payroll_integrity/target/phase2-devnet-deployment.json"
+          payo_chain_id="$(jq -r .chainId "$payo_deployment")"
+          payo_seal_address="$(jq -r .contracts.payrollSeal.address "$payo_deployment")"
+          payo_validity_start="$(jq -r .activationAt "$payo_deployment")"
+          payo_validity_expiry=$((payo_validity_start + 1000))
+          payo_due_at=$((payo_validity_start - 100))
+          payo_valid_until="$(jq -r .expiresAt "$payo_deployment")"
+          PAYO_PROOF_CHAIN_ID="$payo_chain_id" \
+          PAYO_PROOF_SEAL_ADDRESS="$payo_seal_address" \
+          PAYO_PROOF_VALIDITY_START="$payo_validity_start" \
+          PAYO_PROOF_VALIDITY_EXPIRY="$payo_validity_expiry" \
+          PAYO_PROOF_DUE_AT="$payo_due_at" \
+          PAYO_PROOF_VALID_UNTIL="$payo_valid_until" \
+            npm run proof:input -- circuits/payroll_integrity/Prover-devnet.toml
+          (
+            cd circuits/payroll_integrity
+            nargo execute witness-devnet-shard-0 --prover-name Prover-devnet
+            nargo execute witness-devnet-shard-1 --prover-name Prover-devnet-shard-1
+          )
+          node scripts/test-phase2-devnet.mjs schedule
+          PAYO_PROOF_ARTIFACT_PROFILE=devnet npm run proof:prove
+          cmp \
+            circuits/payroll_integrity/target/native3-shard-0/vk \
+            circuits/payroll_integrity/target/devnet-shard-0/vk
+          node scripts/test-phase2-devnet.mjs verify
 
       - name: Run application checks
         run: |
@@ -154,6 +247,7 @@ jobs:
         run: |
           sha256sum \
             public/circuits/payroll_integrity-v1.json \
+            public/circuits/payroll_integrity-v1.vk.hex \
             circuits/payroll_integrity/target/native3-shard-0/vk \
             circuits/payroll_integrity/target/native3-shard-0/proof \
             circuits/payroll_integrity/target/native3-shard-0/public_inputs \
@@ -188,8 +282,18 @@ jobs:
             circuits/payroll_integrity/target/gates.json
             circuits/payroll_integrity/target/native3-shard-0/
             circuits/payroll_integrity/target/native3-shard-1/
+            circuits/payroll_integrity/target/phase2-shard-0/
+            circuits/payroll_integrity/target/phase2-shard-1/
+            circuits/payroll_integrity/target/devnet-shard-0/
+            circuits/payroll_integrity/target/devnet-shard-1/
             circuits/payroll_integrity/target/proof_calldata-shard-0.txt
             circuits/payroll_integrity/target/proof_calldata-shard-1.txt
+            circuits/payroll_integrity/target/proof_calldata-phase2-shard-0.txt
+            circuits/payroll_integrity/target/proof_calldata-phase2-shard-1.txt
+            circuits/payroll_integrity/target/proof_calldata-devnet-shard-0.txt
+            circuits/payroll_integrity/target/proof_calldata-devnet-shard-1.txt
+            circuits/payroll_integrity/target/phase2-devnet-deployment.json
+            circuits/payroll_integrity/target/phase2-devnet-evidence.json
             circuits/payroll_integrity/target/prover-benchmark*.json
             circuits/payroll_integrity/target/prover-benchmark-resource.txt
             circuits/payroll_integrity/target/browser-proof-benchmark.json

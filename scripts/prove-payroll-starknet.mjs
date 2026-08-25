@@ -15,6 +15,13 @@ const shards = requestedShard ? [Number(requestedShard)] : [0, 1];
 const bbBinary = process.env.PAYO_BB_BINARY || "bb";
 const crsPath = process.env.PAYO_BB_CRS_PATH;
 const reuseArtifacts = process.env.PAYO_PROOF_REUSE_ARTIFACTS === "true";
+const artifactProfile = process.env.PAYO_PROOF_ARTIFACT_PROFILE || "native3";
+const fixtureOutputDirectory = process.env.PAYO_PROOF_FIXTURE_OUTPUT_DIR
+  ? resolve(root, process.env.PAYO_PROOF_FIXTURE_OUTPUT_DIR)
+  : null;
+if (!/^[a-z0-9-]{1,40}$/.test(artifactProfile)) {
+  throw new Error("PAYO_PROOF_ARTIFACT_PROFILE must use lowercase letters, numbers, or hyphens.");
+}
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -52,9 +59,14 @@ await initGaraga();
 const manifests = [];
 
 for (const shard of shards) {
-  const witnessPath = resolve(target, `witness-shard-${shard}.gz`);
-  const outputPath = resolve(target, `native3-shard-${shard}`);
-  const canonicalVk = resolve(target, "native3-shard-0/vk");
+  const witnessPath = resolve(
+    target,
+    artifactProfile === "native3"
+      ? `witness-shard-${shard}.gz`
+      : `witness-${artifactProfile}-shard-${shard}.gz`,
+  );
+  const outputPath = resolve(target, `${artifactProfile}-shard-${shard}`);
+  const canonicalVk = resolve(target, `${artifactProfile}-shard-0/vk`);
   await mkdir(outputPath, { recursive: true });
 
   const proveArgs = [
@@ -95,7 +107,7 @@ for (const shard of shards) {
     throw new Error(`Shard ${shard} proof exposes shard index ${decoded[16]}.`);
   }
   if (manifests[0]) {
-    const firstInputs = parsePublicInputs(await readFile(resolve(target, "native3-shard-0/public_inputs")));
+    const firstInputs = parsePublicInputs(await readFile(resolve(target, `${artifactProfile}-shard-0/public_inputs`)));
     for (let index = 0; index < 16; index += 1) {
       if (decoded[index] !== firstInputs[index]) {
         throw new Error(`Shard public input ${index} does not match shard zero.`);
@@ -117,8 +129,16 @@ for (const shard of shards) {
   // Our Cairo dispatcher and Starknet.js add that length when serializing the
   // Span, so the portable proof fixture must contain only the inner felts.
   const calldata = serializedCalldata.slice(1);
-  const calldataPath = resolve(target, `proof_calldata-shard-${shard}.txt`);
-  await writeFile(calldataPath, `${calldata.map((value) => `0x${value.toString(16)}`).join("\n")}\n`);
+  const fixtureLabel = artifactProfile === "native3"
+    ? `shard-${shard}`
+    : `${artifactProfile}-shard-${shard}`;
+  const calldataPath = resolve(target, `proof_calldata-${fixtureLabel}.txt`);
+  const calldataText = `${calldata.map((value) => `0x${value.toString(16)}`).join("\n")}\n`;
+  await writeFile(calldataPath, calldataText);
+  if (fixtureOutputDirectory) {
+    await mkdir(fixtureOutputDirectory, { recursive: true });
+    await writeFile(resolve(fixtureOutputDirectory, `proof_calldata-${fixtureLabel}.txt`), calldataText);
+  }
 
   const manifest = {
     shard,
@@ -138,14 +158,17 @@ for (const shard of shards) {
   };
   manifests.push(manifest);
   await writeFile(
-    resolve(target, `prover-benchmark-shard-${shard}.json`),
+    resolve(target, `prover-benchmark-${fixtureLabel}.json`),
     `${JSON.stringify(manifest, null, 2)}\n`,
   );
   process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 if (manifests.length === 2) {
-  await writeFile(resolve(target, "prover-benchmark.json"), `${JSON.stringify({
+  const benchmarkPath = artifactProfile === "native3"
+    ? "prover-benchmark.json"
+    : `prover-benchmark-${artifactProfile}.json`;
+  await writeFile(resolve(target, benchmarkPath), `${JSON.stringify({
     scheme: "ultra_keccak_zk_honk",
     linkedShardCount: 2,
     selfVerified: manifests.every((manifest) => manifest.selfVerified),

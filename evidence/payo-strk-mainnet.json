@@ -1,0 +1,65 @@
+{
+  "evidenceVersion": "payo-proof-bound-strk-mainnet-v1",
+  "network": "SN_MAIN",
+  "wallet": {
+    "name": "Ready",
+    "walletApiVersion": "0.10.3"
+  },
+  "token": {
+    "symbol": "STRK",
+    "address": "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
+    "decimals": 18
+  },
+  "contracts": {
+    "pool": "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+    "generatedVerifier": "0x475cc47caf5d8b5b3a719915ceef5ae3e959f8754f2c0faa634d2e8c73d06db",
+    "bundleVerifier": "0x2755c2260220f44c319249402887ca50c8b968ab43364e90de54f5afd66759",
+    "payrollSeal": "0x4bde3263ff117f245f9ebea20670b363550951f61cf54f236c449f70181c01f"
+  },
+  "payroll": {
+    "transactionHash": "0x345a1be9710d3630915d6cd8279173ce47b198161f4c8a9cb4c64e1fc98fb26",
+    "blockNumber": 13833610,
+    "executionStatus": "SUCCEEDED",
+    "finalityStatus": "ACCEPTED_ON_L2"
+  },
+  "run": {
+    "nullifierHigh": "0x5536ab37dd678012d6978f3cba7cce79",
+    "nullifierLow": "0x41cc3af7cd78b05d6f10f2a30df77b8b",
+    "onchainStatus": 2,
+    "onchainStatusLabel": "proven",
+    "shardVerified": [true, true]
+  },
+  "verifierShards": [
+    {
+      "index": 0,
+      "transactionHash": "0x75d8f23f287125a73e8d8dc091d8782bbe3838c1f9cb34a15b2f120cb9e9639",
+      "blockNumber": 13833625,
+      "executionStatus": "SUCCEEDED",
+      "finalityStatus": "ACCEPTED_ON_L2"
+    },
+    {
+      "index": 1,
+      "transactionHash": "0x2eb9e69bfef8b5f6f6a4b97baf7072624819fd1a161f7f04e527ecc69dae0a7",
+      "blockNumber": 13833635,
+      "executionStatus": "SUCCEEDED",
+      "finalityStatus": "ACCEPTED_ON_L2"
+    }
+  ],
+  "recipientAttestation": {
+    "source": "employee_ready_wallet_and_user_confirmation",
+    "asset": "STRK",
+    "recipientRelationship": "external_employee_wallet",
+    "publicSettlementProof": "unavailable_by_design"
+  },
+  "privacy": {
+    "recipient": "withheld",
+    "salaryAmount": "withheld",
+    "reason": "STRK20 hides private recipients and amounts; repository evidence records only public proof and settlement state."
+  },
+  "topologyVerification": {
+    "passed": true,
+    "blockNumber": 13834173,
+    "verifiedAt": "2026-08-25T08:32:00.271Z"
+  },
+  "observedAt": "2026-08-25T08:16:42.568Z"
+}

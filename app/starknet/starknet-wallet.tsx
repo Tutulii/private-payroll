@@ -4,6 +4,7 @@ import { createStore, type Store } from "@starknet-io/get-starknet-discovery";
 import type { WalletWithStarknetFeatures } from "@starknet-io/get-starknet-wallet-standard/features";
 import {
   constants as starknetConstants,
+  hash,
   num,
   RpcProvider,
   uint256,
@@ -11,6 +12,7 @@ import {
   WalletAccountV6,
   walletV6,
   type STRK20_ACTION,
+  type STRK20_INVOKE_ACTION,
 } from "starknet";
 import {
   createContext,
@@ -33,6 +35,28 @@ import {
   type PayrollTokenSymbol,
   type TokenBalanceMap,
 } from "./tokens";
+import {
+  STARKNET_MAINNET_CHAIN_ID,
+  STRK20_MAINNET_POOL_ADDRESS,
+} from "@/lib/starknet/deployment";
+import {
+  buildPrivatePayrollActions,
+  requiredPayrollReservesForQuotes,
+} from "@/lib/starknet/private-payroll";
+import { describeWalletError } from "@/lib/starknet/wallet-error";
+import {
+  prepareFxRootPublication,
+  preparePayoBaselineSchedule,
+  prepareObligationRootSchedule,
+  rootLimbs,
+} from "@/lib/starknet/payo-registry";
+import {
+  buildPayoMainnetTopologyPlan,
+  PAYO_DEPLOYMENT_ARTIFACT_NAMES,
+  type PayoBrowserDeploymentPackage,
+  type PayoDeploymentArtifactName,
+  type PayoMainnetTopologyPlan,
+} from "@/lib/starknet/payo-deployment-plan";
 
 export {
   formatTokenAmount,
@@ -45,11 +69,10 @@ export {
   type PayrollTokenSymbol,
 } from "./tokens";
 
-export const STRK20_MAINNET_POOL_ADDRESS =
-  "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a";
 export const STRK20_SETUP_URL = "https://strk20.starknet.io/app";
-export const STARKNET_MAINNET_CHAIN_ID = starknetConstants.StarknetChainId.SN_MAIN;
 export const STARKNET_MAINNET_EXPLORER = "https://starkscan.co";
+
+export { STARKNET_MAINNET_CHAIN_ID, STRK20_MAINNET_POOL_ADDRESS };
 
 const starknetRpcUrl =
   process.env.NEXT_PUBLIC_STARKNET_RPC_URL ?? "https://rpc.starknet.lava.build";
@@ -68,18 +91,64 @@ export type WalletChoice = {
 };
 
 export type PrivateTransaction = {
-  kind: "shield" | "payroll";
+  kind: "shield" | "payroll" | "registry" | "deployment";
   stage: "wallet" | "confirming" | "confirmed" | "failed";
   label: string;
   hash?: string;
   error?: string;
   grossAmount?: bigint;
-  privacyFee?: bigint;
+  walletFee?: bigint;
+  feeToken?: PayrollTokenSymbol;
   netAmount?: bigint;
   balanceRefreshed?: boolean;
   balanceRefreshError?: string;
   token?: PayrollTokenSymbol;
   totals?: Partial<Record<PayrollTokenSymbol, bigint>>;
+  feeReserves?: Partial<Record<PayrollTokenSymbol, bigint>>;
+  feeQuoteExact?: boolean;
+  shieldedBalanceBefore?: bigint;
+};
+
+export type ObligationRootScheduleResult = {
+  transactionHash: string;
+  validAfter: number;
+  expiresAt: number;
+};
+
+export type ShieldFeeQuote = {
+  token: PayrollTokenSymbol;
+  grossAmount: bigint;
+  walletFee: bigint;
+  netAmount: bigint;
+  source: "pool-onchain" | "paymaster-live-estimate";
+  exact: boolean;
+  quotedAt: number;
+};
+
+type PrivateFeeQuote = Pick<
+  ShieldFeeQuote,
+  "token" | "walletFee" | "source" | "exact" | "quotedAt"
+>;
+
+export type PayoDeploymentProgress = {
+  stage: "checking" | "declaring" | "deploying" | "verifying";
+  message: string;
+  contract?: PayoDeploymentArtifactName;
+  transactionHash?: string;
+};
+
+export type PayoMainnetDeploymentResult = {
+  plan: PayoMainnetTopologyPlan;
+  declarationTransactionHashes: Partial<Record<PayoDeploymentArtifactName, string>>;
+  deploymentTransactionHash: string | null;
+  verifiedBlockNumber: number;
+};
+
+export type PayoBaselineScheduleResult = {
+  transactionHash: string;
+  policyRoot: string;
+  validAfter: number;
+  expiresAt: number;
 };
 
 export type PrivacyCapability =
@@ -112,9 +181,6 @@ type StarknetWalletContextValue = {
   publicStrkBalance: bigint | null;
   isRefreshingPublicBalance: boolean;
   publicBalanceError: string;
-  privacyFee: bigint | null;
-  isRefreshingPrivacyFee: boolean;
-  privacyFeeError: string;
   isRefreshingBalance: boolean;
   transaction: PrivateTransaction | null;
   error: string;
@@ -122,11 +188,30 @@ type StarknetWalletContextValue = {
   disconnectWallet: () => Promise<void>;
   switchToMainnet: () => Promise<void>;
   refreshPublicBalance: () => Promise<bigint>;
-  refreshPrivacyFee: () => Promise<bigint>;
   refreshBalance: () => Promise<void>;
-  shieldToken: (token: PayrollTokenSymbol, amount: string) => Promise<string>;
+  quoteShieldToken: (token: PayrollTokenSymbol, amount: string) => Promise<ShieldFeeQuote>;
+  shieldToken: (token: PayrollTokenSymbol, amount: string, quote?: ShieldFeeQuote) => Promise<string>;
   shieldStrk: (amount: string) => Promise<string>;
-  runPrivatePayroll: (recipients: PayrollRecipient[]) => Promise<string>;
+  runProofBoundPayroll: (
+    recipients: PayrollRecipient[],
+    payoAction: STRK20_INVOKE_ACTION,
+  ) => Promise<string>;
+  scheduleObligationRoot: (agreementRoot: string) => Promise<ObligationRootScheduleResult>;
+  isObligationRootActive: (agreementRoot: string) => Promise<boolean>;
+  publishFxRoot: (input: {
+    root: string;
+    observedAt: number;
+    maximumAgeSeconds: number;
+  }) => Promise<string>;
+  isFxRootActive: (fxRoot: string) => Promise<boolean>;
+  deployPayoMainnet: (
+    deploymentPackage: PayoBrowserDeploymentPackage,
+    onProgress?: (progress: PayoDeploymentProgress) => void,
+  ) => Promise<PayoMainnetDeploymentResult>;
+  schedulePayoBaseline: (
+    plan: PayoMainnetTopologyPlan,
+    policyRoot: string,
+  ) => Promise<PayoBaselineScheduleResult>;
   clearTransaction: () => void;
 };
 
@@ -142,27 +227,17 @@ function isReadyWallet(name: string) {
 }
 
 function describeError(error: unknown) {
-  if (typeof error === "string") return error;
-  if (error && typeof error === "object") {
-    const candidate = error as {
-      code?: unknown;
-      message?: unknown;
-      data?: unknown;
-      error?: { code?: unknown; message?: unknown; data?: unknown };
-    };
-    const message = candidate.message ?? candidate.error?.message;
-    const code = candidate.code ?? candidate.error?.code;
-    const data = candidate.data ?? candidate.error?.data;
-    if (typeof message === "string" && (typeof code === "string" || typeof code === "number")) {
-      return `${message} (${code})${typeof data === "string" ? `: ${data}` : ""}`;
-    }
-    if (typeof message === "string") {
-      return `${message}${typeof data === "string" ? `: ${data}` : ""}`;
-    }
-    if (typeof code === "string" || typeof code === "number") return String(code);
-  }
-  if (error instanceof Error) return error.message;
-  return "The wallet did not complete the request.";
+  return describeWalletError(error);
+}
+
+function missingStarknetClass(error: unknown): boolean {
+  return /class hash not found|undeclared class|class_hash_not_found/i.test(describeError(error));
+}
+
+function missingStarknetContract(error: unknown): boolean {
+  return /contract not found|contract_address_not_found|uninitialized contract/i.test(
+    describeError(error),
+  );
 }
 
 function walletErrorCode(error: unknown): string {
@@ -207,17 +282,6 @@ async function readMainnetPoolRegistration(address: string): Promise<boolean | n
   } catch {
     return null;
   }
-}
-
-async function readMainnetPrivacyFee(): Promise<bigint> {
-  const result = await mainnetProvider.callContract({
-    contractAddress: STRK20_MAINNET_POOL_ADDRESS,
-    entrypoint: "get_fee_amount",
-    calldata: [],
-  });
-  const fee = num.toBigInt(result[0] ?? "0x0");
-  if (fee < 0n) throw new Error("The STRK20 pool returned an invalid privacy fee.");
-  return fee;
 }
 
 async function readMainnetPublicTokenBalance(
@@ -289,9 +353,6 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
   const [publicBalances, setPublicBalances] = useState<TokenBalanceMap>(emptyTokenBalances);
   const [isRefreshingPublicBalance, setIsRefreshingPublicBalance] = useState(false);
   const [publicBalanceError, setPublicBalanceError] = useState("");
-  const [privacyFee, setPrivacyFee] = useState<bigint | null>(null);
-  const [isRefreshingPrivacyFee, setIsRefreshingPrivacyFee] = useState(false);
-  const [privacyFeeError, setPrivacyFeeError] = useState("");
   const [isRefreshingBalance, setIsRefreshingBalance] = useState(false);
   const [privacyCapability, setPrivacyCapability] = useState<PrivacyCapability>("unknown");
   const [privacyMessage, setPrivacyMessage] = useState("");
@@ -313,36 +374,6 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     const unsubscribe = store.subscribe(updateWallets);
     return unsubscribe;
   }, []);
-
-  const refreshPrivacyFee = useCallback(async () => {
-    setIsRefreshingPrivacyFee(true);
-    setPrivacyFeeError("");
-    try {
-      const fee = await readMainnetPrivacyFee();
-      setPrivacyFee(fee);
-      return fee;
-    } catch (feeError) {
-      const message = describeError(feeError);
-      setPrivacyFee(null);
-      setPrivacyFeeError(message);
-      throw new Error(message);
-    } finally {
-      setIsRefreshingPrivacyFee(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    const initialRefresh = window.setTimeout(() => {
-      void refreshPrivacyFee().catch(() => undefined);
-    }, 0);
-    const interval = window.setInterval(() => {
-      void refreshPrivacyFee().catch(() => undefined);
-    }, 30_000);
-    return () => {
-      window.clearTimeout(initialRefresh);
-      window.clearInterval(interval);
-    };
-  }, [refreshPrivacyFee]);
 
   const refreshPublicBalanceForAddress = useCallback(async (walletAddress: string) => {
     setIsRefreshingPublicBalance(true);
@@ -435,6 +466,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
           ? "Your enabled private treasury balances are available for payroll."
           : "Your STRK20 account is ready but its private payroll balances are zero.",
       );
+      return nextBalances;
     } catch (balanceError) {
       const message = describeError(balanceError);
       setShieldedBalance(null);
@@ -629,16 +661,35 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
         await mainnetProvider.waitForTransaction(hash, { retries: 400, retryInterval: 3000 });
         let balanceRefreshed = false;
         let balanceRefreshError = "";
+        let refreshedBalances: Record<PayrollTokenSymbol, bigint> | null = null;
         if (walletAccount) {
           try {
-            await refreshBalanceForAccount(walletAccount);
+            refreshedBalances = await refreshBalanceForAccount(walletAccount);
             balanceRefreshed = true;
           } catch (refreshError) {
             balanceRefreshError = describeError(refreshError);
           }
         }
+        const confirmed = { ...pending };
+        if (
+          pending.kind === "shield"
+          && pending.token
+          && pending.grossAmount !== undefined
+          && pending.shieldedBalanceBefore !== undefined
+          && refreshedBalances
+        ) {
+          const after = refreshedBalances[pending.token];
+          const actualNet = after >= pending.shieldedBalanceBefore
+            ? after - pending.shieldedBalanceBefore
+            : 0n;
+          if (actualNet <= pending.grossAmount) {
+            confirmed.netAmount = actualNet;
+            confirmed.walletFee = pending.grossAmount - actualNet;
+            confirmed.feeQuoteExact = true;
+          }
+        }
         setTransaction({
-          ...pending,
+          ...confirmed,
           stage: "confirmed",
           hash,
           balanceRefreshed,
@@ -667,7 +718,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
       actions: STRK20_ACTION[],
       details: Pick<
         PrivateTransaction,
-        "grossAmount" | "privacyFee" | "netAmount" | "token" | "totals"
+        "grossAmount" | "walletFee" | "feeToken" | "netAmount" | "token" | "totals" | "feeReserves" | "feeQuoteExact" | "shieldedBalanceBefore"
       > = {},
     ) => {
       if (!walletAccount || !address) throw new Error("Connect Ready wallet first.");
@@ -733,14 +784,83 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     [address, chainId, confirmTransaction, privacyCapability, selectedWallet?.name, walletAccount],
   );
 
+  const requestPrivateFeeQuote = useCallback(
+    async (tokenSymbol: PayrollTokenSymbol): Promise<PrivateFeeQuote> => {
+      if (!walletAccount || !address) throw new Error("Connect Ready wallet first.");
+      if (chainId !== STARKNET_MAINNET_CHAIN_ID) {
+        throw new Error("Switch Ready to Starknet Mainnet before requesting a private fee quote.");
+      }
+      if (privacyCapability === "unsupported" || privacyCapability === "uninitialized") {
+        throw new Error("This account cannot request a STRK20 fee quote yet.");
+      }
+      assertPrivacyTokenEnabled(tokenSymbol);
+      const response = await fetch(`/api/v1/strk20-fee-quote?token=${tokenSymbol}`, {
+        cache: "no-store",
+      });
+      const payload = await response.json() as {
+        token?: string;
+        walletFee?: string;
+        exact?: boolean;
+        source?: string;
+        quotedAt?: number;
+        error?: { message?: string };
+      };
+      if (!response.ok) {
+        throw new Error(payload.error?.message ?? "The live STRK20 fee quote is unavailable.");
+      }
+      if (
+        payload.token !== tokenSymbol
+        || typeof payload.walletFee !== "string"
+        || typeof payload.exact !== "boolean"
+        || (payload.source !== "pool-onchain" && payload.source !== "paymaster-live-estimate")
+        || !Number.isSafeInteger(payload.quotedAt)
+      ) {
+        throw new Error("The live STRK20 fee service returned an invalid quote.");
+      }
+      const walletFee = BigInt(payload.walletFee);
+      if (walletFee <= 0n) throw new Error("The live STRK20 fee service returned a zero fee.");
+      return {
+        token: tokenSymbol,
+        walletFee,
+        source: payload.source,
+        exact: payload.exact,
+        quotedAt: payload.quotedAt!,
+      };
+    },
+    [address, chainId, privacyCapability, walletAccount],
+  );
+
+  const quoteShieldToken = useCallback(
+    async (tokenSymbol: PayrollTokenSymbol, amount: string): Promise<ShieldFeeQuote> => {
+      const token = PAYROLL_TOKENS[tokenSymbol];
+      const grossAmount = parseTokenAmount(amount, token);
+      const quote = await requestPrivateFeeQuote(tokenSymbol);
+      if (grossAmount <= quote.walletFee) {
+        throw new Error(
+          `Enter more than ${formatTokenAmount(quote.walletFee, token)} ${token.symbol} to cover the live private fee reserve.`,
+        );
+      }
+      return {
+        ...quote,
+        grossAmount,
+        netAmount: grossAmount - quote.walletFee,
+      };
+    },
+    [requestPrivateFeeQuote],
+  );
+
   const shieldToken = useCallback(
-    async (tokenSymbol: PayrollTokenSymbol, amount: string) => {
+    async (tokenSymbol: PayrollTokenSymbol, amount: string, suppliedQuote?: ShieldFeeQuote) => {
       if (!address) throw new Error("Connect Ready wallet first.");
       const token = PAYROLL_TOKENS[tokenSymbol];
       assertPrivacyTokenEnabled(tokenSymbol);
       const grossAmount = parseTokenAmount(amount, token);
-      const [currentPrivacyFee, currentPublicBalances] = await Promise.all([
-        refreshPrivacyFee(),
+      const quoteIsFresh = suppliedQuote?.token === tokenSymbol
+        && suppliedQuote.grossAmount === grossAmount
+        && Date.now() - suppliedQuote.quotedAt >= 0
+        && Date.now() - suppliedQuote.quotedAt <= 30_000;
+      const [quote, currentPublicBalances] = await Promise.all([
+        quoteIsFresh ? Promise.resolve(suppliedQuote) : quoteShieldToken(tokenSymbol, amount),
         refreshPublicBalanceForAddress(address),
       ]);
       const currentTokenBalance = currentPublicBalances[tokenSymbol];
@@ -750,28 +870,22 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
         );
       }
 
-      let netAmount = grossAmount;
-      if (token.feeBehavior === "deduct-from-strk-shield") {
-        if (grossAmount <= currentPrivacyFee) {
-          throw new Error(
-            `Enter more than ${formatStrk(currentPrivacyFee)} STRK to cover the live STRK20 privacy fee.`,
-          );
-        }
-        netAmount = grossAmount - currentPrivacyFee;
-      } else if (currentPublicBalances.STRK < currentPrivacyFee) {
-        throw new Error(
-          `USDC shielding also needs ${formatStrk(currentPrivacyFee)} public STRK for the STRK20 privacy fee. Available ${formatStrk(currentPublicBalances.STRK)} STRK.`,
-        );
-      }
-
       return submitPrivateActions(
         "shield",
-        `${formatTokenAmount(netAmount, token)} ${token.symbol} shielded`,
+        `${formatTokenAmount(quote.netAmount, token)} ${token.symbol} shielded`,
         [{ type: "deposit", token: token.address, amount: num.toHex(grossAmount) }],
-        { grossAmount, privacyFee: currentPrivacyFee, netAmount, token: token.symbol },
+        {
+          grossAmount,
+          walletFee: quote.walletFee,
+          feeToken: quote.token,
+          netAmount: quote.netAmount,
+          token: token.symbol,
+          feeQuoteExact: quote.exact,
+          shieldedBalanceBefore: shieldedBalances[tokenSymbol] ?? undefined,
+        },
       );
     },
-    [address, refreshPrivacyFee, refreshPublicBalanceForAddress, submitPrivateActions],
+    [address, quoteShieldToken, refreshPublicBalanceForAddress, shieldedBalances, submitPrivateActions],
   );
 
   const shieldStrk = useCallback(
@@ -779,67 +893,500 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     [shieldToken],
   );
 
-  const runPrivatePayroll = useCallback(
-    async (recipients: PayrollRecipient[]) => {
-      if (recipients.length === 0) throw new Error("Add at least one recipient.");
-      if (recipients.length > 50) throw new Error("A payroll can contain up to 50 recipients.");
+  const runProofBoundPayroll = useCallback(
+    async (recipients: PayrollRecipient[], payoAction: STRK20_INVOKE_ACTION) => {
+      const configuredSeal = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
+      const { actions, totals } = buildPrivatePayrollActions(
+        recipients,
+        payoAction,
+        configuredSeal ?? "",
+      );
 
-      const seenDestinations = new Set<string>();
-      const totals: Record<PayrollTokenSymbol, bigint> = { STRK: 0n, USDC: 0n };
-      const actions: STRK20_ACTION[] = recipients.map((recipient, index) => {
-        let parsedAddress: string;
-        try {
-          parsedAddress = validateAndParseAddress(recipient.address.trim());
-        } catch {
-          throw new Error(`Recipient ${index + 1} has an invalid Starknet address.`);
-        }
-        const token = PAYROLL_TOKENS[recipient.token];
-        if (!token) throw new Error(`Recipient ${index + 1} uses an unsupported payroll token.`);
-        assertPrivacyTokenEnabled(recipient.token);
-        const destinationKey = `${parsedAddress}:${token.symbol}`;
-        if (seenDestinations.has(destinationKey)) {
-          throw new Error(`Recipient ${index + 1} duplicates the same address and token.`);
-        }
-        seenDestinations.add(destinationKey);
-
-        const atomicAmount = parseTokenAmount(recipient.amount, token);
-        totals[token.symbol] += atomicAmount;
-        return {
-          type: "transfer",
-          token: token.address,
-          amount: num.toHex(atomicAmount),
-          recipient: parsedAddress,
-        };
-      });
+      if (!walletAccount) throw new Error("Connect Ready wallet first.");
+      const activeTokens = PAYROLL_TOKEN_LIST.filter((token) => totals[token.symbol] > 0n);
+      const [feeQuotes, currentShieldedBalances] = await Promise.all([
+        Promise.all(activeTokens.map((token) => requestPrivateFeeQuote(token.symbol))),
+        refreshBalanceForAccount(walletAccount),
+      ]);
+      const feeReserves: Record<PayrollTokenSymbol, bigint> = { STRK: 0n, USDC: 0n };
+      for (const quote of feeQuotes) feeReserves[quote.token] = quote.walletFee;
+      const requiredReserves = requiredPayrollReservesForQuotes(totals, feeReserves);
 
       for (const token of PAYROLL_TOKEN_LIST) {
-        const balance = shieldedBalances[token.symbol];
-        if (totals[token.symbol] > 0n && (balance === null || totals[token.symbol] > balance)) {
+        const balance = currentShieldedBalances[token.symbol];
+        const required = requiredReserves[token.symbol];
+        if (required > 0n && (balance === null || required > balance)) {
           throw new Error(
-            `The shielded ${token.symbol} treasury does not cover this payroll. Required ${formatTokenAmount(totals[token.symbol], token)} ${token.symbol}; available ${formatTokenAmount(balance, token)} ${token.symbol}.`,
+            `The shielded ${token.symbol} treasury does not cover this payroll and its passive fee reserve. Required ${formatTokenAmount(required, token)} ${token.symbol} (${formatTokenAmount(totals[token.symbol], token)} payroll + ${formatTokenAmount(feeReserves[token.symbol], token)} fee); available ${formatTokenAmount(balance, token)} ${token.symbol}.`,
           );
         }
       }
 
-      const currentPublicBalances = address
-        ? await refreshPublicBalanceForAddress(address)
-        : null;
-      const currentFee = await refreshPrivacyFee();
-      if (!currentPublicBalances || currentPublicBalances.STRK < currentFee) {
-        throw new Error(
-          `Private payroll needs ${formatStrk(currentFee)} public STRK for the STRK20 privacy fee.`,
-        );
-      }
+      const singleFeeQuote = feeQuotes.length === 1 ? feeQuotes[0] : undefined;
 
       return submitPrivateActions(
         "payroll",
         `${recipients.length} private ${recipients.length === 1 ? "payment" : "payments"}`,
         actions,
-        { totals },
+        {
+          totals,
+          feeReserves,
+          walletFee: singleFeeQuote?.walletFee,
+          feeToken: singleFeeQuote?.token,
+          feeQuoteExact: feeQuotes.every((quote) => quote.exact),
+        },
       );
     },
-    [address, refreshPrivacyFee, refreshPublicBalanceForAddress, shieldedBalances, submitPrivateActions],
+    [refreshBalanceForAccount, requestPrivateFeeQuote, submitPrivateActions, walletAccount],
   );
+
+  const scheduleObligationRoot = useCallback(async (
+    agreementRoot: string,
+  ): Promise<ObligationRootScheduleResult> => {
+    if (!walletAccount || !address) throw new Error("Connect Ready wallet first.");
+    if (chainId !== STARKNET_MAINNET_CHAIN_ID) {
+      throw new Error("Switch Ready to Starknet Mainnet before scheduling an obligation root.");
+    }
+    const registryAddress = process.env.NEXT_PUBLIC_PAYO_OBLIGATION_REGISTRY_ADDRESS;
+    if (!registryAddress) {
+      throw new Error("The PAYO obligation registry is not deployed/configured.");
+    }
+    if (privateActionLockRef.current) {
+      throw new Error("A Mainnet wallet request is already active.");
+    }
+    const [latest, adminResponse] = await Promise.all([
+      mainnetProvider.getBlock("latest"),
+      mainnetProvider.callContract({
+        contractAddress: registryAddress,
+        entrypoint: "get_admin",
+        calldata: [],
+      }),
+    ]);
+    const registryAdmin = validateAndParseAddress(adminResponse[0] ?? "0x0");
+    if (num.toBigInt(registryAdmin) !== num.toBigInt(address)) {
+      throw new Error(
+        `Connected wallet ${shortStarknetAddress(address)} is not the obligation-registry administrator ${shortStarknetAddress(registryAdmin)}.`,
+      );
+    }
+    const schedule = prepareObligationRootSchedule({
+      registryAddress,
+      agreementRoot,
+      blockTimestamp: Number(latest.timestamp),
+    });
+    const requestToken = Symbol("registry");
+    privateActionLockRef.current = requestToken;
+    const pending: PrivateTransaction = {
+      kind: "registry",
+      stage: "wallet",
+      label: "Schedule private payroll root",
+    };
+    setError("");
+    setTransaction(pending);
+    try {
+      const result = await walletAccount.execute(schedule.call);
+      const confirming: PrivateTransaction = {
+        ...pending,
+        stage: "confirming",
+        hash: result.transaction_hash,
+      };
+      setTransaction(confirming);
+      await mainnetProvider.waitForTransaction(result.transaction_hash, {
+        retries: 400,
+        retryInterval: 3_000,
+      });
+      const { high, low } = rootLimbs(agreementRoot);
+      const active = await mainnetProvider.callContract({
+        contractAddress: registryAddress,
+        entrypoint: "is_obligation_root_valid",
+        calldata: [high.toString(), low.toString()],
+      });
+      if (num.toBigInt(active[0] ?? "0x0") === 0n) {
+        throw new Error("The obligation root confirmed but did not activate immediately.");
+      }
+      setTransaction({ ...confirming, stage: "confirmed" });
+      return {
+        transactionHash: result.transaction_hash,
+        validAfter: schedule.validAfter,
+        expiresAt: schedule.expiresAt,
+      };
+    } catch (scheduleError) {
+      const message = describeError(scheduleError);
+      setTransaction({ ...pending, stage: "failed", error: message });
+      setError(message);
+      throw new Error(message);
+    } finally {
+      if (privateActionLockRef.current === requestToken) privateActionLockRef.current = null;
+    }
+  }, [address, chainId, walletAccount]);
+
+  const isObligationRootActive = useCallback(async (agreementRoot: string): Promise<boolean> => {
+    const registryAddress = process.env.NEXT_PUBLIC_PAYO_OBLIGATION_REGISTRY_ADDRESS;
+    if (!registryAddress) throw new Error("The PAYO obligation registry is not deployed/configured.");
+    if (!/^0x[0-9a-fA-F]{64}$/.test(agreementRoot)) {
+      throw new Error("The obligation root must be a canonical 32-byte value.");
+    }
+    const { high, low } = rootLimbs(agreementRoot);
+    const response = await mainnetProvider.callContract({
+      contractAddress: registryAddress,
+      entrypoint: "is_obligation_root_valid",
+      calldata: [high.toString(), low.toString()],
+    });
+    return num.toBigInt(response[0] ?? "0x0") !== 0n;
+  }, []);
+
+  const isFxRootActive = useCallback(async (fxRoot: string): Promise<boolean> => {
+    const registryAddress = process.env.NEXT_PUBLIC_PAYO_POLICY_REGISTRY_ADDRESS;
+    if (!registryAddress) throw new Error("The PAYO policy/FX registry is not deployed/configured.");
+    const { high, low } = rootLimbs(fxRoot);
+    const response = await mainnetProvider.callContract({
+      contractAddress: registryAddress,
+      entrypoint: "is_fx_root_valid",
+      calldata: [high.toString(), low.toString()],
+    });
+    return num.toBigInt(response[0] ?? "0x0") !== 0n;
+  }, []);
+
+  const publishFxRoot = useCallback(async (input: {
+    root: string;
+    observedAt: number;
+    maximumAgeSeconds: number;
+  }): Promise<string> => {
+    if (!walletAccount || !address) throw new Error("Connect Ready wallet first.");
+    if (chainId !== STARKNET_MAINNET_CHAIN_ID) {
+      throw new Error("Switch Ready to Starknet Mainnet before publishing an FX root.");
+    }
+    const registryAddress = process.env.NEXT_PUBLIC_PAYO_POLICY_REGISTRY_ADDRESS;
+    if (!registryAddress) throw new Error("The PAYO policy/FX registry is not deployed/configured.");
+    if (privateActionLockRef.current) throw new Error("A Mainnet wallet request is already active.");
+    const [latest, publisherResponse] = await Promise.all([
+      mainnetProvider.getBlock("latest"),
+      mainnetProvider.callContract({
+        contractAddress: registryAddress,
+        entrypoint: "get_fx_publisher",
+        calldata: [],
+      }),
+    ]);
+    const publisher = validateAndParseAddress(publisherResponse[0] ?? "0x0");
+    if (num.toBigInt(publisher) !== num.toBigInt(address)) {
+      throw new Error(
+        `Connected wallet ${shortStarknetAddress(address)} is not the FX publisher ${shortStarknetAddress(publisher)}.`,
+      );
+    }
+    const call = prepareFxRootPublication({
+      registryAddress,
+      fxRoot: input.root,
+      observedAt: input.observedAt,
+      maximumAgeSeconds: input.maximumAgeSeconds,
+      blockTimestamp: Number(latest.timestamp),
+    });
+    const requestToken = Symbol("registry");
+    privateActionLockRef.current = requestToken;
+    const pending: PrivateTransaction = {
+      kind: "registry",
+      stage: "wallet",
+      label: "Authorize fresh Pragma FX root",
+    };
+    setError("");
+    setTransaction(pending);
+    try {
+      const result = await walletAccount.execute(call);
+      const confirming: PrivateTransaction = {
+        ...pending,
+        stage: "confirming",
+        hash: result.transaction_hash,
+      };
+      setTransaction(confirming);
+      await mainnetProvider.waitForTransaction(result.transaction_hash, {
+        retries: 400,
+        retryInterval: 3_000,
+      });
+      setTransaction({ ...confirming, stage: "confirmed" });
+      return result.transaction_hash;
+    } catch (publicationError) {
+      const message = describeError(publicationError);
+      setTransaction({ ...pending, stage: "failed", error: message });
+      setError(message);
+      throw new Error(message);
+    } finally {
+      if (privateActionLockRef.current === requestToken) privateActionLockRef.current = null;
+    }
+  }, [address, chainId, walletAccount]);
+
+  const deployPayoMainnet = useCallback(async (
+    deploymentPackage: PayoBrowserDeploymentPackage,
+    onProgress?: (progress: PayoDeploymentProgress) => void,
+  ): Promise<PayoMainnetDeploymentResult> => {
+    if (!walletAccount || !address) throw new Error("Connect Ready wallet first.");
+    if (chainId !== STARKNET_MAINNET_CHAIN_ID) {
+      throw new Error("Switch Ready to Starknet Mainnet before deploying PAYO.");
+    }
+    if (!isReadyWallet(selectedWallet?.name ?? "")) {
+      throw new Error("The guarded deployment operator currently requires Ready wallet.");
+    }
+    if (privateActionLockRef.current) throw new Error("A Mainnet wallet request is already active.");
+    if (deploymentPackage.schemaVersion !== 1) {
+      throw new Error("The PAYO deployment package version is unsupported.");
+    }
+    for (const name of PAYO_DEPLOYMENT_ARTIFACT_NAMES) {
+      const artifact = deploymentPackage.artifacts[name];
+      if (!artifact) throw new Error(`The PAYO deployment package is missing ${name}.`);
+      const classHash = num.toHex(BigInt(hash.computeContractClassHash(artifact.contract)));
+      const compiledClassHash = num.toHex(BigInt(hash.computeCompiledClassHash(artifact.casm)));
+      if (
+        BigInt(classHash) !== BigInt(artifact.classHash)
+        || BigInt(compiledClassHash) !== BigInt(artifact.compiledClassHash)
+      ) {
+        throw new Error(`${name} does not match its reviewed deployment hashes.`);
+      }
+    }
+    const plan = buildPayoMainnetTopologyPlan({
+      adminAddress: address,
+      artifacts: deploymentPackage.artifacts,
+    });
+    const requestToken = Symbol("deployment");
+    privateActionLockRef.current = requestToken;
+    const pending: PrivateTransaction = {
+      kind: "deployment",
+      stage: "wallet",
+      label: "Deploy PAYO proof contracts",
+    };
+    setError("");
+    setTransaction(pending);
+    const declarations: Partial<Record<PayoDeploymentArtifactName, string>> = {};
+    let deploymentTransactionHash: string | null = null;
+    try {
+      const classExists = async (classHash: string) => {
+        try {
+          await mainnetProvider.getClass(classHash, "latest");
+          return true;
+        } catch (classError) {
+          if (missingStarknetClass(classError)) return false;
+          throw classError;
+        }
+      };
+      const deployedClassHash = async (contractAddress: string) => {
+        try {
+          return num.toHex(BigInt(await mainnetProvider.getClassHashAt(contractAddress, "latest")));
+        } catch (contractError) {
+          if (missingStarknetContract(contractError)) return null;
+          throw contractError;
+        }
+      };
+
+      for (const name of PAYO_DEPLOYMENT_ARTIFACT_NAMES) {
+        const artifact = deploymentPackage.artifacts[name];
+        onProgress?.({
+          stage: "checking",
+          contract: name,
+          message: `Checking ${name} class on Mainnet…`,
+        });
+        if (await classExists(artifact.classHash)) continue;
+        onProgress?.({
+          stage: "declaring",
+          contract: name,
+          message: `Review Ready's simulation and approve the ${name} declaration.`,
+        });
+        const declaration = await walletAccount.declare({
+          contract: artifact.contract,
+          casm: artifact.casm,
+        });
+        declarations[name] = declaration.transaction_hash;
+        onProgress?.({
+          stage: "declaring",
+          contract: name,
+          transactionHash: declaration.transaction_hash,
+          message: `Confirming ${name} declaration…`,
+        });
+        await mainnetProvider.waitForTransaction(declaration.transaction_hash, {
+          retries: 400,
+          retryInterval: 3_000,
+        });
+        if (!(await classExists(artifact.classHash))) {
+          throw new Error(`${name} was not declared after its transaction confirmed.`);
+        }
+      }
+
+      const deploymentPayloads = [];
+      for (const name of PAYO_DEPLOYMENT_ARTIFACT_NAMES) {
+        const planned = plan.contracts[name];
+        const currentClassHash = await deployedClassHash(planned.address);
+        if (currentClassHash !== null) {
+          if (BigInt(currentClassHash) !== BigInt(planned.classHash)) {
+            throw new Error(`${name} predicted address contains an unexpected class.`);
+          }
+          continue;
+        }
+        deploymentPayloads.push({
+          classHash: planned.classHash,
+          constructorCalldata: planned.constructorCalldata,
+          salt: planned.salt,
+          unique: false,
+        });
+      }
+      if (deploymentPayloads.length > 0) {
+        onProgress?.({
+          stage: "deploying",
+          message: "Review Ready's simulation and deploy the five-contract PAYO topology.",
+        });
+        const deployment = await walletAccount.deploy(deploymentPayloads);
+        deploymentTransactionHash = deployment.transaction_hash;
+        setTransaction({ ...pending, stage: "confirming", hash: deploymentTransactionHash });
+        onProgress?.({
+          stage: "deploying",
+          transactionHash: deploymentTransactionHash,
+          message: "Confirming the PAYO deployment topology…",
+        });
+        await mainnetProvider.waitForTransaction(deploymentTransactionHash, {
+          retries: 400,
+          retryInterval: 3_000,
+        });
+      }
+
+      onProgress?.({ stage: "verifying", message: "Reading every PAYO binding back from Mainnet…" });
+      const verifiedBlockNumber = await mainnetProvider.getBlockNumber();
+      for (const name of PAYO_DEPLOYMENT_ARTIFACT_NAMES) {
+        const planned = plan.contracts[name];
+        const currentClassHash = await mainnetProvider.getClassHashAt(
+          planned.address,
+          verifiedBlockNumber,
+        );
+        if (BigInt(currentClassHash) !== BigInt(planned.classHash)) {
+          throw new Error(`${name} failed deployed class-hash verification.`);
+        }
+      }
+      const calls = [
+        [plan.contracts.bundleVerifier.address, "get_underlying_verifier", plan.contracts.generatedVerifier.address],
+        [plan.contracts.policyRegistry.address, "get_admin", plan.adminAddress],
+        [plan.contracts.policyRegistry.address, "get_fx_publisher", plan.adminAddress],
+        [plan.contracts.obligationRegistry.address, "get_admin", plan.adminAddress],
+        [plan.contracts.payrollSeal.address, "get_pool", plan.poolAddress],
+        [plan.contracts.payrollSeal.address, "get_catalog_registry", plan.contracts.policyRegistry.address],
+        [plan.contracts.payrollSeal.address, "get_obligation_registry", plan.contracts.obligationRegistry.address],
+      ] as const;
+      for (const [contractAddress, entrypoint, expected] of calls) {
+        const response = await mainnetProvider.callContract(
+          { contractAddress, entrypoint, calldata: [] },
+          verifiedBlockNumber,
+        );
+        if (response.length !== 1 || BigInt(response[0]) !== BigInt(expected)) {
+          throw new Error(`${entrypoint} returned an unexpected deployed binding.`);
+        }
+      }
+      setTransaction({
+        ...pending,
+        stage: "confirmed",
+        hash: deploymentTransactionHash ?? Object.values(declarations).at(-1),
+      });
+      return {
+        plan,
+        declarationTransactionHashes: declarations,
+        deploymentTransactionHash,
+        verifiedBlockNumber,
+      };
+    } catch (deploymentError) {
+      const message = describeError(deploymentError);
+      setTransaction({
+        ...pending,
+        stage: "failed",
+        hash: deploymentTransactionHash ?? undefined,
+        error: message,
+      });
+      setError(message);
+      throw new Error(message);
+    } finally {
+      if (privateActionLockRef.current === requestToken) privateActionLockRef.current = null;
+    }
+  }, [address, chainId, selectedWallet?.name, walletAccount]);
+
+  const schedulePayoBaseline = useCallback(async (
+    plan: PayoMainnetTopologyPlan,
+    policyRoot: string,
+  ): Promise<PayoBaselineScheduleResult> => {
+    if (!walletAccount || !address) throw new Error("Connect Ready wallet first.");
+    if (chainId !== STARKNET_MAINNET_CHAIN_ID || BigInt(plan.chainId) !== BigInt(chainId)) {
+      throw new Error("The PAYO baseline must be scheduled on Starknet Mainnet.");
+    }
+    if (BigInt(plan.adminAddress) !== BigInt(address)) {
+      throw new Error("The connected Ready address is not the planned PAYO administrator.");
+    }
+    if (privateActionLockRef.current) throw new Error("A Mainnet wallet request is already active.");
+    const block = await mainnetProvider.getBlock("latest");
+    const baseline = preparePayoBaselineSchedule({
+      registryAddress: plan.contracts.policyRegistry.address,
+      bundleVerifierAddress: plan.contracts.bundleVerifier.address,
+      policyRoot,
+      blockTimestamp: Number(block.timestamp),
+    });
+    const [policyAdmin, obligationAdmin] = await Promise.all([
+      mainnetProvider.callContract({
+        contractAddress: plan.contracts.policyRegistry.address,
+        entrypoint: "get_admin",
+        calldata: [],
+      }),
+      mainnetProvider.callContract({
+        contractAddress: plan.contracts.obligationRegistry.address,
+        entrypoint: "get_admin",
+        calldata: [],
+      }),
+    ]);
+    if (
+      BigInt(policyAdmin[0] ?? 0) !== BigInt(address)
+      || BigInt(obligationAdmin[0] ?? 0) !== BigInt(address)
+    ) {
+      throw new Error("The connected Ready address does not control both PAYO registries.");
+    }
+    const requestToken = Symbol("registry");
+    privateActionLockRef.current = requestToken;
+    const pending: PrivateTransaction = {
+      kind: "registry",
+      stage: "wallet",
+      label: "Schedule PAYO policy and verifier",
+    };
+    setError("");
+    setTransaction(pending);
+    try {
+      const scheduled = await walletAccount.execute(baseline.calls);
+      const confirming = { ...pending, stage: "confirming" as const, hash: scheduled.transaction_hash };
+      setTransaction(confirming);
+      await mainnetProvider.waitForTransaction(scheduled.transaction_hash, {
+        retries: 400,
+        retryInterval: 3_000,
+      });
+      const { high, low } = rootLimbs(policyRoot);
+      const [policyActive, verifierActive] = await Promise.all([
+        mainnetProvider.callContract({
+          contractAddress: plan.contracts.policyRegistry.address,
+          entrypoint: "is_policy_root_valid",
+          calldata: [high.toString(), low.toString()],
+        }),
+        mainnetProvider.callContract({
+          contractAddress: plan.contracts.policyRegistry.address,
+          entrypoint: "is_verifier_valid",
+          calldata: ["0", "1"],
+        }),
+      ]);
+      if (
+        num.toBigInt(policyActive[0] ?? "0x0") === 0n
+        || num.toBigInt(verifierActive[0] ?? "0x0") === 0n
+      ) {
+        throw new Error("The PAYO baseline confirmed but did not activate immediately.");
+      }
+      setTransaction({ ...confirming, stage: "confirmed" });
+      return {
+        transactionHash: scheduled.transaction_hash,
+        policyRoot,
+        validAfter: baseline.validAfter,
+        expiresAt: baseline.expiresAt,
+      };
+    } catch (scheduleError) {
+      const message = describeError(scheduleError);
+      setTransaction({ ...pending, stage: "failed", error: message });
+      setError(message);
+      throw new Error(message);
+    } finally {
+      if (privateActionLockRef.current === requestToken) privateActionLockRef.current = null;
+    }
+  }, [address, chainId, walletAccount]);
 
   const isConnected = Boolean(walletAccount && address);
   const isMainnet = chainId === STARKNET_MAINNET_CHAIN_ID;
@@ -883,9 +1430,6 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     publicStrkBalance,
     isRefreshingPublicBalance,
     publicBalanceError,
-    privacyFee,
-    isRefreshingPrivacyFee,
-    privacyFeeError,
     isRefreshingBalance,
     transaction,
     error,
@@ -893,11 +1437,17 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     disconnectWallet,
     switchToMainnet,
     refreshPublicBalance,
-    refreshPrivacyFee,
     refreshBalance,
+    quoteShieldToken,
     shieldToken,
     shieldStrk,
-    runPrivatePayroll,
+    runProofBoundPayroll,
+    scheduleObligationRoot,
+    isObligationRootActive,
+    publishFxRoot,
+    isFxRootActive,
+    deployPayoMainnet,
+    schedulePayoBaseline,
     clearTransaction: () => setTransaction(null),
   };
 

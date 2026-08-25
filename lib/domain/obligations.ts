@@ -62,6 +62,7 @@ export const employmentAgreementSchema = z.object({
   classificationFactsCommitment: commitmentSchema,
   jurisdictionCode: z.string().regex(/^[A-Z]{2}(-[A-Z0-9]{1,3})?$/),
   settlementToken: payrollTokenSchema,
+  earningsAtomic: z.array(atomicAmountSchema).min(1).max(8),
   schedule: payScheduleSchema,
   statutoryPolicy: z.object({
     catalogRoot: commitmentSchema,
@@ -90,6 +91,35 @@ export function isScheduleDue(scheduleInput: PaySchedule, at = new Date()): bool
       && streamAccruedAtomic(schedule, at) > BigInt(schedule.claimedAtomic);
   }
   return vestedAtomic(schedule, at) > BigInt(schedule.releasedAtomic);
+}
+
+function addUtcMonthClamped(value: Date): Date {
+  const year = value.getUTCFullYear();
+  const month = value.getUTCMonth();
+  const targetMonthStart = new Date(Date.UTC(
+    year,
+    month + 1,
+    1,
+    value.getUTCHours(),
+    value.getUTCMinutes(),
+    value.getUTCSeconds(),
+    value.getUTCMilliseconds(),
+  ));
+  const lastTargetDay = new Date(Date.UTC(year, month + 2, 0)).getUTCDate();
+  targetMonthStart.setUTCDate(Math.min(value.getUTCDate(), lastTargetDay));
+  return targetMonthStart;
+}
+
+export function advanceRecurringSchedule(
+  scheduleInput: Extract<PaySchedule, { kind: "recurring" }>,
+): Extract<PaySchedule, { kind: "recurring" }> {
+  const schedule = payScheduleSchema.parse(scheduleInput);
+  if (schedule.kind !== "recurring") throw new Error("Only a recurring schedule can advance by cadence.");
+  const currentDueAt = new Date(schedule.nextDueAt);
+  const nextDueAt = schedule.cadence === "monthly"
+    ? addUtcMonthClamped(currentDueAt)
+    : new Date(currentDueAt.getTime() + (schedule.cadence === "weekly" ? 7 : 14) * 24 * 60 * 60 * 1_000);
+  return { ...schedule, nextDueAt: nextDueAt.toISOString() };
 }
 
 function linearAccrual(total: bigint, startsAt: string, endsAt: string, at: Date): bigint {

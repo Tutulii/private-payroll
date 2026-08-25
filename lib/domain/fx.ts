@@ -22,7 +22,8 @@ export const fxSnapshotSchema = z.object({
   observedAt: z.string().datetime(),
   minimumSourceCount: z.number().int().min(1).max(9),
   maximumAgeSeconds: z.number().int().positive().max(86_400),
-  sources: z.array(sourceQuoteSchema).min(2).max(9),
+  sources: z.array(sourceQuoteSchema).min(1).max(9),
+  aggregatedSourceCount: z.number().int().min(1).max(255).optional(),
 }).strict();
 export type FxSnapshot = z.infer<typeof fxSnapshotSchema>;
 
@@ -33,12 +34,14 @@ export function buildFxSnapshot(input: {
   haircutBps: number;
   maximumAgeSeconds: number;
   minimumSources: number;
+  aggregatedSourceCount?: number;
   feedId?: string;
   quotes: Array<z.infer<typeof sourceQuoteSchema>>;
   now?: Date;
 }): FxSnapshot {
   const now = input.now ?? new Date();
-  if (input.quotes.length < input.minimumSources) throw new Error("FX snapshot has too few independent sources.");
+  const sourceCount = input.aggregatedSourceCount ?? input.quotes.length;
+  if (sourceCount < input.minimumSources) throw new Error("FX snapshot has too few independent sources.");
   const uniqueSources = new Set(input.quotes.map((quote) => quote.source.toLowerCase()));
   if (uniqueSources.size !== input.quotes.length) throw new Error("FX sources must be unique.");
   for (const quote of input.quotes) {
@@ -67,6 +70,9 @@ export function buildFxSnapshot(input: {
     minimumSourceCount: input.minimumSources,
     maximumAgeSeconds: input.maximumAgeSeconds,
     sources: input.quotes,
+    ...(input.aggregatedSourceCount === undefined
+      ? {}
+      : { aggregatedSourceCount: input.aggregatedSourceCount }),
   });
 }
 
@@ -100,17 +106,23 @@ export function toCircuitFxSnapshot(snapshotInput: FxSnapshot): CircuitFxSnapsho
     throw new Error(`Unsupported circuit reference currency: ${snapshot.referenceCurrency}.`);
   }
   const sortedSources = [...snapshot.sources].sort((left, right) => left.source.localeCompare(right.source));
+  const sourceCount = snapshot.aggregatedSourceCount ?? snapshot.sources.length;
   return {
     token: snapshot.baseToken === "STRK" ? 0 : 1,
     tokenDecimals: snapshot.baseToken === "STRK" ? 18 : 6,
     referenceCurrency,
     quoteDecimals: 6,
     feedCommitment: toHex(hashTextCommitment("PAYO_FX_FEED_V1", snapshot.feedId)),
-    sourcesCommitment: toHex(hashTextCommitment("PAYO_FX_SOURCES_V1", stableJson(sortedSources))),
+    sourcesCommitment: toHex(hashTextCommitment(
+      "PAYO_FX_SOURCES_V1",
+      stableJson(snapshot.aggregatedSourceCount === undefined
+        ? sortedSources
+        : { aggregatedSourceCount: sourceCount, observations: sortedSources }),
+    )),
     priceNumerator: snapshot.medianPriceAtomic,
     priceDenominator: (10n ** BigInt(snapshot.baseToken === "STRK" ? 18 : 6)).toString(),
     observedAt: Math.floor(new Date(snapshot.observedAt).getTime() / 1000).toString(),
-    sourceCount: snapshot.sources.length,
+    sourceCount,
     minimumSourceCount: snapshot.minimumSourceCount,
     maximumAgeSeconds: snapshot.maximumAgeSeconds.toString(),
     haircutBps: snapshot.haircutBps,
@@ -136,4 +148,24 @@ export function fxSnapshotCommitment(snapshot: FxSnapshot): `0x${string}` {
     encodeUint(BigInt(compiled.maximumAgeSeconds), 8),
     encodeUint(BigInt(compiled.haircutBps), 2),
   )));
+}
+
+export function fxCatalogPublicationWindow(snapshotsInput: readonly FxSnapshot[]): {
+  observedAt: number;
+  maximumAgeSeconds: number;
+  expiresAt: number;
+} {
+  if (snapshotsInput.length < 1 || snapshotsInput.length > 2) {
+    throw new Error("An FX catalog publication requires 1–2 snapshots.");
+  }
+  const snapshots = snapshotsInput.map((snapshot) => fxSnapshotSchema.parse(snapshot));
+  const observedAt = Math.max(...snapshots.map((snapshot) =>
+    Math.floor(new Date(snapshot.observedAt).getTime() / 1_000)));
+  const expiresAt = Math.min(...snapshots.map((snapshot) =>
+    Math.floor(new Date(snapshot.observedAt).getTime() / 1_000) + snapshot.maximumAgeSeconds));
+  const maximumAgeSeconds = expiresAt - observedAt;
+  if (maximumAgeSeconds <= 0 || maximumAgeSeconds > 3_600) {
+    throw new Error("The FX catalog does not share a valid publication window of at most one hour.");
+  }
+  return { observedAt, maximumAgeSeconds, expiresAt };
 }

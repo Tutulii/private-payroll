@@ -1,0 +1,66 @@
+app = "private-payroll"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile.prover"
+
+[build.args]
+  NEXT_PUBLIC_PRIVY_APP_ID = "cmt5d2tnm00kr0ckwkuunxwnu"
+  NEXT_PUBLIC_STARKNET_RPC_URL = "https://api.cartridge.gg/x/starknet/mainnet"
+  NEXT_PUBLIC_PAYO_SEAL_ADDRESS = "0x4bde3263ff117f245f9ebea20670b363550951f61cf54f236c449f70181c01f"
+  NEXT_PUBLIC_PAYO_POLICY_REGISTRY_ADDRESS = "0x4e5309dc9662bf8e136c1d626c1410ea07f74e743a0972c1e253b08ece46aad"
+  NEXT_PUBLIC_PAYO_OBLIGATION_REGISTRY_ADDRESS = "0x21a91368561d32c91a861412ec6823a21cc2b64ab10110f575bf57709b7880c"
+  NEXT_PUBLIC_PAYO_PROVER_URL = "https://private-payroll-prover.fly.dev"
+
+[deploy]
+  release_command = "npm run db:migrate:runtime"
+
+[env]
+  NEXT_PUBLIC_PRIVY_APP_ID = "cmt5d2tnm00kr0ckwkuunxwnu"
+  NEXT_PUBLIC_STARKNET_RPC_URL = "https://api.cartridge.gg/x/starknet/mainnet"
+  NEXT_PUBLIC_PAYO_SEAL_ADDRESS = "0x4bde3263ff117f245f9ebea20670b363550951f61cf54f236c449f70181c01f"
+  NEXT_PUBLIC_PAYO_POLICY_REGISTRY_ADDRESS = "0x4e5309dc9662bf8e136c1d626c1410ea07f74e743a0972c1e253b08ece46aad"
+  NEXT_PUBLIC_PAYO_OBLIGATION_REGISTRY_ADDRESS = "0x21a91368561d32c91a861412ec6823a21cc2b64ab10110f575bf57709b7880c"
+  NEXT_PUBLIC_PAYO_PROVER_URL = "https://private-payroll-prover.fly.dev"
+  PAYO_API_URL = "https://private-payroll.fly.dev"
+  PAYO_CHAIN_ID = "0x534e5f4d41494e"
+  PAYO_DB_POOL_SIZE = "8"
+  PAYO_ENABLE_DEPLOYMENT_OPERATOR = "false"
+  PAYO_INDEX_BATCH_SIZE = "100"
+  PAYO_INDEX_CHAIN_ID = "SN_MAIN"
+  PAYO_INDEX_CONSUMER = "payo-seal"
+  PAYO_INDEX_CONTRACT_ADDRESS = "0x4bde3263ff117f245f9ebea20670b363550951f61cf54f236c449f70181c01f"
+  PAYO_INDEX_FINALITY_LAG = "2"
+  PAYO_INDEX_FROM_BLOCK = "13814830"
+  PAYO_INDEX_MAX_REORG_DEPTH = "128"
+  PAYO_INDEX_PREFETCH_CONCURRENCY = "4"
+  PAYO_PROOF_RELAYER_ADDRESS = "0x0126a7a572cf8935d069af937e9f7b27a24949e271e1fbccfe4de0c0d8dc8ea9"
+  PAYO_SEAL_ADDRESS = "0x4bde3263ff117f245f9ebea20670b363550951f61cf54f236c449f70181c01f"
+  PAYO_SELF_HOSTED_PROVER_ENABLED = "false"
+
+[http_service]
+  internal_port = 3000
+  processes = ["app"]
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 50
+    hard_limit = 75
+
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "30s"
+    method = "GET"
+    path = "/"
+    timeout = "10s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
+
+[processes]
+  app = "npm run start:fly"

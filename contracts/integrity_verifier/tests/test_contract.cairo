@@ -10,11 +10,18 @@
 //! - Test both positive (valid proof) and negative (invalid proof) cases
 
 use core::serde::Serde;
+use core::poseidon::poseidon_hash_span;
 use integrity_verifier::honk_verifier::{
     IUltraKeccakZKHonkVerifierDispatcherTrait, IUltraKeccakZKHonkVerifierLibraryDispatcher,
 };
 use payo_contracts::integrity_bundle_verifier::IIntegrityBundleVerifierDispatcherTrait;
+use payo_contracts::obligation_registry::{
+    IPayoObligationRootRegistryDispatcher, IPayoObligationRootRegistryDispatcherTrait,
+};
 use payo_contracts::payroll_seal::{IPayoPayrollSealDispatcher, IPayoPayrollSealDispatcherTrait};
+use payo_contracts::policy_registry::{
+    IPayoPolicyRegistryDispatcher, IPayoPolicyRegistryDispatcherTrait,
+};
 use snforge_std::fs::{FileTrait, read_txt};
 use snforge_std::{
     ContractClassTrait, DeclareResultTrait, declare, start_cheat_block_timestamp,
@@ -105,7 +112,7 @@ fn test_verify_payroll_shard_one_proof() {
 }
 
 #[test]
-fn real_linked_proofs_pass_the_bundle_and_payroll_seal() {
+fn real_linked_proofs_pass_full_registry_bundle_and_payroll_seal() {
     let verifier_class = declare("UltraKeccakZKHonkVerifier").unwrap().contract_class();
     let verifier_calldata: Array<felt252> = array![];
     let (verifier, _) = verifier_class.deploy(@verifier_calldata).unwrap();
@@ -120,22 +127,69 @@ fn real_linked_proofs_pass_the_bundle_and_payroll_seal() {
     };
     assert(bundle_dispatcher.get_underlying_verifier() == verifier, 'bundle verifier mismatch');
 
+    let admin: ContractAddress = 9000.try_into().unwrap();
     let pool: ContractAddress = 1000.try_into().unwrap();
+    let policy_class = declare("PayoPolicyRegistry").unwrap().contract_class();
+    let mut policy_calldata = array![];
+    admin.serialize(ref policy_calldata);
+    let (catalog, _) = policy_class.deploy(@policy_calldata).unwrap();
+    let obligation_class = declare("PayoObligationRootRegistry").unwrap().contract_class();
+    let mut obligation_calldata = array![];
+    admin.serialize(ref obligation_calldata);
+    let (obligations, _) = obligation_class.deploy(@obligation_calldata).unwrap();
     let proof_bound_seal: ContractAddress = 0x12345.try_into().unwrap();
     let seal_class = declare("PayoPayrollSeal").unwrap().contract_class();
     let mut seal_calldata = array![];
     pool.serialize(ref seal_calldata);
-    bundle.serialize(ref seal_calldata);
+    catalog.serialize(ref seal_calldata);
+    obligations.serialize(ref seal_calldata);
     1.serialize(ref seal_calldata);
     let (seal, _) = seal_class.deploy_at(@seal_calldata, proof_bound_seal).unwrap();
     assert(seal == proof_bound_seal, 'seal address mismatch');
 
-    let shard_0_file = FileTrait::new("tests/proof_calldata-shard-0.txt");
-    let shard_1_file = FileTrait::new("tests/proof_calldata-shard-1.txt");
+    let shard_0_file = FileTrait::new("tests/proof_calldata-phase2-shard-0.txt");
+    let shard_1_file = FileTrait::new("tests/proof_calldata-phase2-shard-1.txt");
     let shard_0_proof = read_txt(@shard_0_file);
     let shard_1_proof = read_txt(@shard_1_file);
+    let shard_0_hash = poseidon_hash_span(shard_0_proof.span());
+    let shard_1_hash = poseidon_hash_span(shard_1_proof.span());
+    assert(shard_0_hash != 0, 'empty shard zero hash');
+    assert(shard_1_hash != 0, 'empty shard one hash');
+    let empty: Array<felt252> = array![];
+    start_cheat_caller_address(catalog, admin);
+    start_cheat_block_timestamp(catalog, 100);
+    let catalog_dispatcher = IPayoPolicyRegistryDispatcher { contract_address: catalog };
+    catalog_dispatcher
+        .schedule_policy_root(
+            45737009695495611795063156856764685604,
+            231205737633421668884166495469790915379,
+            86500,
+            90000,
+        );
+    catalog_dispatcher
+        .schedule_fx_root(
+            11472525895040934450263769448451059155,
+            234252317022156922456235799223084645780,
+            86500,
+            90000,
+        );
+    catalog_dispatcher.schedule_verifier(0, 1, bundle, 86500, 90000);
+    start_cheat_caller_address(obligations, admin);
+    start_cheat_block_timestamp(obligations, 100);
+    let obligation_dispatcher = IPayoObligationRootRegistryDispatcher {
+        contract_address: obligations,
+    };
+    obligation_dispatcher
+        .schedule_obligation_root(
+            24772921110653016566997573176259816731,
+            90327867266184323767358991964148639349,
+            86500,
+            90000,
+        );
+    start_cheat_block_timestamp(catalog, 86500);
+    start_cheat_block_timestamp(obligations, 86500);
     start_cheat_caller_address(seal, pool);
-    start_cheat_block_timestamp(seal, 1500);
+    start_cheat_block_timestamp(seal, 86500);
 
     let dispatcher = IPayoPayrollSealDispatcher { contract_address: seal };
     let deposits = dispatcher
@@ -143,20 +197,22 @@ fn real_linked_proofs_pass_the_bundle_and_payroll_seal() {
             0,
             1,
             1,
-            44928773205108259004347202995594552256,
-            59566102342204520402682787285251139199,
-            27560757015875912228911754638426708171,
-            5331223913852427273878131338689916441,
+            24772921110653016566997573176259816731,
+            90327867266184323767358991964148639349,
+            11620656100123013058161045161779511195,
+            248661628780898304614871139530369688580,
             45737009695495611795063156856764685604,
             231205737633421668884166495469790915379,
-            40959086992502722870990712094993306090,
-            308067054761403636282687937784378626121,
+            11472525895040934450263769448451059155,
+            234252317022156922456235799223084645780,
             133027321777802773865997858655156242415,
             115337643728711786551170730459409035450,
-            1010,
-            2000,
-            shard_0_proof.span(),
-            shard_1_proof.span(),
+            86500,
+            87500,
+            shard_0_hash,
+            shard_1_hash,
+            empty.span(),
+            empty.span(),
         );
 
     assert(deposits.is_empty(), 'seal must remain non-custodial');
@@ -165,6 +221,27 @@ fn real_linked_proofs_pass_the_bundle_and_payroll_seal() {
             .get_run_status(
                 133027321777802773865997858655156242415, 115337643728711786551170730459409035450,
             ) == 1,
+        'real bundle not sealed',
+    );
+    dispatcher
+        .verify_sealed_shard(
+            133027321777802773865997858655156242415,
+            115337643728711786551170730459409035450,
+            0,
+            shard_0_proof.span(),
+        );
+    dispatcher
+        .verify_sealed_shard(
+            133027321777802773865997858655156242415,
+            115337643728711786551170730459409035450,
+            1,
+            shard_1_proof.span(),
+        );
+    assert(
+        dispatcher
+            .get_run_status(
+                133027321777802773865997858655156242415, 115337643728711786551170730459409035450,
+            ) == 2,
         'real bundle unsealed',
     );
 }

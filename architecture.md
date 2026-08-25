@@ -139,12 +139,12 @@ stateDiagram-v2
 
 | Token | Mainnet address | Decimals | Fee behavior |
 |---|---|---:|---|
-| STRK | `0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d` | 18 | STRK20 fee paid in public STRK |
-| Native USDC | `0x033068f6539f8e6e6b131e6b2b814e6c34a5224bc66947c47dab9dfee93b35fb` | 6 | Ready deducts a dynamic USDC-denominated fee from the requested shield/private operation; quote by wallet simulation |
+| STRK | `0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d` | 18 | PAYO reads the pool fee passively; Ready constructs and deducts the final private fee when it submits the Wallet API request |
+| Native USDC | `0x033068f6539f8e6e6b131e6b2b814e6c34a5224bc66947c47dab9dfee93b35fb` | 6 | PAYO converts the live pool fee using the paymaster's current token price and an explicit conservative buffer; Ready constructs the final deduction |
 
-Native USDC remains disabled until the live Ready/pool compatibility test passes. The application never substitutes bridged USDC silently.
+Native USDC is enabled because the live Ready/pool compatibility test and its on-chain evidence pass. The application never substitutes bridged USDC silently.
 
-A payroll may mix STRK and USDC lines. Treasury validation groups totals and wallet-simulated fee reserves by token. Receipt-reported Starknet gas and Ready's token-denominated privacy-fee recovery are separate evidence and must not be collapsed into one guessed public-STRK debit.
+A payroll may mix STRK and USDC lines. Treasury validation groups totals and passive fee reserves by token and fails closed if any active token lacks sufficient shielded balance. PAYO does not call `wallet_strk20PrepareInvoke` merely to preview a fee before later calling `wallet_strk20InvokeTransaction`; that created a second wallet request without producing a submittable transaction. The final Wallet API request remains responsible for constructing and submitting the private transaction. Receipt-reported Starknet gas and Ready's token-denominated privacy-fee recovery are separate evidence and must not be collapsed into one guessed public-STRK debit.
 
 ## 7. Commitments and nullifiers
 
@@ -281,7 +281,9 @@ A Garaga-generated, version-pinned UltraKeccakZKHonk verifier plus `PayoIntegrit
 
 ### PayoPolicyRegistry
 
-Stores valid policy-catalog roots and verifier versions. Changes are delayed and controlled by a multisig. PAYO v1 prefers new versioned deployments over an opaque proxy upgrade.
+Stores valid policy-catalog roots and verifier versions. The hackathon Mainnet profile activates administrator-approved entries in the transaction's inclusion block, so a payroll demo never waits on a governance clock. PAYO v1 prefers new versioned deployments over an opaque proxy upgrade.
+
+FX roots use a separate freshness-safe path. Policy roots, verifier versions, obligation roots, and FX-publisher rotation activate immediately after confirmation; expiry and explicit revocation remain enforced. This deliberately makes the registry administrator a visible hackathon trust boundary, so the deployment account must remain a multisig or tightly controlled account. The currently authorized limited-purpose publisher may register an FX root only for the observation's remaining lifetime, capped at one hour, and never controls payroll funds. A production-governance release should use separately deployed timelocked registries. Phase 3 replaces the FX adapter trust with direct Pragma median/TWAP integration and negative oracle tests.
 
 ## 11. FX and policy snapshots
 

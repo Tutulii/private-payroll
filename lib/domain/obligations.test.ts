@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertFxFloor,
+  advanceRecurringSchedule,
   calculateOffboardingNetAtomic,
   isScheduleDue,
   streamAccruedAtomic,
@@ -64,5 +65,23 @@ describe("advanced payroll obligations", () => {
       rateDenominator: "10",
       minimumReferenceAtomic: "101",
     })).toThrow("reference-currency floor");
+  });
+
+  it("advances recurring dates once per settled cycle and clamps calendar month ends", () => {
+    expect(advanceRecurringSchedule({
+      kind: "recurring",
+      cadence: "weekly",
+      nextDueAt: "2026-08-24T12:30:00.000Z",
+    }).nextDueAt).toBe("2026-08-31T12:30:00.000Z");
+    expect(advanceRecurringSchedule({
+      kind: "recurring",
+      cadence: "biweekly",
+      nextDueAt: "2026-08-24T12:30:00.000Z",
+    }).nextDueAt).toBe("2026-09-07T12:30:00.000Z");
+    expect(advanceRecurringSchedule({
+      kind: "recurring",
+      cadence: "monthly",
+      nextDueAt: "2028-01-31T12:30:00.000Z",
+    }).nextDueAt).toBe("2028-02-29T12:30:00.000Z");
   });
 });

@@ -14,7 +14,13 @@ export default function ProofBenchmarkPage() {
   const [fixture, setFixture] = useState<Fixture | null>(null);
   const [stage, setStage] = useState("fixture-unavailable");
   const [error, setError] = useState("");
-  const [result, setResult] = useState<{ circuitSha256: string; provingTimeMs: number; publicInputCount: number } | null>(null);
+  const [result, setResult] = useState<{
+    circuitSha256: string;
+    provingTimeMs: number;
+    publicInputCount: number;
+    calldataCounts: [number, number];
+    calldataHashes: [string, string];
+  } | null>(null);
 
   useEffect(() => {
     fetch("/fixtures/encrypted-payroll-witness-v1.json", { cache: "no-store" })
@@ -47,6 +53,8 @@ export default function ProofBenchmarkPage() {
           (count, shard) => count + Object.keys(shard.publicInputs).length,
           0,
         ),
+        calldataCounts: [proof.shards[0].proofCalldata.length, proof.shards[1].proofCalldata.length],
+        calldataHashes: [proof.shards[0].calldataHash, proof.shards[1].calldataHash],
       });
       setStage("complete");
     } catch (proofError) {
@@ -74,9 +82,13 @@ export default function ProofBenchmarkPage() {
           </button>
           {error && <p role="alert">{error}</p>}
           {result && (
-            <div data-proof-result="verified">
-              <strong>Proof verified locally</strong>
-              <p>{result.publicInputCount} public inputs · {result.provingTimeMs} ms</p>
+            <div
+              data-proof-result="verified"
+              data-calldata-counts={result.calldataCounts.join(",")}
+              data-calldata-hashes={result.calldataHashes.join(",")}
+            >
+              <strong>Proof verified and encoded locally</strong>
+              <p>{result.publicInputCount} public inputs · {result.calldataCounts.join(" + ")} Starknet felts · {result.provingTimeMs} ms</p>
               <small>{result.circuitSha256}</small>
             </div>
           )}
