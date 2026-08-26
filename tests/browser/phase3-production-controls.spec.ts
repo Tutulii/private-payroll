@@ -107,8 +107,8 @@ async function fillAgreement(page: Page, workflow: (typeof workflows)[number]) {
     await form.getByLabel("Notice pay").fill("0.03");
     await form.getByRole("textbox", { name: "Severance" }).fill("0.04");
     await form.getByLabel("Adjustments").fill("0.01");
-    await form.getByLabel("Notice", { exact: true }).check();
-    await form.getByLabel("Severance", { exact: true }).check();
+    await form.getByRole("checkbox", { name: "Notice" }).check();
+    await form.getByRole("checkbox", { name: "Severance" }).check();
   }
 
   const submit = form.getByRole("button", { name: "Encrypt proof-bound agreement" });
