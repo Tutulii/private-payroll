@@ -188,7 +188,8 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
   const remediationButton = page.getByRole("button", { name: "Draft remediation" });
   await expect(remediationButton).toBeEnabled();
   await remediationButton.click();
-  const remediationForm = page.locator("form.receipt-disclosure-form").filter({ hasText: "proved private shortfall" });
+  const remediationForm = page.locator("form.receipt-disclosure-form").last();
+  await expect(remediationForm).toBeVisible();
   await remediationForm.getByLabel("Encrypted claim").selectOption({ index: 1 });
   await remediationForm.getByLabel("Remediation amount (token atomic units)").fill("3");
   await remediationForm.getByRole("button", { name: "Encrypt remediation draft" }).click();

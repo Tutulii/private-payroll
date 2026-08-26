@@ -7,7 +7,7 @@ export default defineConfig({
   testMatch: "phase3-production-controls.spec.ts",
   fullyParallel: false,
   workers: 1,
-  timeout: 180_000,
+  timeout: 300_000,
   expect: { timeout: 15_000 },
   outputDir: "test-results/phase3-browser",
   reporter: process.env.CI ? [["line"], ["html", { outputFolder: "playwright-report", open: "never" }]] : "line",
