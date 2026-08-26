@@ -103,9 +103,9 @@ async function fillAgreement(page: Page, workflow: (typeof workflows)[number]) {
   if (workflow.plan === "final_pay") {
     await form.getByLabel("Termination reason commitment").fill(COMMITMENTS.termination);
     await form.getByLabel("Ordinary pay").fill("0.1");
-    await form.getByLabel("Accrued leave").fill("0.02");
+    await form.getByRole("textbox", { name: "Accrued leave" }).fill("0.02");
     await form.getByLabel("Notice pay").fill("0.03");
-    await form.getByLabel("Severance").fill("0.04");
+    await form.getByRole("textbox", { name: "Severance" }).fill("0.04");
     await form.getByLabel("Adjustments").fill("0.01");
     await form.getByLabel("Notice", { exact: true }).check();
     await form.getByLabel("Severance", { exact: true }).check();
