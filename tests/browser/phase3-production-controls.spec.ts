@@ -118,7 +118,7 @@ async function fillAgreement(page: Page, workflow: (typeof workflows)[number]) {
 }
 
 test("all Phase 3 production controls create encrypted, proof-bound browser evidence", async ({ page }, testInfo) => {
-  await page.goto("/__payo-browser-evidence/team");
+  await page.goto("/payo-browser-evidence/team");
   await expect(page.getByRole("heading", { name: /People and agents/ })).toBeVisible();
   await page.evaluate(() => window.__PAYO_BROWSER_EVIDENCE__?.reset());
   await page.reload();
@@ -165,7 +165,7 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
     }]);
   }, { runId, agreementId: recurringAgreement.id });
 
-  await page.goto("/__payo-browser-evidence/activity");
+  await page.goto("/payo-browser-evidence/activity");
   const claimButton = page.getByRole("button", { name: "Draft private claim" });
   await expect(claimButton).toBeEnabled();
   await claimButton.click();

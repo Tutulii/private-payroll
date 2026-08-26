@@ -20,7 +20,7 @@ export default defineConfig({
   },
   webServer: {
     command: `node node_modules/next/dist/bin/next dev --webpack --hostname 127.0.0.1 --port ${port}`,
-    url: `http://127.0.0.1:${port}/__payo-browser-evidence/team`,
+    url: `http://127.0.0.1:${port}/payo-browser-evidence/team`,
     timeout: 120_000,
     reuseExistingServer: false,
     env: {
