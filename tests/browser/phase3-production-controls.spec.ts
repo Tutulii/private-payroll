@@ -143,7 +143,7 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
   const statutory = agreements.find(({ plaintext }) =>
     (plaintext.agreement as { classification: string }).classification === "employee");
   expect(statutory).toBeTruthy();
-  expect((statutory!.plaintext.agreement as { fxFloor: { minimumReferenceAtomic: string } }).fxFloor.minimumReferenceAtomic)
+  expect((statutory!.plaintext.agreement as { fxProtection: { minimumReferenceAtomic: string } }).fxProtection.minimumReferenceAtomic)
     .toBe("7800000");
   for (const record of agreements) {
     const envelope = JSON.stringify(record.envelope);
