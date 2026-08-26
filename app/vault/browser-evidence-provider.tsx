@@ -41,12 +41,20 @@ type StoredRecord = {
 type BrowserEvidenceState = {
   records: StoredRecord[];
   runs: Array<Record<string, unknown>>;
+  schedules: Array<{
+    agreementId: string;
+    agreementRevision: number;
+    scheduleCommitment: string;
+    dueAt: string;
+    materializedAt: string | null;
+  }>;
 };
 
 export type BrowserEvidenceExport = {
   organizationId: string;
   records: Array<StoredRecord & { plaintext: unknown; envelopeHash: string }>;
   runs: Array<Record<string, unknown>>;
+  schedules: BrowserEvidenceState["schedules"];
 };
 
 declare global {
@@ -61,7 +69,7 @@ declare global {
 }
 
 function emptyState(): BrowserEvidenceState {
-  return { records: [], runs: [] };
+  return { records: [], runs: [], schedules: [] };
 }
 
 function readState(): BrowserEvidenceState {
@@ -73,6 +81,7 @@ function readState(): BrowserEvidenceState {
     return {
       records: Array.isArray(parsed.records) ? parsed.records : [],
       runs: Array.isArray(parsed.runs) ? parsed.runs : [],
+      schedules: Array.isArray(parsed.schedules) ? parsed.schedules : [],
     };
   } catch {
     return emptyState();
@@ -177,6 +186,34 @@ export function PayoBrowserEvidenceProvider({ children }: { children: ReactNode 
     async listPayrollRuns() {
       return { runs: readState().runs };
     },
+    async registerObligationSchedules(input: {
+      schedules: BrowserEvidenceState["schedules"];
+    }) {
+      const now = new Date();
+      let stored: BrowserEvidenceState["schedules"] = [];
+      mutate((state) => {
+        const incomingAgreementIds = new Set(input.schedules.map(({ agreementId }) => agreementId));
+        stored = input.schedules.map((schedule) => ({
+          ...schedule,
+          materializedAt: new Date(schedule.dueAt) <= now ? now.toISOString() : null,
+        }));
+        return {
+          ...state,
+          schedules: [
+            ...state.schedules.filter(({ agreementId }) => !incomingAgreementIds.has(agreementId)),
+            ...stored,
+          ],
+        };
+      });
+      return { schedules: stored.map((schedule) => ({ ...schedule, replayed: false })) };
+    },
+    async listDueObligationSchedules() {
+      const now = Date.now();
+      return {
+        schedules: readState().schedules.filter((schedule) =>
+          schedule.materializedAt && new Date(schedule.dueAt).getTime() <= now),
+      };
+    },
     async listSettlements() {
       return { settlements: [] };
     },
@@ -204,6 +241,7 @@ export function PayoBrowserEvidenceProvider({ children }: { children: ReactNode 
             envelopeHash: hashCanonicalJson(record.envelope),
           })),
           runs: state.runs,
+          schedules: state.schedules,
         };
       },
       setRuns(runs) {

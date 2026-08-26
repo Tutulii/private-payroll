@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-26T16:47:07.295Z",
+  "passed": true,
+  "chainId": "0x534e5f4d41494e",
+  "blockNumber": 13902777,
+  "blockTimestamp": 1787762822,
+  "oracleAddress": "0x2a85bd616f912537c50a49a4076db02c00b29b2cdc8a197ce92ed1837fa875b",
+  "summaryStatsAddress": "0x49eefafae944d07744d07cc72a5bf14728a6fb463c3eae5bca13552f5d455fd",
+  "protectedPairs": [
+    "STRK/USD"
+  ],
+  "unsupportedPairs": [
+    {
+      "pair": "USDC/USD",
+      "component": "twap"
+    }
+  ],
+  "rpcCredentialPersisted": false,
+  "snapshots": [
+    {
+      "protectedSnapshot": {
+        "snapshotVersion": "payo-pragma-fx-snapshot-v2",
+        "baseToken": "STRK",
+        "referenceCurrency": "USD",
+        "pairId": "STRK/USD",
+        "oracleAddress": "0x2a85bd616f912537c50a49a4076db02c00b29b2cdc8a197ce92ed1837fa875b",
+        "summaryStatsAddress": "0x49eefafae944d07744d07cc72a5bf14728a6fb463c3eae5bca13552f5d455fd",
+        "blockNumber": "13902777",
+        "blockTimestamp": "2026-08-26T16:47:02.000Z",
+        "quoteDecimals": 6,
+        "spotMedianPriceAtomic": "24808",
+        "twapPriceAtomic": "26473",
+        "selectedPriceAtomic": "24808",
+        "conservativePriceAtomic": "24559",
+        "selectionRule": "min_spot_median_twap",
+        "twapWindowSeconds": 86400,
+        "haircutBps": 100,
+        "observedAt": "2026-08-26T16:43:47.000Z",
+        "sourceCount": 12,
+        "minimumSourceCount": 3,
+        "maximumAgeSeconds": 900
+      },
+      "protectedCommitment": "0x18fb9c523e1223e54110a551cfe2cae6692c43d54b095c92551c868b2a4e4600",
+      "payrollSnapshot": {
+        "snapshotVersion": "payo-fx-snapshot-v1",
+        "baseToken": "STRK",
+        "referenceCurrency": "USD",
+        "feedId": "pragma-protected-v2:STRK/USD:0x18fb9c523e1223e54110a551cfe2cae6692c43d54b095c92551c868b2a4e4600",
+        "quoteDecimals": 6,
+        "medianPriceAtomic": "24808",
+        "conservativePriceAtomic": "24559",
+        "haircutBps": 100,
+        "observedAt": "2026-08-26T16:43:47.000Z",
+        "minimumSourceCount": 3,
+        "maximumAgeSeconds": 900,
+        "sources": [
+          {
+            "source": "pragma-protected-v2:strk/usd",
+            "priceAtomic": "24808",
+            "observedAt": "2026-08-26T16:43:47.000Z"
+          }
+        ],
+        "aggregatedSourceCount": 12
+      },
+      "payrollCommitment": "0x38b42b8fc48cc1528fe4886aa18c3d5373639c68dae18e19cee3023a54cf09ce"
+    }
+  ]
+}

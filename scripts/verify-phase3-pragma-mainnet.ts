@@ -28,8 +28,32 @@ async function main() {
       getBlockTimestamp: async (blockNumber) => Number((await provider.getBlock(blockNumber)).timestamp),
       callContract: (call, blockIdentifier) => provider.callContract(call, blockIdentifier),
     },
-    tokens: ["STRK", "USDC"],
+    tokens: ["STRK"],
   });
+  let usdcUnsupported = false;
+  let usdcUnsupportedComponent: string | null = null;
+  try {
+    await readPragmaProtectedFxSnapshots({
+      rpc: {
+        getBlockNumber: () => provider.getBlockNumber(),
+        getBlockTimestamp: async (blockNumber) => Number((await provider.getBlock(blockNumber)).timestamp),
+        callContract: (call, blockIdentifier) => provider.callContract(call, blockIdentifier),
+      },
+      tokens: ["USDC"],
+    });
+  } catch (error) {
+    usdcUnsupported = error instanceof Error
+      && "pair" in error
+      && error.pair === "USDC/USD"
+      && "component" in error
+      && error.component === "twap";
+    usdcUnsupportedComponent = error instanceof Error && "component" in error
+      ? String(error.component)
+      : null;
+  }
+  if (!usdcUnsupported) {
+    throw new Error("USDC/USD unexpectedly passed the protected profile without evidenced TWAP history.");
+  }
   const snapshots = result.snapshots.map((protectedSnapshot) => {
     const payrollSnapshot = protectedFxSnapshotToPayrollSnapshot(protectedSnapshot);
     return {
@@ -48,6 +72,8 @@ async function main() {
     blockTimestamp: result.blockTimestamp,
     oracleAddress: PRAGMA_MAINNET_ORACLE_ADDRESS,
     summaryStatsAddress: PRAGMA_MAINNET_SUMMARY_STATS_ADDRESS,
+    protectedPairs: ["STRK/USD"],
+    unsupportedPairs: [{ pair: "USDC/USD", component: usdcUnsupportedComponent }],
     rpcCredentialPersisted: false,
     snapshots,
   };

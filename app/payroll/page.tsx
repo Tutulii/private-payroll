@@ -53,6 +53,7 @@ import {
 } from "@/lib/client/payroll-selection";
 import { decryptVaultRecord, type EncryptedVaultRecord } from "@/lib/crypto/vault";
 import {
+  obligationScheduleForRecord,
   recordProofScheduleCommitment,
   loadEncryptedPayAgreements,
   lockedPayrollScheduleCommitments,
@@ -137,7 +138,9 @@ export default function PayrollPage() {
   } | null>(null);
   const [obligationRootChecking, setObligationRootChecking] = useState(false);
   const [runsLoading, setRunsLoading] = useState(false);
-  const [dashboardLoadedAt] = useState(() => Date.now());
+  const [dueScheduleKeys, setDueScheduleKeys] = useState<Set<string>>(() => new Set());
+  const [dashboardNow, setDashboardNow] = useState(() => Date.now());
+  const refreshInFlight = useRef(false);
 
   const runCategory = (state: string) => ["confirmed", "reconciled"].includes(state)
     ? "Confirmed"
@@ -184,16 +187,17 @@ export default function PayrollPage() {
   );
   const dueObligations = useMemo(() => agreements.flatMap((agreement) => {
     const payee = payees.find(({ id }) => id === agreement.payeeId);
-    const scheduleKey = `${agreement.agreement.id}:${recordProofScheduleCommitment(agreement)}`;
+    const scheduleKey = `${agreement.agreement.id}:${recordProofScheduleCommitment(agreement).toLowerCase()}`;
     if (
       !payee
       || payee.status !== "active"
       || agreement.effectiveUntil
       || lockedScheduleKeys.has(scheduleKey)
-      || !isAgreementDue(agreement.agreement, new Date(dashboardLoadedAt))
+      || !dueScheduleKeys.has(scheduleKey)
+      || !isAgreementDue(agreement.agreement, new Date(dashboardNow))
     ) return [];
     return [{ agreement, payee }];
-  }).slice(0, 50), [agreements, dashboardLoadedAt, lockedScheduleKeys, payees]);
+  }).slice(0, 50), [agreements, dashboardNow, dueScheduleKeys, lockedScheduleKeys, payees]);
   const selectedObligations = useMemo(() => dueObligations.filter(({ agreement }) =>
     selectedAgreementIds.includes(agreement.id)), [dueObligations, selectedAgreementIds]);
   const selectedProofProfile = selectedObligations[0]?.agreement.agreement.agreementVersion === "payo-agreement-v2"
@@ -214,8 +218,11 @@ export default function PayrollPage() {
       setPayees([]);
       setAgreements([]);
       setSelectedAgreementIds([]);
+      setDueScheduleKeys(new Set());
       return;
     }
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
     setRunsLoading(true);
     try {
       const [listing, loadedPayees, loadedAgreements] = await Promise.all([
@@ -307,15 +314,33 @@ export default function PayrollPage() {
         runs: decrypted,
         principal: vault.session.principal,
       });
+      const activeSchedules = synchronizedAgreements
+        .filter(({ effectiveUntil }) => !effectiveUntil)
+        .map(obligationScheduleForRecord);
+      if (activeSchedules.length > 0) {
+        await vault.client.registerObligationSchedules({
+          organizationId: vault.session.organizationId,
+          schedules: activeSchedules,
+        });
+      }
+      const dueScheduleListing = await vault.client.listDueObligationSchedules(
+        vault.session.organizationId,
+        100,
+      );
+      const schedulerKeys = new Set(dueScheduleListing.schedules.map(({ agreementId, scheduleCommitment }) =>
+        `${agreementId}:${scheduleCommitment.toLowerCase()}`));
       setPayrollRuns(decrypted);
       setPayees(loadedPayees);
       setAgreements(synchronizedAgreements);
+      setDueScheduleKeys(schedulerKeys);
+      setDashboardNow(Date.now());
       const locked = lockedPayrollScheduleCommitments(decrypted);
       const dueIds = synchronizedAgreements.flatMap((agreement) => {
         const payee = loadedPayees.find(({ id }) => id === agreement.payeeId);
         return payee?.status === "active"
           && !agreement.effectiveUntil
           && !locked.has(`${agreement.agreement.id}:${recordProofScheduleCommitment(agreement)}`)
+          && schedulerKeys.has(`${agreement.agreement.id}:${recordProofScheduleCommitment(agreement).toLowerCase()}`)
           && isAgreementDue(agreement.agreement, new Date())
           ? [agreement.id]
           : [];
@@ -328,6 +353,7 @@ export default function PayrollPage() {
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "Encrypted payroll history could not be loaded.");
     } finally {
+      refreshInFlight.current = false;
       setRunsLoading(false);
     }
   }, [vault.client, vault.session]);
@@ -340,8 +366,11 @@ export default function PayrollPage() {
   const hasUnsettledRun = payrollRuns.some(({ state }) =>
     ["approval_pending", "submitted", "confirmed"].includes(state));
   useEffect(() => {
-    if (!vault.session || !hasUnsettledRun) return;
-    const timer = window.setInterval(() => void refreshPayrollRuns(), 5_000);
+    if (!vault.session) return;
+    const timer = window.setInterval(
+      () => void refreshPayrollRuns(),
+      hasUnsettledRun ? 5_000 : 30_000,
+    );
     return () => window.clearInterval(timer);
   }, [hasUnsettledRun, refreshPayrollRuns, vault.session]);
 
@@ -922,7 +951,7 @@ export default function PayrollPage() {
     USDC: totals.USDC + run.totals.USDC,
   }), { STRK: 0n, USDC: 0n });
   const plannedRuns = payrollRuns
-    .filter(({ state, dueAt }) => runCategory(state) === "Pending" && new Date(dueAt).getTime() >= dashboardLoadedAt)
+    .filter(({ state, dueAt }) => runCategory(state) === "Pending" && new Date(dueAt).getTime() >= dashboardNow)
     .sort((left, right) => new Date(left.dueAt).getTime() - new Date(right.dueAt).getTime());
 
   return (

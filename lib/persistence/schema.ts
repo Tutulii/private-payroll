@@ -36,6 +36,7 @@ export const settlementState = pgEnum("settlement_state", [
   "reconciled",
 ]);
 export const durableJobState = pgEnum("durable_job_state", ["pending", "leased", "complete", "dead"]);
+export const obligationScheduleState = pgEnum("obligation_schedule_state", ["active", "superseded"]);
 export const idempotencyState = pgEnum("idempotency_state", ["started", "succeeded", "failed"]);
 export const capabilityReservationState = pgEnum("capability_reservation_state", [
   "reserved",
@@ -150,6 +151,39 @@ export const payrollRuns = pgTable(
     ),
     uniqueIndex("payroll_runs_nullifier_idx").on(table.runNullifier),
     index("payroll_runs_org_due_idx").on(table.organizationId, table.dueAt),
+  ],
+);
+
+/**
+ * Opaque scheduling metadata only. The agreement kind, recipient, token and
+ * value remain inside the encrypted pay-agreement vault revision. A due row is
+ * a draft signal for the browser; it never authorizes or executes a payment.
+ */
+export const obligationSchedules = pgTable(
+  "obligation_schedules",
+  {
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    agreementId: text("agreement_id").notNull(),
+    agreementRevision: integer("agreement_revision").notNull(),
+    scheduleCommitment: text("schedule_commitment").notNull(),
+    dueAt: timestamp("due_at", { withTimezone: true }).notNull(),
+    state: obligationScheduleState("state").default("active").notNull(),
+    materializedAt: timestamp("materialized_at", { withTimezone: true }),
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.organizationId, table.agreementId, table.agreementRevision] }),
+    index("obligation_schedules_org_commitment_idx").on(
+      table.organizationId,
+      table.agreementId,
+      table.scheduleCommitment,
+    ),
+    index("obligation_schedules_due_idx").on(table.state, table.materializedAt, table.dueAt),
+    index("obligation_schedules_org_active_idx").on(table.organizationId, table.state, table.dueAt),
   ],
 );
 

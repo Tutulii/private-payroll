@@ -31,8 +31,15 @@ const organizationId = "018f1000-0000-7000-8000-000000000004";
 const runId = "018f1000-0000-7000-8000-000000000005";
 const proofBundleId = "018f1000-0000-7000-8000-000000000006";
 const settlementId = "018f1000-0000-7000-8000-000000000007";
-const validityStart = 1_000n;
-const validityExpiry = 2_000n;
+const validityStart = BigInt(process.env.PAYO_PHASE3_VALIDITY_START ?? "1000");
+const validityExpiry = BigInt(process.env.PAYO_PHASE3_VALIDITY_EXPIRY ?? "2000");
+if (
+  validityStart < 0n
+  || validityExpiry < validityStart
+  || validityExpiry - validityStart > 3_600n
+) {
+  throw new Error("Phase 3 exception-fixture validity must be ordered and no longer than one hour.");
+}
 const now = new Date("2026-08-26T11:00:00.000Z");
 
 const artifactSchema = z.object({

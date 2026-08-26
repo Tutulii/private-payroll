@@ -51,7 +51,7 @@ Gate: database/API/recovery/reorg tests, real-proof devnet integration, wallet t
 
 1. Deliver `StatutoryCorrect`, `FXFloor`, `ClassificationConsistency`, and `OffboardingCorrect` as verifier-backed proof profiles.
 2. Integrate Pragma median/TWAP snapshots with decimals, timestamp, source count, maximum age, haircut, and unsupported-pair behavior.
-3. Deliver encrypted recurring, checkpoint stream, milestone, vesting, termination, and adjustment workflows through STRK20 channels and PAYO proof enforcement.
+3. Deliver encrypted recurring, checkpoint stream, milestone, vesting, termination, and adjustment workflows through SDK-created STRK20 recipient/token channels and PAYO proof enforcement. A checkpoint stream accrues offchain under committed terms and moves private notes only at an explicit checkpoint; it is not represented as a public escrow stream.
 4. Add private wage-claim and remediation circuits plus `CLAIM` and `REMEDIATE` state transitions.
 5. Add recipient-encrypted worker, employer, auditor, and tax proof packages with line openings, Merkle paths, field scopes, expiry, revocation, balanced journals, and offline verification.
 

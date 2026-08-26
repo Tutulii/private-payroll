@@ -11,13 +11,14 @@ const COMMITMENTS = {
 };
 
 const workflows = [
-  { name: "Recurring worker", plan: "recurring", option: "Recurring payroll" },
-  { name: "Checkpoint worker", plan: "checkpoint_stream", option: "Checkpoint stream" },
-  { name: "Milestone worker", plan: "milestone", option: "Approved milestone" },
-  { name: "Vesting worker", plan: "private_vesting", option: "Private vesting release" },
-  { name: "Final pay worker", plan: "final_pay", option: "Final pay / offboarding" },
-  { name: "Adjustment worker", plan: "approved_adjustment", option: "Approved pay adjustment" },
-  { name: "Statutory FX worker", plan: "statutory_fx_classification", option: "Recurring payroll" },
+  { name: "Recurring worker", plan: "recurring", option: "Recurring payroll", token: "USDC" },
+  { name: "Checkpoint worker", plan: "checkpoint_stream", option: "Checkpoint stream", token: "USDC" },
+  { name: "Milestone worker", plan: "milestone", option: "Approved milestone", token: "USDC" },
+  { name: "Vesting worker", plan: "private_vesting", option: "Private vesting release", token: "USDC" },
+  { name: "Final pay worker", plan: "final_pay", option: "Final pay / offboarding", token: "USDC" },
+  { name: "Adjustment worker", plan: "approved_adjustment", option: "Approved pay adjustment", token: "USDC" },
+  { name: "Statutory worker", plan: "statutory_classification", option: "Recurring payroll", token: "USDC" },
+  { name: "FX-floor worker", plan: "fx_floor", option: "Recurring payroll", token: "STRK" },
 ] as const;
 
 type EvidenceState = {
@@ -32,6 +33,13 @@ type EvidenceState = {
     plaintext: Record<string, unknown>;
   }>;
   runs: Array<Record<string, unknown>>;
+  schedules: Array<{
+    agreementId: string;
+    agreementRevision: number;
+    scheduleCommitment: string;
+    dueAt: string;
+    materializedAt: string | null;
+  }>;
 };
 
 async function evidenceState(page: Page): Promise<EvidenceState> {
@@ -41,15 +49,15 @@ async function evidenceState(page: Page): Promise<EvidenceState> {
   });
 }
 
-async function addContributor(page: Page, name: string, index: number) {
+async function addContributor(page: Page, workflow: (typeof workflows)[number], index: number) {
   await page.getByRole("button", { name: "Add contributor", exact: true }).click();
   const form = page.locator("form.team-add-form");
-  await form.getByLabel("Display name").fill(name);
+  await form.getByLabel("Display name").fill(workflow.name);
   await form.getByLabel("Registered Starknet address").fill(`0x${(0x500 + index).toString(16)}`);
-  await form.getByLabel("Private token").selectOption("USDC");
+  await form.getByLabel("Private token").selectOption(workflow.token);
   await form.getByLabel("Jurisdiction").fill("US");
   await form.getByRole("button", { name: "Encrypt contributor" }).click();
-  await expect(page.locator(".member-card").filter({ hasText: name })).toBeVisible();
+  await expect(page.locator(".member-card").filter({ hasText: workflow.name })).toBeVisible();
 }
 
 async function answerClassification(form: ReturnType<Page["locator"]>, answer: "yes" | "no") {
@@ -64,18 +72,16 @@ async function fillAgreement(page: Page, workflow: (typeof workflows)[number]) {
   const form = page.locator("form.team-add-form");
   await form.getByLabel("Payment plan").selectOption({ label: workflow.option });
 
-  if (workflow.plan === "statutory_fx_classification") {
+  if (workflow.plan === "statutory_classification") {
     await form.getByLabel("Classification").selectOption("employee");
     await answerClassification(form, "yes");
   } else {
     await answerClassification(form, "no");
   }
 
-  if (workflow.plan === "recurring" || workflow.plan === "statutory_fx_classification") {
-    await form.getByLabel("Private amount").fill(workflow.plan === "statutory_fx_classification" ? "10" : "1");
-    if (workflow.plan === "statutory_fx_classification") {
-      await form.getByLabel("Optional USD value floor").fill("7.8");
-    }
+  if (["recurring", "statutory_classification", "fx_floor"].includes(workflow.plan)) {
+    await form.getByLabel("Private amount").fill(workflow.plan === "statutory_classification" ? "10" : "1");
+    if (workflow.plan === "fx_floor") await form.getByLabel("Optional USD value floor").fill("0.2");
   }
   if (workflow.plan === "checkpoint_stream" || workflow.plan === "private_vesting") {
     await form.getByLabel("Total committed value").fill("1");
@@ -123,12 +129,17 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
   await page.evaluate(() => window.__PAYO_BROWSER_EVIDENCE__?.reset());
   await page.reload();
 
-  for (const [index, workflow] of workflows.entries()) await addContributor(page, workflow.name, index);
+  for (const [index, workflow] of workflows.entries()) await addContributor(page, workflow, index);
   for (const workflow of workflows) await fillAgreement(page, workflow);
 
   const teamState = await evidenceState(page);
   const agreements = teamState.records.filter(({ recordType }) => recordType === "pay-agreement");
-  expect(agreements).toHaveLength(7);
+  expect(agreements).toHaveLength(8);
+  expect(teamState.schedules).toHaveLength(8);
+  expect(new Set(teamState.schedules.map(({ agreementId }) => agreementId))).toEqual(
+    new Set(agreements.map(({ plaintext }) => (plaintext.agreement as { id: string }).id)),
+  );
+  expect(teamState.schedules.every(({ scheduleCommitment }) => /^0x[0-9a-f]{64}$/.test(scheduleCommitment))).toBe(true);
   expect(new Set(agreements.map(({ plaintext }) =>
     (plaintext.agreement as { paymentPlan: { kind: string } }).paymentPlan.kind))).toEqual(new Set([
       "recurring",
@@ -143,8 +154,12 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
   const statutory = agreements.find(({ plaintext }) =>
     (plaintext.agreement as { classification: string }).classification === "employee");
   expect(statutory).toBeTruthy();
-  expect((statutory!.plaintext.agreement as { fxProtection: { minimumReferenceAtomic: string } }).fxProtection.minimumReferenceAtomic)
-    .toBe("7800000");
+  const fxFloor = agreements.find(({ plaintext }) =>
+    Boolean((plaintext.agreement as { fxProtection?: unknown }).fxProtection));
+  expect(fxFloor).toBeTruthy();
+  expect((fxFloor!.plaintext.agreement as { settlementToken: string }).settlementToken).toBe("STRK");
+  expect((fxFloor!.plaintext.agreement as { fxProtection: { minimumReferenceAtomic: string } }).fxProtection.minimumReferenceAtomic)
+    .toBe("200000");
   for (const record of agreements) {
     const envelope = JSON.stringify(record.envelope);
     const agreement = record.plaintext.agreement as { earningsAtomic: string[] };
@@ -217,8 +232,9 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
     claimDraft,
     activityState,
     checks: {
-      sevenRenderedAgreementForms: true,
+      eightRenderedAgreementForms: true,
       productionTeamControls: true,
+      productionScheduleRegistration: true,
       productionActivityControls: true,
       clientEncryptedRoundTrips: true,
       statutoryFxClassificationProfile: true,

@@ -117,4 +117,32 @@ describe("Team agreement form production workflow", () => {
     })).rejects.toThrow(/classification fact rubric/i);
     expect(storeEncryptedRecord).not.toHaveBeenCalled();
   });
+
+  it("can preserve a USDC FX term even though execution remains fail-closed until TWAP is available", async () => {
+    const principal = generateVaultPrincipal("admin:ui-usdc-fx");
+    const payee = prepareEncryptedPayee({
+      organizationId,
+      displayName: "Private worker",
+      principalKind: "human",
+      recipientAddress: "0x456",
+      tokenPreference: "USDC",
+      jurisdictionCode: "US",
+      principal,
+      now,
+    }).record;
+    const storeEncryptedRecord = vi.fn().mockResolvedValue({ record: {} });
+    const record = await storeEncryptedAgreementFromForm({
+      client: { storeEncryptedRecord } as never,
+      organizationId,
+      payee,
+      principal,
+      draft: { ...baseDraft("recurring"), fxFloorAmount: "1" },
+      now,
+    });
+    expect(record.agreement).toMatchObject({
+      settlementToken: "USDC",
+      fxProtection: { referenceCurrency: "USD", minimumReferenceAtomic: "1000000" },
+    });
+    expect(storeEncryptedRecord).toHaveBeenCalledOnce();
+  });
 });

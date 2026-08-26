@@ -18,6 +18,18 @@ export type PayoBaselineSchedule = {
   expiresAt: number;
 };
 
+export type PayoPhase3VerifierProfile = {
+  mode: 0 | 2 | 3;
+  proofVersion: 2 | 3 | 4;
+  bundleAddress: string;
+};
+
+export type PayoPhase3VerifierSchedule = {
+  calls: [Call, Call, Call];
+  validAfter: number;
+  expiresAt: number;
+};
+
 export function rootLimbs(root: string): { high: bigint; low: bigint } {
   if (!/^0x[0-9a-fA-F]{64}$/.test(root)) {
     throw new Error("The registry root must be a canonical 32-byte value.");
@@ -82,6 +94,52 @@ export function preparePayoBaselineSchedule(input: {
         calldata: ["0", "1", bundleVerifierAddress, validAfter.toString(), expiresAt.toString()],
       },
     ],
+    validAfter,
+    expiresAt,
+  };
+}
+
+export function preparePayoPhase3VerifierSchedule(input: {
+  registryAddress: string;
+  profiles: readonly [
+    PayoPhase3VerifierProfile,
+    PayoPhase3VerifierProfile,
+    PayoPhase3VerifierProfile,
+  ];
+  blockTimestamp: number;
+}): PayoPhase3VerifierSchedule {
+  const registryAddress = validateAndParseAddress(input.registryAddress);
+  if (!Number.isSafeInteger(input.blockTimestamp) || input.blockTimestamp < 0) {
+    throw new Error("The Starknet block timestamp is invalid.");
+  }
+  const expected = [[0, 2], [2, 3], [3, 4]] as const;
+  const profiles = input.profiles.map((profile, index) => {
+    const bundleAddress = validateAndParseAddress(profile.bundleAddress);
+    if (
+      BigInt(bundleAddress) === 0n
+      || profile.mode !== expected[index][0]
+      || profile.proofVersion !== expected[index][1]
+    ) {
+      throw new Error("The Phase 3 verifier profile mapping is not canonical.");
+    }
+    return { ...profile, bundleAddress };
+  }) as [PayoPhase3VerifierProfile, PayoPhase3VerifierProfile, PayoPhase3VerifierProfile];
+  const validAfter = input.blockTimestamp
+    + PAYO_REGISTRY_MIN_DELAY_SECONDS
+    + PAYO_REGISTRY_ACTIVATION_BUFFER_SECONDS;
+  const expiresAt = validAfter + PAYO_BASELINE_LIFETIME_SECONDS;
+  return {
+    calls: profiles.map((profile) => ({
+      contractAddress: registryAddress,
+      entrypoint: "schedule_verifier",
+      calldata: [
+        profile.mode.toString(),
+        profile.proofVersion.toString(),
+        profile.bundleAddress,
+        validAfter.toString(),
+        expiresAt.toString(),
+      ],
+    })) as [Call, Call, Call],
     validAfter,
     expiresAt,
   };

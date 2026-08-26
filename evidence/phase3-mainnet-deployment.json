@@ -1,0 +1,225 @@
+{
+  "schemaVersion": 1,
+  "network": "starknet-mainnet",
+  "planPath": "circuits/payroll_integrity/target/payo-phase3-mainnet-plan.json",
+  "planGeneratedAt": "2026-08-26T14:13:56.746Z",
+  "declarations": {
+    "advancedVerifier": {
+      "classHash": "0x47b2585bd5baefdde63e15914797528339db0bc9e6ca3a4e7136d85ac59124f",
+      "transactionHash": "0x2af0c8a1203f898d6fca7c2c788e67e5719044b006f6a43eecf90c5af219e5b",
+      "simulatedFeeFri": "352931386417241383152",
+      "actualFeeFri": "146960884929324230086",
+      "blockNumber": 13897884,
+      "finalityStatus": "ACCEPTED_ON_L2",
+      "executionStatus": "SUCCEEDED"
+    },
+    "advancedBundle": {
+      "classHash": "0x4aa085123d4a93f531b112e4928216b58c583373b28db9da3e4d57f97b8259f",
+      "transactionHash": "0x66c545e1c31eddce0223175308ad23e85995331f9244819350642b16fd1ae",
+      "simulatedFeeFri": "14771623036417262064",
+      "actualFeeFri": "5971187874231629571",
+      "blockNumber": 13898176,
+      "finalityStatus": "ACCEPTED_ON_L2",
+      "executionStatus": "SUCCEEDED"
+    },
+    "claimVerifier": {
+      "classHash": "0x45b077d6b3ac2717d9e5b432cc2271f750b0cb75995155e0be179da2369bb0a",
+      "transactionHash": "0x6477314acc32b19ba062964b88acc5743ccd5a6a05a81a40725b18a2d6dcd70",
+      "simulatedFeeFri": "348231716085884967792",
+      "actualFeeFri": "160169301591541286756",
+      "blockNumber": 13899116,
+      "finalityStatus": "ACCEPTED_ON_L2",
+      "executionStatus": "SUCCEEDED"
+    },
+    "remediationVerifier": {
+      "classHash": "0x56046d0d93d0d401ec19aa4b3374e6f642bc59fae442689c7b1feccfa98246c",
+      "transactionHash": "0x3928ff0e21eef91230571f05567d860171d7dd14defe80479e7922462f07d76",
+      "simulatedFeeFri": "348234258165847838064",
+      "actualFeeFri": "140703565708334349571",
+      "blockNumber": 13899720,
+      "finalityStatus": "ACCEPTED_ON_L2",
+      "executionStatus": "SUCCEEDED"
+    },
+    "payrollSeal": {
+      "classHash": "0x1500b1e66ef8c1528f5ea301cbb0420b28a19742d927c5d595ce567b0266148",
+      "transactionHash": "0x2f542d5ca4dc8da1ccbbc07bfd6b580a9055723216db0fa193f5a94a456a0fe",
+      "simulatedFeeFri": "61168732754279693904",
+      "actualFeeFri": "25317205499050756730",
+      "blockNumber": 13900090,
+      "finalityStatus": "ACCEPTED_ON_L2",
+      "executionStatus": "SUCCEEDED"
+    }
+  },
+  "deployments": {
+    "advanced": {
+      "names": [
+        "advancedVerifier",
+        "advancedBundle"
+      ],
+      "transactionHash": "0x7158a866ba5e81ba2cb5b5a79061f0eedea02a40cfedb34cfb4dc4f04a5ec9",
+      "simulatedFeeFri": "199045955309544918",
+      "actualFeeFri": "84015638420560591",
+      "blockNumber": 13898312,
+      "finalityStatus": "ACCEPTED_ON_L2",
+      "executionStatus": "SUCCEEDED"
+    },
+    "claim": {
+      "names": [
+        "claimVerifier",
+        "claimBundle"
+      ],
+      "transactionHash": "0x5b87714e33c5424fb9ea958ae31320a4a7919327bea0d682acc9f8af966fb5e",
+      "simulatedFeeFri": "155856979854256896",
+      "actualFeeFri": "66564607283123863",
+      "blockNumber": 13899162,
+      "finalityStatus": "ACCEPTED_ON_L2",
+      "executionStatus": "SUCCEEDED"
+    },
+    "remediation": {
+      "names": [
+        "remediationVerifier",
+        "remediationBundle"
+      ],
+      "transactionHash": "0x32e9625c7948c1215f1326f807dacedaa15f81fdcaff51d2aa1521d76a3b11a",
+      "simulatedFeeFri": "155856979854256896",
+      "actualFeeFri": "66564607283123863",
+      "blockNumber": 13899759,
+      "finalityStatus": "ACCEPTED_ON_L2",
+      "executionStatus": "SUCCEEDED"
+    },
+    "seal": {
+      "names": [
+        "payrollSeal"
+      ],
+      "address": "0x2930f94183c60d86b9e35486c46c0f73bec8cd532e3fadc8c661cf9ec0ebd99",
+      "transactionHash": "0x16193315de815ec813186d9ffb43353e5f9a86ea196f171ea3945f652898b39",
+      "simulatedFeeFri": "257063476321821645",
+      "actualFeeFri": "109432881796978529",
+      "blockNumber": 13900199,
+      "finalityStatus": "ACCEPTED_ON_L2",
+      "executionStatus": "SUCCEEDED"
+    }
+  },
+  "verifierProofChecks": {
+    "passed": true,
+    "observedAt": "2026-08-26T15:33:58.166Z",
+    "blockNumber": 13900192,
+    "chainId": "0x534e5f4d41494e",
+    "sealAddress": "0x2930f94183c60d86b9e35486c46c0f73bec8cd532e3fadc8c661cf9ec0ebd99",
+    "advanced": {
+      "passed": true,
+      "bundleAddress": "0x26b27ef2b9cbfc11782689b3da77a0d42c64050277d77ccffe22907ed64c07a",
+      "proofVersion": "2",
+      "circuitSha256": "0x33a1fec50488d5913f6e6664f86b096c68fcf189eec8297f3aab2a6a8926b717",
+      "generatedAt": "2026-08-26T14:54:00.428Z",
+      "checks": [
+        {
+          "shardIndex": 0,
+          "calldataHash": "0x6ecd4470e8bbcd0e351162c7884135058e105e353954faa6159285ed5c4ca90",
+          "calldataFelts": 6339,
+          "publicInputsMatched": true,
+          "tamperRejected": true,
+          "tamperRejection": "RPC_REJECTED",
+          "durationMs": 4404
+        },
+        {
+          "shardIndex": 1,
+          "calldataHash": "0x367d665220b6140bccd0bdb4a2e0209393f2d291ace86b00a16464b8ed06a38",
+          "calldataFelts": 6339,
+          "publicInputsMatched": true,
+          "tamperRejected": true,
+          "tamperRejection": "RPC_REJECTED",
+          "durationMs": 4018
+        }
+      ]
+    },
+    "claim": {
+      "passed": true,
+      "bundleAddress": "0x7825f82260d4852279e54930ccac1afecf3364c87bf58216e8f4a65e73f414",
+      "proofVersion": "3",
+      "circuitSha256": "0x00dc2ef57f65d12d5d7c3ad8c1fefd2835c5474bbef5df9400b9e73d4f940287",
+      "generatedAt": "2026-08-26T15:11:22.528Z",
+      "checks": [
+        {
+          "shardIndex": 0,
+          "calldataHash": "0x2620b5461edc1dbe417763ee2c6c043b48e890b132d5f856436a632ff1cc5a5",
+          "calldataFelts": 3043,
+          "publicInputsMatched": true,
+          "tamperRejected": true,
+          "tamperRejection": "RPC_REJECTED",
+          "durationMs": 2802
+        },
+        {
+          "shardIndex": 1,
+          "calldataHash": "0x78a8680d9a2fa36e0920e6b4e70a287b07eaf46daeba2913db1dc1d8b63ed19",
+          "calldataFelts": 3043,
+          "publicInputsMatched": true,
+          "tamperRejected": true,
+          "tamperRejection": "RPC_REJECTED",
+          "durationMs": 3100
+        }
+      ]
+    },
+    "remediation": {
+      "passed": true,
+      "bundleAddress": "0x37673733211e16d2ea42ba85eb5eb6bf9913424a96136145834cd9d1d834b71",
+      "proofVersion": "4",
+      "circuitSha256": "0xd82738ad7db9867f4f86a8edcac02e72ee6d5fbbaa7d68bf9a521a23540e1d0c",
+      "generatedAt": "2026-08-26T15:11:22.532Z",
+      "checks": [
+        {
+          "shardIndex": 0,
+          "calldataHash": "0x17fd37cb7a67c06b259c271f8b4763841339f19d47b05881e1ff71610bfd68e",
+          "calldataFelts": 3043,
+          "publicInputsMatched": true,
+          "tamperRejected": true,
+          "tamperRejection": "RPC_REJECTED",
+          "durationMs": 2860
+        },
+        {
+          "shardIndex": 1,
+          "calldataHash": "0xea61b4a1643ca7eea0bb8831e3288eac7b8268158fc018c4b2af25ac373105",
+          "calldataFelts": 3043,
+          "publicInputsMatched": true,
+          "tamperRejected": true,
+          "tamperRejection": "RPC_REJECTED",
+          "durationMs": 3800
+        }
+      ]
+    }
+  },
+  "updatedAt": "2026-08-26T15:51:27.223Z",
+  "activation": {
+    "passed": true,
+    "transactionHash": "0x713adbce8a272dea54c34632b03f16d9003e1aa283eee3f9d740bd5fa6ba420",
+    "blockNumber": 13900629,
+    "finalityStatus": "ACCEPTED_ON_L2",
+    "executionStatus": "SUCCEEDED",
+    "profiles": [
+      {
+        "mode": "0",
+        "proofVersion": "2",
+        "bundleAddress": "0x26b27ef2b9cbfc11782689b3da77a0d42c64050277d77ccffe22907ed64c07a",
+        "validAfter": "1787759173",
+        "expiresAt": "1819295160",
+        "active": true
+      },
+      {
+        "mode": "2",
+        "proofVersion": "3",
+        "bundleAddress": "0x7825f82260d4852279e54930ccac1afecf3364c87bf58216e8f4a65e73f414",
+        "validAfter": "1787759173",
+        "expiresAt": "1819295160",
+        "active": true
+      },
+      {
+        "mode": "3",
+        "proofVersion": "4",
+        "bundleAddress": "0x37673733211e16d2ea42ba85eb5eb6bf9913424a96136145834cd9d1d834b71",
+        "validAfter": "1787759173",
+        "expiresAt": "1819295160",
+        "active": true
+      }
+    ]
+  }
+}

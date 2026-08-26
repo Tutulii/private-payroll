@@ -16,11 +16,14 @@ export const PRAGMA_MAINNET_SUMMARY_STATS_ADDRESS =
 const QUOTE_DECIMALS = 6;
 const MAXIMUM_AGE_SECONDS = 3_600;
 const MINIMUM_SOURCE_COUNT = 3;
-const PHASE3_MAXIMUM_AGE_SECONDS = 300;
-// Pragma Mainnet checkpoints are intentionally sparse. A 12-hour window is
-// the shortest interval currently evidenced for STRK/USD; shorter windows can
-// contain only one checkpoint and the Summary Stats contract correctly reverts.
-const PHASE3_TWAP_WINDOW_SECONDS = 43_200;
+const PHASE3_MAXIMUM_AGE_SECONDS = 900;
+// Pragma's Mainnet Summary Stats contract currently has enough STRK/USD
+// checkpoints for a 24-hour window. Shorter windows can contain only one
+// checkpoint and correctly revert with `Not enough data`. USDC/USD currently
+// has no usable TWAP checkpoint history and therefore remains fail-closed for
+// FXFloor; ordinary USDC payroll continues to use the fresh spot median path.
+const PHASE3_TWAP_WINDOW_SECONDS = 86_400;
+export const PRAGMA_PROTECTED_FX_TOKENS = ["STRK"] as const;
 
 export type PragmaFxRpc = {
   getBlockNumber: () => Promise<number>;
@@ -155,6 +158,11 @@ export async function readPragmaProtectedFxSnapshots(input: {
   const summaryStatsAddress = input.summaryStatsAddress ?? PRAGMA_MAINNET_SUMMARY_STATS_ADDRESS;
   const snapshots = await Promise.all(tokens.map(async (token) => {
     const pair = `${token}/USD`;
+    if (!PRAGMA_PROTECTED_FX_TOKENS.includes(token as (typeof PRAGMA_PROTECTED_FX_TOKENS)[number])) {
+      throw new PragmaProtectedPairUnavailableError(pair, "twap", {
+        cause: new Error("Pragma Mainnet has no usable Summary Stats checkpoint history for this pair."),
+      });
+    }
     const dataType = ["0x0", shortString.encodeShortString(pair)];
     const [spotResult, twapResult] = await Promise.allSettled([
         input.rpc.callContract({

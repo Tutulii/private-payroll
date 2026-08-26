@@ -574,10 +574,33 @@ export async function executeProofBoundPayroll(
   );
 
   input.onStage?.("fx");
-  const snapshots = advancedProfile
-    ? (await input.client.getProtectedFxSnapshots(usedTokens)).snapshots
-      .map(protectedFxSnapshotToPayrollSnapshot)
-    : (await input.client.getFxSnapshots(usedTokens)).snapshots;
+  const protectedTokens = advancedProfile
+    ? [...new Set(input.obligations.flatMap(({ agreement }) =>
+        agreement.agreement.agreementVersion === "payo-agreement-v2"
+        && agreement.agreement.fxProtection
+        && BigInt(agreement.agreement.fxProtection.minimumReferenceAtomic) > 0n
+          ? [agreement.agreement.settlementToken]
+          : []))]
+    : [];
+  const unsupportedProtectedToken = protectedTokens.find((token) => token !== "STRK");
+  if (unsupportedProtectedToken) {
+    throw new Error(
+      `FXFloor is unavailable for ${unsupportedProtectedToken}/USD because Pragma Mainnet has no usable TWAP checkpoint history for that pair.`,
+    );
+  }
+  const medianOnlyTokens = usedTokens.filter((token) => !protectedTokens.includes(token));
+  const [protectedResult, medianResult] = await Promise.all([
+    protectedTokens.length
+      ? input.client.getProtectedFxSnapshots(protectedTokens)
+      : Promise.resolve({ snapshots: [] }),
+    medianOnlyTokens.length
+      ? input.client.getFxSnapshots(medianOnlyTokens)
+      : Promise.resolve({ snapshots: [] }),
+  ]);
+  const snapshots = [
+    ...protectedResult.snapshots.map(protectedFxSnapshotToPayrollSnapshot),
+    ...medianResult.snapshots,
+  ];
   const precomputedFxRoot = await buildFxCatalogRoot(snapshots);
   const advancedScheduleCommitments = new Map<string, `0x${string}`>(await Promise.all(
     input.obligations.flatMap(({ agreement }) => agreement.agreement.agreementVersion === "payo-agreement-v2"

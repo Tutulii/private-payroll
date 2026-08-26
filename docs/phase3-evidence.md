@@ -57,6 +57,23 @@ self-verifications took 801,108 ms. Exact roots, proof-calldata hashes,
 transaction hashes, coverage, and negative results are recorded in
 `evidence/phase3-matrix-devnet.json`.
 
+## Live Mainnet Pragma evidence
+
+`npm run phase3:pragma:verify` now probes the production Mainnet contracts at a
+single pinned block and writes `evidence/pragma-phase3-mainnet.json`. The fresh
+2026-08-26 run passed at block `13902777`: STRK/USD had a six-decimal spot
+median of `24808`, a 24-hour TWAP of `26473`, 12 aggregated sources, and a
+195-second median age. PAYO selected the lower value, applied its one-percent
+haircut, committed `24559`, and reconstructed the corresponding payroll FX
+commitment. The same probe required USDC/USD protected lookup to fail with the
+explicit `twap` unsupported component; ordinary USDC payroll still uses the
+fresh median path. RPC credentials are not written to the evidence file.
+
+Unit tests also pin median and TWAP calls to one block and reject stale,
+under-sourced, malformed, and unsupported observations. The payroll execution
+test proves that an unsupported protected pair stops before proof generation
+or a Ready wallet request.
+
 ## Official STRK20 pool integration evidence
 
 The official `starkware-libs/starknet-privacy` pool was built from
@@ -78,6 +95,14 @@ generated and locally verified in 680,302 ms. Transaction
 then performed seven distinct private STRK note outputs (one for each matrix
 workflow) and the pool-to-PAYO `privacy_invoke` seal call atomically. Private
 balance discovery changed from sender/recipient `50/50` to `43/57`.
+
+The integrated builder already requested Privacy SDK `autoSetup` and refreshed
+both notes and channels for that successful first-recipient transfer. The test
+now additionally discovers the outgoing recipient channel and STRK token
+subchannel after settlement and requires `SetupRequirement.Ready`. That new
+explicit channel-readiness assertion is implemented in
+`scripts/test-phase3-strk20-devnet.mjs`; it is not retroactively added to the
+older committed receipt and remains pending a fresh official-pool Devnet rerun.
 
 Real Garaga shard transactions
 `0x776e271efd9a75c33589868c7aecb0ec029ac8ce0e305a819ade720e671fdaa`
@@ -198,8 +223,15 @@ synthetic principal and adapter are not an exposed production test route.
   vesting releases, final pay, and approved adjustment obligations. Exact
   checkpoint and vesting entitlements are derived, not browser-entered.
 - Recurring agreement creation now uses the advanced v2 record as well, and
-  permits a worker-selected six-decimal USD value floor with a committed
-  five-minute freshness limit. Legacy v1 agreements remain readable.
+  permits a worker-selected six-decimal USD value floor. The visible Mainnet
+  profile offers this only for STRK and binds it to a 24-hour Pragma TWAP plus
+  a 15-minute median freshness limit. Legacy v1 agreements remain readable.
+- Encrypted agreement revisions now register opaque durable schedules. The
+  PostgreSQL migration stores no plan kind, token, recipient, or amount; a
+  15-second worker materializes due commitments, Payroll decrypts and rechecks
+  them locally, and Ready approval remains mandatory. The isolated PostgreSQL
+  suite passed concurrent registration, replay, conflict rejection, revision
+  supersession, and due materialization.
 - Final-pay entry accepts explicit zero values for optional leave, notice,
   severance, adjustment, and deduction components while still requiring
   positive ordinary pay. This fixes the rendered form's previous rejection of
@@ -217,9 +249,10 @@ synthetic principal and adapter are not an exposed production test route.
   source-pinned policy derives the 22% withholding, the circuit proves it, and
   the wallet receives only net settlement. The UI explicitly says this is not
   a general tax engine or legal advice.
-- Advanced payroll fetches Pragma spot median and TWAP at one pinned block,
-  chooses the lower value, applies a conservative haircut, commits provenance,
-  and exposes explicit unsupported-pair errors.
+- STRK FX-protected payroll fetches Pragma spot median and a 24-hour TWAP at one
+  pinned block, chooses the lower value, applies a conservative haircut,
+  commits provenance, and exposes explicit unsupported-pair errors. USDC
+  payroll remains supported without an FXFloor.
 - Wage claim and remediation records, proof requests, settlement intents,
   relayer jobs, and lifecycle transitions are encrypted and durable. A claim
   becomes disputed only after v3 verification; remediation becomes reconciled
@@ -236,10 +269,11 @@ synthetic principal and adapter are not an exposed production test route.
 
 ## Passing gates
 
-- 64 unit-test files passed, one skipped; 251 tests passed and 19 were skipped.
+- 66 unit-test files passed, one skipped; 265 tests passed and 20 were skipped.
 - Fresh pinned Noir runs passed all 60 relevant tests: PayrollIntegrity 45/45,
   AdvancedObligation 5/5, WageClaim 5/5, and WageRemediation 5/5.
-- PostgreSQL durability integration: 19/19 passed.
+- PostgreSQL durability integration: 20/20 passed, including the opaque
+  recurring scheduler's concurrency and revision lifecycle.
 - TypeScript typecheck passed.
 - ESLint passed with no project warnings after cleanup.
 - The optimized Next.js production build passed with a 2 GB Node heap. The

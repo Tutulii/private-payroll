@@ -289,7 +289,15 @@ FX roots use a separate freshness-safe path. Policy roots, verifier versions, ob
 
 The initial settlement assets are STRK and USDC. An FX snapshot commits prices, base-token decimals, reference-currency quote decimals, source, timestamp, and source count for every allowlisted token/reference pair. The circuit selects the applicable pair privately. PayrollIntegrity v1 uses six-decimal USD/GBP reference values and fails closed on any other quote scale.
 
-The initial oracle adapter targets Pragma median or TWAP data with:
+The production protected profile reads Pragma's source-aggregated median and
+Summary Stats TWAP at one pinned Starknet block. On Mainnet, `STRK/USD` uses a
+24-hour TWAP, a 15-minute maximum median age, at least three sources, the lower
+of median/TWAP, and a one-percent haircut. `USDC/USD` median data remains usable
+for ordinary payroll, but its protected `FXFloor` profile fails closed because
+the Mainnet Summary Stats contract currently has no usable USDC/USD TWAP
+checkpoint history. PAYO never fabricates or substitutes a stablecoin TWAP.
+
+The adapter enforces:
 
 - a maximum age;
 - a minimum source count when supplied by the feed;
@@ -306,6 +314,23 @@ US and UK packs are versioned reference implementations. They demonstrate verifi
 - **Milestone:** a committed approver attestation makes an obligation due.
 - **Vesting:** the private schedule is committed and the proof checks release eligibility.
 - **Final pay:** termination terms activate ordinary, leave, notice, severance, and adjustment components.
+
+The scheduler stores only tenant ID, opaque agreement ID, revision, due time,
+and schedule commitment. Registration is authenticated, revision-bound to the
+current encrypted vault record, serialized per agreement, and idempotent.
+Concurrent durable workers materialize due rows with row leases/locks; the
+Payroll client decrypts the matching agreement locally, rechecks eligibility,
+and prepares the draft. A materialized row never authorizes payment: Ready
+still requires human approval and the PAYO proof still enforces the committed
+schedule.
+
+In this document, an STRK20 `Channel` is the Privacy SDK's encrypted sender-to-
+recipient context with token-specific nonce subchannels. It is not an escrow or
+continuous-value payment channel. Direct SDK execution uses channel discovery,
+`autoSetup`, and token-subchannel readiness; Ready performs the equivalent
+channel lifecycle internally for Wallet API transfers. Every checkpoint,
+milestone, vesting, or recurring settlement is an actual private note transfer
+through that context.
 
 A worker claim uses a separate proof mode to show that an obligation is absent or below its committed floor without revealing the expected amount. A remediation payment references the claim nullifier.
 

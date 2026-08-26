@@ -29,7 +29,7 @@ describe("Pragma FX adapter", () => {
         getBlockNumber: vi.fn().mockResolvedValue(1),
         callContract: vi.fn().mockResolvedValue(["0xf4240", "0x6", "0x1", "0x2"]),
       },
-      tokens: ["USDC"],
+      tokens: ["STRK"],
       now: new Date(10_000_000),
     })).rejects.toThrow(/stale|future/);
   });
@@ -60,8 +60,19 @@ describe("Pragma FX adapter", () => {
     expect(rpc.callContract.mock.calls.every((call) => call[1] === 765)).toBe(true);
     expect(rpc.callContract.mock.calls[1][0]).toMatchObject({
       entrypoint: "calculate_twap",
-      calldata: expect.arrayContaining(["0xa8c0", "0xdde0"]),
+      calldata: expect.arrayContaining(["0x15180", "0x3520"]),
     });
+  });
+
+  it("fails closed before RPC for protected pairs without Mainnet TWAP history", async () => {
+    const rpc = {
+      getBlockNumber: vi.fn().mockResolvedValue(765),
+      getBlockTimestamp: vi.fn().mockResolvedValue(100_000),
+      callContract: vi.fn(),
+    };
+    await expect(readPragmaProtectedFxSnapshots({ rpc, tokens: ["USDC"] }))
+      .rejects.toMatchObject({ pair: "USDC/USD", component: "twap" });
+    expect(rpc.callContract).not.toHaveBeenCalled();
   });
 
   it("fails closed for stale, under-sourced, unsupported, and unavailable protected pairs", async () => {
@@ -76,7 +87,7 @@ describe("Pragma FX adapter", () => {
           .mockResolvedValueOnce(["0xf4240", "0x6", "0x1", "0x5"])
           .mockResolvedValueOnce(["0xf4240", "0x6"]),
       },
-      tokens: ["USDC"],
+      tokens: ["STRK"],
     })).rejects.toThrow(/stale|future/);
     await expect(readPragmaProtectedFxSnapshots({
       rpc: {
@@ -85,7 +96,7 @@ describe("Pragma FX adapter", () => {
           .mockResolvedValueOnce(["0xf4240", "0x6", "0x1866e", "0x2"])
           .mockResolvedValueOnce(["0xf4240", "0x6"]),
       },
-      tokens: ["USDC"],
+      tokens: ["STRK"],
     })).rejects.toThrow(/only 2 aggregated sources/);
     await expect(readPragmaProtectedFxSnapshots({
       rpc: { ...baseRpc, callContract: vi.fn() },

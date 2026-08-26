@@ -11,6 +11,7 @@ import {
   type PrivatePayrollLine,
 } from "@/lib/domain/payroll";
 import type { FxSnapshot, PragmaProtectedFxSnapshot } from "@/lib/domain/fx";
+import type { DueObligationSignal, ObligationScheduleItem } from "@/lib/domain/obligation-schedule";
 import { generateUuidV7, payrollLineRecordSchema } from "@/lib/domain/records";
 import type { EncryptedPayrollIntegrityBundleCreate } from "@/lib/domain/proof-bundle";
 import type {
@@ -473,6 +474,23 @@ export class PayoClient {
         createdAt: string;
       }>;
     }>(`/api/v1/vault-records?${search}`);
+  }
+
+  async registerObligationSchedules(input: {
+    organizationId: string;
+    schedules: ObligationScheduleItem[];
+  }) {
+    return this.request<{
+      schedules: Array<ObligationScheduleItem & { materializedAt: string | null; replayed: boolean }>;
+    }>("/api/v1/obligation-schedules", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async listDueObligationSchedules(organizationId: string, limit = 100) {
+    const search = new URLSearchParams({ organizationId, limit: String(limit) });
+    return this.request<{ schedules: DueObligationSignal[] }>(`/api/v1/obligation-schedules?${search}`);
   }
 
   async registerEncryptedAgentCapability(input: {

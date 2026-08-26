@@ -10,7 +10,10 @@ import {
   type ProofWorkerSuccess,
 } from "@/lib/proof/protocol";
 import type { PayoClient } from "./payo-client";
-import { storeEncryptedRecurringAgreement } from "./agreement-directory";
+import {
+  storeEncryptedAdvancedAgreement,
+  storeEncryptedRecurringAgreement,
+} from "./agreement-directory";
 import { prepareEncryptedPayee } from "./payee-directory";
 import {
   executeProofBoundPayroll,
@@ -18,6 +21,7 @@ import {
   recoverSealedProvenPayroll,
   resumePendingPayrollSubmission,
 } from "./payroll-execution";
+import { buildAdvancedPaymentPlanDraft } from "./advanced-agreement-draft";
 
 const organizationId = "0198ddf0-9c00-7000-8000-000000000001";
 const chainId = "0x1";
@@ -67,6 +71,7 @@ function client(ready = true) {
   return {
     getFxSnapshots: vi.fn().mockImplementation((tokens: Array<"STRK" | "USDC">) =>
       Promise.resolve({ blockNumber: 1, snapshots: tokens.map((token) => snapshot(token)) })),
+    getProtectedFxSnapshots: vi.fn(),
     checkDeploymentReadiness: vi.fn().mockResolvedValue({
       readiness: {
         ready,
@@ -82,6 +87,53 @@ function client(ready = true) {
     enqueueProofVerification: vi.fn().mockResolvedValue({ proofVerification: {} }),
     getSealedPayrollRecovery: vi.fn(),
     getEncryptedRecord: vi.fn(),
+  };
+}
+
+async function unsupportedUsdcFxExecutionInput(mockClient: ReturnType<typeof client>) {
+  const payee = prepareEncryptedPayee({
+    organizationId,
+    displayName: "Protected USDC worker",
+    principalKind: "human",
+    recipientAddress: "0x789",
+    tokenPreference: "USDC",
+    jurisdictionCode: "US",
+    principal,
+    now,
+  }).record;
+  const agreement = await storeEncryptedAdvancedAgreement({
+    client: { storeEncryptedRecord: vi.fn().mockResolvedValue({ record: {} }) } as never,
+    organizationId,
+    payee,
+    token: "USDC",
+    classification: "contractor",
+    classificationAnswers: referenceClassificationAnswers("contractor"),
+    paymentPlan: buildAdvancedPaymentPlanDraft({
+      kind: "recurring",
+      cadence: "monthly",
+      nextDueAt: "2026-08-23T12:00:00.000Z",
+    }),
+    fixedAmount: "1",
+    fxProtection: {
+      referenceCurrency: "USD",
+      minimumReferenceAtomic: "1000000",
+      maximumAgeSeconds: 900,
+    },
+    principal,
+    now,
+  });
+  return {
+    client: mockClient as unknown as PayoClient,
+    organizationId,
+    organizationSecret: `0x${"45".repeat(32)}`,
+    principal,
+    chainId,
+    sealAddress,
+    obligations: [{ agreement, payee }],
+    submitPayroll: vi.fn(),
+    persistPendingSubmission: vi.fn(),
+    prove: vi.fn(prove),
+    now: () => now,
   };
 }
 
@@ -127,6 +179,15 @@ async function executionInput(mockClient: ReturnType<typeof client>) {
 }
 
 describe("proof-bound payroll browser orchestration", () => {
+  it("fails closed before proving when a protected pair has no Mainnet TWAP profile", async () => {
+    const mockClient = client();
+    const input = await unsupportedUsdcFxExecutionInput(mockClient);
+    await expect(executeProofBoundPayroll(input)).rejects.toThrow(/unavailable for USDC\/USD/);
+    expect(mockClient.getProtectedFxSnapshots).not.toHaveBeenCalled();
+    expect(input.prove).not.toHaveBeenCalled();
+    expect(input.submitPayroll).not.toHaveBeenCalled();
+  });
+
   it("pre-schedules the exact agreement root later produced by the proof witness", async () => {
     const mockClient = client();
     const input = await executionInput(mockClient);

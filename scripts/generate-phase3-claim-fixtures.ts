@@ -5,9 +5,15 @@ import { encryptVaultRecord, generateVaultPrincipal } from "@/lib/crypto/vault";
 import { buildPayrollIntegrityInputsFromSerialized } from "@/lib/proof/input-builder";
 import { provePayrollOnSelfHostedNode } from "@/lib/proof/server-prover";
 import { buildWageClaimInputs, buildWageRemediationInputs } from "@/lib/proof/wage-claim-input";
-import { loadPhase3ExceptionUiFixture } from "./lib/phase3-exception-ui-fixture";
+import {
+  generatePhase3ExceptionUiFixture,
+  loadPhase3ExceptionUiFixture,
+} from "./lib/phase3-exception-ui-fixture";
 
-const outputDirectory = resolve(process.cwd(), "evidence/phase3-devnet-fixtures");
+const outputDirectory = resolve(
+  process.cwd(),
+  process.env.PAYO_PHASE3_OUTPUT_DIRECTORY ?? "evidence/phase3-devnet-fixtures",
+);
 let organizationId = "";
 
 async function proveProfile(input: {
@@ -49,7 +55,10 @@ async function writeProof(profile: "claim" | "remediation", proof: Awaited<Retur
 }
 
 async function main() {
-  const origin = await loadPhase3ExceptionUiFixture();
+  const regenerateUiFixture = process.env.PAYO_PHASE3_REGENERATE_UI_FIXTURE === "1";
+  const origin = regenerateUiFixture
+    ? await generatePhase3ExceptionUiFixture()
+    : await loadPhase3ExceptionUiFixture();
   organizationId = origin.organizationId;
   const payroll = await buildPayrollIntegrityInputsFromSerialized(origin.payrollRequest);
   const validityStart = BigInt(origin.payrollRequest.validityStart);
@@ -100,7 +109,9 @@ async function main() {
       claimId: origin.claimDraft.id,
       remediationId: origin.remediationDraft.id,
       formInputCommitments: origin.formInputCommitments,
-      sourceArtifact: "evidence/phase3-devnet-fixtures/claim-remediation-ui-origin.json",
+      sourceArtifact: regenerateUiFixture
+        ? "runtime-generated-ui-origin"
+        : "evidence/phase3-devnet-fixtures/claim-remediation-ui-origin.json",
     },
   };
   await writeFile(resolve(outputDirectory, "claim-remediation-linkage.json"), `${JSON.stringify(summary.linkage, null, 2)}\n`);

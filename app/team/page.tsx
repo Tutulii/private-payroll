@@ -26,6 +26,7 @@ import {
   type PayeeDirectoryRecord,
 } from "@/lib/client/payee-directory";
 import {
+  obligationScheduleForRecord,
   loadEncryptedPayAgreements,
   type PayAgreementDirectoryRecord,
 } from "@/lib/client/agreement-directory";
@@ -312,7 +313,7 @@ export default function TeamPage() {
       if (!classificationMatches) {
         throw new Error("The selected treatment does not match the versioned classification fact rubric.");
       }
-      await storeEncryptedAgreementFromForm({
+      const storedAgreement = await storeEncryptedAgreementFromForm({
         client: vault.client,
         organizationId: vault.session.organizationId,
         payee,
@@ -346,13 +347,27 @@ export default function TeamPage() {
           policyId,
           policyVersion: 1,
           fxFloorAmount,
-          fxMaximumAgeSeconds: 300,
+          fxMaximumAgeSeconds: 900,
         },
       });
+      let scheduleRegistered = true;
+      try {
+        await vault.client.registerObligationSchedules({
+          organizationId: vault.session.organizationId,
+          schedules: [obligationScheduleForRecord(storedAgreement)],
+        });
+      } catch {
+        // The encrypted agreement is already durable. Payroll performs the
+        // same idempotent registration on load, so a transient scheduler/API
+        // failure must not encourage the user to create a duplicate agreement.
+        scheduleRegistered = false;
+      }
       setShowAddAgreement(false);
       setAgreementNextDueAt("");
       await refreshPayees();
-      notify(`${agreementPlanKind === "recurring" ? "Recurring" : "Advanced proof-bound"} agreement encrypted · return to Payroll to authorize and send`);
+      notify(scheduleRegistered
+        ? `${agreementPlanKind === "recurring" ? "Recurring" : "Advanced proof-bound"} agreement encrypted · return to Payroll to authorize and send`
+        : "Agreement encrypted · Payroll will retry its private due-schedule registration");
     } catch (error) {
       setDirectoryError(error instanceof Error ? error.message : "The agreement could not be encrypted.");
     } finally {
@@ -637,7 +652,8 @@ export default function TeamPage() {
                 ? <option value={agreementFormPayee ? policyForClassification(agreementFormPayee, "employee") : ""}>{policyId ? "US 2026 supplemental wages · 22% withholding" : "No executable employee policy for this jurisdiction/token"}</option>
                 : <option value={NET_INVOICE_POLICY_ID}>Net invoice · no withholding</option>}
             </select><small>{agreementClassification === "employee" ? "Narrow example only: US employee, separately identified supplemental wages, and USDC settlement. It is not a general payroll-tax engine or legal advice." : "The proof catalog root is derived locally from this version-pinned policy, never pasted into the agreement."}</small></label>
-            {agreementPlanKind === "recurring" && <label><span>Optional USD value floor</span><input value={fxFloorAmount} onChange={(event) => setFxFloorAmount(event.target.value)} inputMode="decimal" placeholder="1250.00" /><small>Six-decimal USD floor chosen by the worker. Payroll binds it to a fresh protected Pragma snapshot (maximum age: 5 minutes).</small></label>}
+            {agreementPlanKind === "recurring" && agreementFormPayee?.tokenPreference === "STRK" && <label><span>Optional USD value floor</span><input value={fxFloorAmount} onChange={(event) => setFxFloorAmount(event.target.value)} inputMode="decimal" placeholder="1250.00" /><small>Six-decimal USD floor chosen by the worker. Payroll binds it to Pragma&apos;s fresh STRK median and conservative 24-hour TWAP (maximum median age: 15 minutes).</small></label>}
+            {agreementPlanKind === "recurring" && agreementFormPayee?.tokenPreference === "USDC" && <p className="team-form-note">USDC payroll remains available, but USDC/USD FXFloor is disabled because Pragma Mainnet currently has no usable TWAP checkpoint history for that pair.</p>}
             <button className="button button--ink" type="submit" disabled={directoryLoading || !classificationAnswers || !classificationMatches || !policyId}>{directoryLoading ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />} Encrypt proof-bound agreement</button>
           </form>
         )}

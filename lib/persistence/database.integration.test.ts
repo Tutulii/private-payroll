@@ -41,6 +41,11 @@ import {
   revokeAgentCapability,
 } from "./repository";
 import {
+  listDueObligationSchedules,
+  materializeDueObligationSchedules,
+  registerObligationSchedules,
+} from "./obligation-schedule-repository";
+import {
   getChainCursor,
   getIndexedBlock,
   persistIndexedBlock,
@@ -82,6 +87,7 @@ import {
   confirmationJobs,
   disclosureGrants,
   organizationMembers,
+  obligationSchedules,
   organizations,
   payrollRuns,
   proofBundles,
@@ -114,6 +120,7 @@ async function resetDatabase() {
       settlements,
       proof_bundles,
       payroll_runs,
+      obligation_schedules,
       vault_key_grants,
       vault_records,
       organization_members,
@@ -1487,6 +1494,84 @@ databaseSuite("PostgreSQL durability integration", () => {
       blockHash: "0x21",
     });
     await expect(getIndexedBlock("SN_MAIN", 11n)).resolves.toMatchObject({ blockHash: "0x21", canonical: true });
+  });
+
+  it("materializes encrypted obligation schedules idempotently and supersedes stale revisions", async () => {
+    const organizationId = await seedOrganization();
+    const agreementId = generateUuidV7();
+    const dueAt = new Date(Date.now() - 60_000).toISOString();
+    const firstCommitment = `0x${"11".repeat(32)}`;
+    await getDatabase().insert(vaultRecords).values({
+      id: agreementId,
+      organizationId,
+      recordType: "pay-agreement",
+      revision: 1,
+      ciphertext: "encrypted-agreement-v1",
+      envelope: { encrypted: true },
+      envelopeHash: `0x${"aa".repeat(32)}`,
+      createdBy: admin.principalId,
+    });
+
+    const request = {
+      organizationId,
+      schedules: [{
+        agreementId,
+        agreementRevision: 1,
+        scheduleCommitment: firstCommitment,
+        dueAt,
+      }],
+      principal: admin,
+    };
+    await expect(Promise.all([
+      registerObligationSchedules(request),
+      registerObligationSchedules(request),
+    ])).resolves.toEqual(expect.arrayContaining([
+      [expect.objectContaining({ replayed: false, materializedAt: expect.any(String) })],
+      [expect.objectContaining({ replayed: true, materializedAt: expect.any(String) })],
+    ]));
+    await expect(listDueObligationSchedules({ organizationId, principal: admin })).resolves.toEqual([
+      expect.objectContaining({ agreementId, agreementRevision: 1, scheduleCommitment: firstCommitment }),
+    ]);
+    await expect(registerObligationSchedules({
+      ...request,
+      schedules: [{ ...request.schedules[0], scheduleCommitment: `0x${"22".repeat(32)}` }],
+    })).rejects.toMatchObject({ code: "SCHEDULE_REVISION_CONFLICT" });
+
+    const revisionTime = new Date();
+    await getDatabase().update(vaultRecords)
+      .set({ supersededAt: revisionTime })
+      .where(sql`${vaultRecords.organizationId} = ${organizationId} and ${vaultRecords.id} = ${agreementId}`);
+    await getDatabase().insert(vaultRecords).values({
+      id: agreementId,
+      organizationId,
+      recordType: "pay-agreement",
+      revision: 2,
+      ciphertext: "encrypted-agreement-v2",
+      envelope: { encrypted: true },
+      envelopeHash: `0x${"bb".repeat(32)}`,
+      createdBy: admin.principalId,
+    });
+    const futureDueAt = new Date(Date.now() + 60_000).toISOString();
+    const secondCommitment = `0x${"33".repeat(32)}`;
+    await expect(registerObligationSchedules({
+      organizationId,
+      schedules: [{
+        agreementId,
+        agreementRevision: 2,
+        scheduleCommitment: secondCommitment,
+        dueAt: futureDueAt,
+      }],
+      principal: admin,
+    })).resolves.toEqual([
+      expect.objectContaining({ agreementRevision: 2, replayed: false, materializedAt: null }),
+    ]);
+    await expect(materializeDueObligationSchedules({
+      now: new Date(Date.now() + 120_000),
+    })).resolves.toMatchObject({ materialized: 1 });
+    const stored = await getDatabase().select().from(obligationSchedules)
+      .where(sql`${obligationSchedules.organizationId} = ${organizationId}`);
+    expect(stored.find(({ agreementRevision }) => agreementRevision === 1)?.state).toBe("superseded");
+    expect(stored.find(({ agreementRevision }) => agreementRevision === 2)?.materializedAt).toBeInstanceOf(Date);
   });
 
   it("surfaces typed database errors rather than mislabelling conflicts", async () => {

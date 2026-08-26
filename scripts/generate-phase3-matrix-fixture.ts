@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { CompiledCircuit, InputMap } from "@noir-lang/noir_js";
@@ -24,7 +24,10 @@ import {
   phase3UiValidityStart,
 } from "./lib/phase3-ui-workflow-fixture";
 
-const outputDirectory = resolve(process.cwd(), "evidence/phase3-devnet-fixtures");
+const outputDirectory = resolve(
+  process.cwd(),
+  process.env.PAYO_PHASE3_OUTPUT_DIRECTORY ?? "evidence/phase3-devnet-fixtures",
+);
 const organizationId = phase3UiOrganizationId;
 const validityStart = phase3UiValidityStart;
 const validityExpiry = validityStart + 3_600n;
@@ -209,6 +212,7 @@ async function main() {
     encryptedWitness,
     principal,
   });
+  await mkdir(outputDirectory, { recursive: true });
   const summary = {
     generatedAt: new Date().toISOString(),
     circuitSha256: proof.circuitSha256,

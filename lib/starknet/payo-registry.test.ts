@@ -7,6 +7,7 @@ import {
   PAYO_REGISTRY_MIN_DELAY_SECONDS,
   prepareFxRootPublication,
   preparePayoBaselineSchedule,
+  preparePayoPhase3VerifierSchedule,
   prepareObligationRootSchedule,
 } from "./payo-registry";
 
@@ -98,5 +99,41 @@ describe("PAYO obligation-root registry calls", () => {
       result.validAfter.toString(),
       result.expiresAt.toString(),
     ]);
+  });
+
+  it("activates the three canonical Phase 3 verifier profiles in one transaction", () => {
+    const profiles = [
+      { mode: 0 as const, proofVersion: 2 as const, bundleAddress: "0x101" },
+      { mode: 2 as const, proofVersion: 3 as const, bundleAddress: "0x202" },
+      { mode: 3 as const, proofVersion: 4 as const, bundleAddress: "0x303" },
+    ] as const;
+    const result = preparePayoPhase3VerifierSchedule({
+      registryAddress: "0x456",
+      profiles,
+      blockTimestamp: 3_000,
+    });
+    expect(result.calls.map(({ entrypoint }) => entrypoint)).toEqual([
+      "schedule_verifier",
+      "schedule_verifier",
+      "schedule_verifier",
+    ]);
+    expect(result.calls.map(({ calldata }) => (calldata as string[]).slice(0, 3))).toEqual([
+      ["0", "2", validateAndParseAddress("0x101")],
+      ["2", "3", validateAndParseAddress("0x202")],
+      ["3", "4", validateAndParseAddress("0x303")],
+    ]);
+    expect(result.expiresAt).toBe(result.validAfter + PAYO_BASELINE_LIFETIME_SECONDS);
+  });
+
+  it("rejects a non-canonical Phase 3 verifier mapping", () => {
+    expect(() => preparePayoPhase3VerifierSchedule({
+      registryAddress: "0x456",
+      profiles: [
+        { mode: 0, proofVersion: 2, bundleAddress: "0x101" },
+        { mode: 2, proofVersion: 3, bundleAddress: "0x202" },
+        { mode: 2 as 3, proofVersion: 4, bundleAddress: "0x303" },
+      ],
+      blockTimestamp: 3_000,
+    })).toThrow(/not canonical/);
   });
 });

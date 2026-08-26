@@ -49,9 +49,11 @@ import { describeWalletError } from "@/lib/starknet/wallet-error";
 import {
   prepareFxRootPublication,
   preparePayoBaselineSchedule,
+  preparePayoPhase3VerifierSchedule,
   prepareObligationRootSchedule,
   rootLimbs,
 } from "@/lib/starknet/payo-registry";
+import { PAYO_PHASE3_MAINNET_DEPLOYMENT } from "@/lib/starknet/payo-phase3-deployment";
 import {
   buildPayoMainnetTopologyPlan,
   PAYO_DEPLOYMENT_ARTIFACT_NAMES,
@@ -153,6 +155,27 @@ export type PayoBaselineScheduleResult = {
   expiresAt: number;
 };
 
+export type PayoPhase3ActivationStatus = {
+  blockNumber: number;
+  topologyReady: boolean;
+  walletIsAdmin: boolean;
+  allActive: boolean;
+  profiles: Array<{
+    name: string;
+    mode: number;
+    proofVersion: number;
+    bundleAddress: string;
+    active: boolean;
+  }>;
+};
+
+export type PayoPhase3ActivationResult = {
+  transactionHash: string;
+  validAfter: number;
+  expiresAt: number;
+  status: PayoPhase3ActivationStatus;
+};
+
 export type PrivacyCapability =
   | "unknown"
   | "checking"
@@ -220,6 +243,8 @@ type StarknetWalletContextValue = {
     plan: PayoMainnetTopologyPlan,
     policyRoot: string,
   ) => Promise<PayoBaselineScheduleResult>;
+  readPayoPhase3Activation: () => Promise<PayoPhase3ActivationStatus>;
+  activatePayoPhase3: () => Promise<PayoPhase3ActivationResult>;
   clearTransaction: () => void;
 };
 
@@ -1494,6 +1519,151 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     }
   }, [address, chainId, walletAccount]);
 
+  const readPayoPhase3Activation = useCallback(async (): Promise<PayoPhase3ActivationStatus> => {
+    const deployment = PAYO_PHASE3_MAINNET_DEPLOYMENT;
+    const blockNumber = await mainnetProvider.getBlockNumber();
+    const [
+      chain,
+      registryAdmin,
+      sealClassHash,
+      sealPool,
+      sealPolicyRegistry,
+      sealObligationRegistry,
+      ...bundleClassHashes
+    ] = await Promise.all([
+      mainnetProvider.getChainId(),
+      mainnetProvider.callContract({
+        contractAddress: deployment.policyRegistryAddress,
+        entrypoint: "get_admin",
+        calldata: [],
+      }, blockNumber),
+      mainnetProvider.getClassHashAt(deployment.sealAddress, blockNumber),
+      mainnetProvider.callContract({
+        contractAddress: deployment.sealAddress,
+        entrypoint: "get_pool",
+        calldata: [],
+      }, blockNumber),
+      mainnetProvider.callContract({
+        contractAddress: deployment.sealAddress,
+        entrypoint: "get_catalog_registry",
+        calldata: [],
+      }, blockNumber),
+      mainnetProvider.callContract({
+        contractAddress: deployment.sealAddress,
+        entrypoint: "get_obligation_registry",
+        calldata: [],
+      }, blockNumber),
+      ...deployment.profiles.map((profile) =>
+        mainnetProvider.getClassHashAt(profile.bundleAddress, blockNumber)),
+    ]);
+    const topologyReady = (
+      BigInt(chain) === BigInt(STARKNET_MAINNET_CHAIN_ID)
+      && BigInt(registryAdmin[0] ?? 0) === BigInt(deployment.adminAddress)
+      && BigInt(sealClassHash) === BigInt(deployment.sealClassHash)
+      && BigInt(sealPool[0] ?? 0) === BigInt(STRK20_MAINNET_POOL_ADDRESS)
+      && BigInt(sealPolicyRegistry[0] ?? 0) === BigInt(deployment.policyRegistryAddress)
+      && BigInt(sealObligationRegistry[0] ?? 0) === BigInt(deployment.obligationRegistryAddress)
+      && bundleClassHashes.every((classHash, index) =>
+        BigInt(classHash) === BigInt(deployment.profiles[index].bundleClassHash))
+    );
+    if (!topologyReady) {
+      throw new Error("The live Phase 3 Mainnet topology does not match the reviewed deployment.");
+    }
+    const profiles = await Promise.all(deployment.profiles.map(async (profile) => {
+      const valid = await mainnetProvider.callContract({
+        contractAddress: deployment.policyRegistryAddress,
+        entrypoint: "is_verifier_valid",
+        calldata: [profile.mode.toString(), profile.proofVersion.toString()],
+      }, blockNumber);
+      let active = num.toBigInt(valid[0] ?? "0x0") !== 0n;
+      if (active) {
+        const configured = await mainnetProvider.callContract({
+          contractAddress: deployment.policyRegistryAddress,
+          entrypoint: "get_verifier",
+          calldata: [profile.mode.toString(), profile.proofVersion.toString()],
+        }, blockNumber);
+        active = BigInt(configured[0] ?? 0) === BigInt(profile.bundleAddress);
+      }
+      return {
+        name: profile.name,
+        mode: profile.mode,
+        proofVersion: profile.proofVersion,
+        bundleAddress: profile.bundleAddress,
+        active,
+      };
+    }));
+    return {
+      blockNumber,
+      topologyReady,
+      walletIsAdmin: Boolean(address && BigInt(address) === BigInt(deployment.adminAddress)),
+      allActive: profiles.every((profile) => profile.active),
+      profiles,
+    };
+  }, [address]);
+
+  const activatePayoPhase3 = useCallback(async (): Promise<PayoPhase3ActivationResult> => {
+    if (!walletAccount || !address) throw new Error("Connect Ready wallet first.");
+    if (chainId !== STARKNET_MAINNET_CHAIN_ID) {
+      throw new Error("Phase 3 activation must be signed on Starknet Mainnet.");
+    }
+    const deployment = PAYO_PHASE3_MAINNET_DEPLOYMENT;
+    if (BigInt(address) !== BigInt(deployment.adminAddress)) {
+      throw new Error("The connected Ready wallet is not the PAYO registry administrator.");
+    }
+    if (privateActionLockRef.current) throw new Error("A Mainnet wallet request is already active.");
+    const preflight = await readPayoPhase3Activation();
+    if (!preflight.topologyReady || !preflight.walletIsAdmin) {
+      throw new Error("Phase 3 activation preflight did not pass.");
+    }
+    if (preflight.allActive) throw new Error("All Phase 3 verifier profiles are already active.");
+    const block = await mainnetProvider.getBlock("latest");
+    const schedule = preparePayoPhase3VerifierSchedule({
+      registryAddress: deployment.policyRegistryAddress,
+      profiles: deployment.profiles,
+      blockTimestamp: Number(block.timestamp),
+    });
+    const requestToken = Symbol("phase3-registry");
+    privateActionLockRef.current = requestToken;
+    const pending: PrivateTransaction = {
+      kind: "registry",
+      stage: "wallet",
+      label: "Activate PAYO Phase 3 verifiers",
+    };
+    setError("");
+    setTransaction(pending);
+    try {
+      const submitted = await walletAccount.execute(schedule.calls);
+      const confirming = {
+        ...pending,
+        stage: "confirming" as const,
+        hash: submitted.transaction_hash,
+      };
+      setTransaction(confirming);
+      await mainnetProvider.waitForTransaction(submitted.transaction_hash, {
+        retries: 400,
+        retryInterval: 3_000,
+      });
+      const status = await readPayoPhase3Activation();
+      if (!status.allActive) {
+        throw new Error("The activation confirmed but one or more verifier profiles are inactive.");
+      }
+      setTransaction({ ...confirming, stage: "confirmed" });
+      return {
+        transactionHash: submitted.transaction_hash,
+        validAfter: schedule.validAfter,
+        expiresAt: schedule.expiresAt,
+        status,
+      };
+    } catch (activationError) {
+      const message = describeError(activationError);
+      setTransaction({ ...pending, stage: "failed", error: message });
+      setError(message);
+      throw new Error(message);
+    } finally {
+      if (privateActionLockRef.current === requestToken) privateActionLockRef.current = null;
+    }
+  }, [address, chainId, readPayoPhase3Activation, walletAccount]);
+
   const isConnected = Boolean(walletAccount && address);
   const isMainnet = chainId === STARKNET_MAINNET_CHAIN_ID;
   const networkName = !chainId
@@ -1556,6 +1726,8 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     isFxRootActive,
     deployPayoMainnet,
     schedulePayoBaseline,
+    readPayoPhase3Activation,
+    activatePayoPhase3,
     clearTransaction: () => setTransaction(null),
   };
 

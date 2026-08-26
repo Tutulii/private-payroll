@@ -51,6 +51,7 @@ const [
 const {
   createPrivateTransfers,
   ProvingServiceProofProvider,
+  SetupRequirement,
 } = sdk;
 const { CallMockProofProvider, ContractDiscoveryProvider } = sdkTesting;
 const {
@@ -694,6 +695,15 @@ if (action === "integrate") {
       `Private settlement mismatch: before ${before.alice}/${before.bob}, after ${afterSettlement.alice}/${afterSettlement.bob}.`,
     );
   }
+  const [{ channels: outgoingChannels }, transferRequirement] = await Promise.all([
+    aliceTransfers.discoverChannels([bob.address], { blockIdentifier: "latest" }),
+    aliceTransfers.discoverRequirement(bob.address, strkAddress),
+  ]);
+  const recipientChannel = outgoingChannels?.get(BigInt(bob.address));
+  const strkTokenChannel = recipientChannel?.tokens.get(BigInt(strkAddress));
+  if (!recipientChannel || !strkTokenChannel || transferRequirement !== SetupRequirement.Ready) {
+    throw new Error("The private settlement did not leave a discoverable Ready STRK20 recipient/token channel.");
+  }
 
   const tampered = [...shards[0]];
   tampered[tampered.length - 1] = normalizeHex(BigInt(tampered.at(-1)) ^ 1n);
@@ -797,6 +807,16 @@ if (action === "integrate") {
         bob: afterSettlement.bob.toString(),
       },
     },
+    channelLifecycle: {
+      setupMode: "sdk-auto-setup",
+      discoveryMode: "refresh",
+      recipientAddress: normalizeHex(bob.address),
+      tokenAddress: strkAddress,
+      requirementAfterSettlement: "Ready",
+      recipientChannelDiscovered: true,
+      tokenSubchannelDiscovered: true,
+      nextNoteNonce: strkTokenChannel.noteNonce,
+    },
     transactions: {
       schedule: scheduleTransactionHash,
       privateSettlementAndSeal: privateSettlementTransactionHash,
@@ -807,6 +827,10 @@ if (action === "integrate") {
       officialPoolClassMatched: true,
       sealConfiguredForOfficialPool: true,
       privateTransferAndPayoSealAtomic: true,
+      channelAutoSetupRequested: true,
+      recipientChannelDiscovered: true,
+      strkTokenSubchannelDiscovered: true,
+      recipientTokenChannelReady: true,
       recipientDiscoveredPrivateNote: true,
       payoProofVerifiedOnchain: true,
       tamperedProofRejected,

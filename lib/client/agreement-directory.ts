@@ -10,6 +10,10 @@ import {
 } from "@/lib/domain/classification";
 import { generateUuidV7, payAgreementRecordSchema } from "@/lib/domain/records";
 import {
+  agreementOperationalDueAt,
+  type ObligationScheduleItem,
+} from "@/lib/domain/obligation-schedule";
+import {
   advanceRecurringSchedule,
   advancedPlanEntitlement,
   proofScheduleForAdvancedPlan,
@@ -56,6 +60,15 @@ export async function agreementProofScheduleCommitment(
 
 export function recordProofScheduleCommitment(record: PayAgreementDirectoryRecord): `0x${string}` {
   return (record.proofScheduleCommitment ?? agreementScheduleCommitment(record.agreement)) as `0x${string}`;
+}
+
+export function obligationScheduleForRecord(record: PayAgreementDirectoryRecord): ObligationScheduleItem {
+  return {
+    agreementId: record.agreement.id,
+    agreementRevision: record.revision,
+    scheduleCommitment: recordProofScheduleCommitment(record),
+    dueAt: agreementOperationalDueAt(record.agreement),
+  };
 }
 
 export async function advanceEncryptedRecurringAgreement(input: {
