@@ -3,9 +3,12 @@
 Updated: 2026-08-26
 
 This file records what has been exercised, not what merely exists as source.
-Phase 3 is **not complete** under the gate in `MASTER_PLAN.md`: every workflow
-must be created in the UI, encrypted, proved, settled against Devnet, disclosed
-to its intended recipient, and tested for negative rejection.
+The rendered UI, encryption, proving, Devnet settlement, scoped disclosure, and
+negative-rejection parts of the Phase 3 gate have now been exercised. Phase 3
+is still **not complete** under the strict gate in `MASTER_PLAN.md` because the
+official STRK20 Devnet integration cannot enable full invoke-proof verification:
+the current Devnet rejects that mode as unimplemented. The exact limitation and
+the evidence that must not be overstated are recorded below.
 
 ## Standalone Starknet Devnet evidence
 
@@ -170,9 +173,24 @@ agreement, recipient, schedule, manifest, policy, FX, nullifier, proof-calldata,
 and official-pool receipt links. `npm run phase3:strk20:verify-exceptions`
 performs the equivalent cross-check for the claim and remediation path.
 
-This is production-command traceability, not a claim that a browser automation
-clicked every rendered control. That remaining distinction is preserved in the
-completion blockers below.
+Linux Chromium now also exercises the rendered production controls rather than
+calling those commands directly. The test renders the exact `TeamPage` and
+`ActivityPage` components, clicks `Encrypt contributor`, creates all seven
+advanced agreement variants through `Encrypt proof-bound agreement`, drafts a
+private claim through `Encrypt claim draft`, and drafts its linked remediation
+through `Encrypt remediation draft`. It checks authenticated encryption round
+trips, the statutory/FX/classification fields, workflow coverage, claim-to-
+remediation linkage, and the absence of private earnings values from serialized
+ciphertext. The green run and downloadable browser-origin artifact are at
+[GitHub Actions run 32973338048](https://github.com/Tutulii/private-payroll/actions/runs/32973338048).
+
+The browser harness replaces only authentication, vault persistence, and run
+fixtures with a synthetic in-memory adapter. It does not replace the production
+Team or Activity controls, record builders, schemas, or encryption functions.
+The harness route requires both a non-production Next.js runtime and the
+server-only `PAYO_BROWSER_EVIDENCE_MODE=1` flag. A production server smoke test
+returned `200` for `/team` and `404` for `/payo-browser-evidence/team`, so the
+synthetic principal and adapter are not an exposed production test route.
 
 ## Integrated application work
 
@@ -242,6 +260,15 @@ completion blockers below.
   records, both real proof-calldata shards, the official-pool settlement, and
   tamper/replay rejection. The equivalent claim/remediation origin validator
   also passed.
+- Linux Chromium clicked the exact rendered Team and Activity production
+  controls for seven advanced agreements plus wage claim and remediation,
+  validated encrypted round trips and private-field absence, and uploaded the
+  browser-origin artifact in
+  [CI run 32973338048](https://github.com/Tutulii/private-payroll/actions/runs/32973338048).
+- The full proof-artifact workflow regenerated and self-verified the linked Noir
+  proofs, reproduced the Garaga verifier, passed fresh real-Cairo and standalone
+  RPC Devnet integrations, and generated both proofs in a Chromium Web Worker in
+  [run 32966050294](https://github.com/Tutulii/private-payroll/actions/runs/32966050294).
 - Official-pool v3 claim and exact-recipient/token/amount v4 private
   remediation passed with statuses `4` and `5`, real Garaga shard receipts,
   tamper and replay rejection, and private balance rediscovery; its separate
@@ -253,19 +280,12 @@ completion blockers below.
 
 ## Remaining completion blockers
 
-These are the reasons Phase 3 is not reported as complete:
+This is why Phase 3 is not reported as complete:
 
 - The seven advanced matrix workflows now have official-pool private-value
   movements tied atomically to PAYO proof enforcement, but Devnet does not
   implement full transaction-proof verification. Running the pool with that
   proof layer disabled is partial evidence under the strict no-mock/no-disabled
   completion rule.
-- Every workflow now has reproducible production-command traceability from form
-  data through encryption, proving, official-pool settlement, intended-scope
-  disclosure, and negative rejection. The strict gate still requires a
-  browser-driven authenticated run that exercises the rendered controls; the
-  synthetic command fixture is deliberately not mislabeled as that browser
-  event evidence.
-
 Mainnet deployment and demonstrations belong to Phase 5 and are not counted as
 Phase 3 completion evidence.
