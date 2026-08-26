@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { encryptedVaultRecordSchema } from "@/lib/crypto/vault";
 import { commitmentSchema, uuidV7Schema } from "@/lib/domain/records";
+import { settlementWorkflowSchema } from "@/lib/domain/settlement";
 import { createSettlementIntent, listSettlements } from "@/lib/persistence/settlement-repository";
 import { ApiError, requirePrincipal } from "@/lib/server/auth";
 import { apiFailure, readJson } from "@/lib/server/http";
@@ -9,6 +10,8 @@ const settlementIntentSchema = z.object({
   id: uuidV7Schema,
   organizationId: uuidV7Schema,
   runId: uuidV7Schema,
+  workflowType: settlementWorkflowSchema,
+  subjectRecordId: uuidV7Schema,
   walletRequestId: uuidV7Schema,
   tokenTotalsCommitment: commitmentSchema,
   envelope: encryptedVaultRecordSchema,

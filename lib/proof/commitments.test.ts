@@ -25,6 +25,24 @@ describe("PAYO circuit-internal proof commitments", () => {
     ).toThrow("at most 50");
   });
 
+  it("builds a line opening that reconstructs the fixed manifest root", () => {
+    const leaves = [
+      committer.proofHash(9n, [1n]),
+      committer.proofHash(9n, [2n]),
+      committer.proofHash(9n, [3n]),
+    ];
+    const opening = committer.buildProofFixedMerkleMembership(leaves, 1);
+    let current = opening.leaf;
+    for (const [level, sibling] of opening.siblings.entries()) {
+      current = opening.pathBits[level]
+        ? committer.proofMerkleNode(sibling, current)
+        : committer.proofMerkleNode(current, sibling);
+    }
+    expect(current).toBe(opening.root);
+    expect(opening.root).toBe(committer.buildProofFixedMerkleRoot(leaves));
+    expect(() => committer.buildProofFixedMerkleMembership(leaves, 3)).toThrow(/real manifest leaf/);
+  });
+
   it("builds distinct catalog memberships that reconstruct one shared root", () => {
     const commitments = [`0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`];
     const catalog = committer.buildProofCatalog(commitments);

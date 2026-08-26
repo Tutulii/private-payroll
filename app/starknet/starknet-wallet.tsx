@@ -40,8 +40,10 @@ import {
   STRK20_MAINNET_POOL_ADDRESS,
 } from "@/lib/starknet/deployment";
 import {
+  buildPrivateExceptionActions,
   buildPrivatePayrollActions,
   requiredPayrollReservesForQuotes,
+  type PrivateExceptionWorkflow,
 } from "@/lib/starknet/private-payroll";
 import { describeWalletError } from "@/lib/starknet/wallet-error";
 import {
@@ -91,7 +93,7 @@ export type WalletChoice = {
 };
 
 export type PrivateTransaction = {
-  kind: "shield" | "payroll" | "registry" | "deployment";
+  kind: "shield" | "payroll" | "wage_claim" | "wage_remediation" | "registry" | "deployment";
   stage: "wallet" | "confirming" | "confirmed" | "failed";
   label: string;
   hash?: string;
@@ -193,6 +195,11 @@ type StarknetWalletContextValue = {
   shieldToken: (token: PayrollTokenSymbol, amount: string, quote?: ShieldFeeQuote) => Promise<string>;
   shieldStrk: (amount: string) => Promise<string>;
   runProofBoundPayroll: (
+    recipients: PayrollRecipient[],
+    payoAction: STRK20_INVOKE_ACTION,
+  ) => Promise<string>;
+  runProofBoundException: (
+    workflow: PrivateExceptionWorkflow,
     recipients: PayrollRecipient[],
     payoAction: STRK20_INVOKE_ACTION,
   ) => Promise<string>;
@@ -730,7 +737,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
 
   const submitPrivateActions = useCallback(
     async (
-      kind: "shield" | "payroll",
+      kind: "shield" | "payroll" | "wage_claim" | "wage_remediation",
       label: string,
       actions: STRK20_ACTION[],
       details: Pick<
@@ -944,6 +951,56 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
       return submitPrivateActions(
         "payroll",
         `${recipients.length} private ${recipients.length === 1 ? "payment" : "payments"}`,
+        actions,
+        {
+          totals,
+          feeReserves,
+          walletFee: singleFeeQuote?.walletFee,
+          feeToken: singleFeeQuote?.token,
+          feeQuoteExact: feeQuotes.every((quote) => quote.exact),
+        },
+      );
+    },
+    [refreshBalanceForAccount, requestPrivateFeeQuote, submitPrivateActions, walletAccount],
+  );
+
+  const runProofBoundException = useCallback(
+    async (
+      workflow: PrivateExceptionWorkflow,
+      recipients: PayrollRecipient[],
+      payoAction: STRK20_INVOKE_ACTION,
+    ) => {
+      const configuredSeal = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
+      const { actions, totals } = buildPrivateExceptionActions(
+        workflow,
+        recipients,
+        payoAction,
+        configuredSeal ?? "",
+      );
+      if (!walletAccount) throw new Error("Connect Ready wallet first.");
+      const feeTokens = workflow === "wage_claim"
+        ? [PAYROLL_TOKENS.STRK]
+        : PAYROLL_TOKEN_LIST.filter((token) => totals[token.symbol] > 0n);
+      const [feeQuotes, currentShieldedBalances] = await Promise.all([
+        Promise.all(feeTokens.map((token) => requestPrivateFeeQuote(token.symbol))),
+        refreshBalanceForAccount(walletAccount),
+      ]);
+      const feeReserves: Record<PayrollTokenSymbol, bigint> = { STRK: 0n, USDC: 0n };
+      for (const quote of feeQuotes) feeReserves[quote.token] = quote.walletFee;
+      const requiredReserves = requiredPayrollReservesForQuotes(totals, feeReserves);
+      for (const token of PAYROLL_TOKEN_LIST) {
+        const required = requiredReserves[token.symbol];
+        const balance = currentShieldedBalances[token.symbol];
+        if (required > 0n && (balance === null || required > balance)) {
+          throw new Error(
+            `The shielded ${token.symbol} treasury does not cover this ${workflow.replaceAll("_", " ")} and its private fee reserve. Required ${formatTokenAmount(required, token)} ${token.symbol}; available ${formatTokenAmount(balance, token)} ${token.symbol}.`,
+          );
+        }
+      }
+      const singleFeeQuote = feeQuotes.length === 1 ? feeQuotes[0] : undefined;
+      return submitPrivateActions(
+        workflow,
+        workflow === "wage_claim" ? "Private wage claim" : "Private wage remediation",
         actions,
         {
           totals,
@@ -1491,6 +1548,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     shieldToken,
     shieldStrk,
     runProofBoundPayroll,
+    runProofBoundException,
     reconcilePayrollTransaction,
     scheduleObligationRoot,
     isObligationRootActive,

@@ -95,6 +95,7 @@ export async function storeEncryptedPayrollIntegrityBundle(input: {
     envelopeRecordId: bundle.id,
     envelopeRevision: bundle.revision,
     proofType: bundle.proofType,
+    subjectRecordId: bundle.subjectRecordId,
     proofVersion: bundle.proofVersion,
     circuitSha256: bundle.circuitSha256,
     verificationKeySha256: bundle.verificationKeySha256,
@@ -151,15 +152,45 @@ export async function storeEncryptedPayrollIntegrityBundle(input: {
       }
       return { ...existing, replayed: true };
     }
-    if (run.state !== "calculated") {
+    const payrollProfile = bundle.proofType === "payroll_integrity";
+    if (payrollProfile && run.state !== "calculated") {
       throw new ApiError(409, `Payroll must be calculated before proof storage; current state is ${run.state}.`, "RUN_NOT_CALCULATED");
     }
+    if (!payrollProfile) {
+      const expectedRecordType = bundle.proofType === "wage_claim" ? "wage-claim" : "remediation";
+      const expectedRunState = bundle.proofType === "wage_claim" ? "confirmed" : "disputed";
+      if (run.state !== expectedRunState) {
+        throw new ApiError(
+          409,
+          `${bundle.proofType} requires a ${expectedRunState} payroll; current state is ${run.state}.`,
+          "EXCEPTION_RUN_STATE_INVALID",
+        );
+      }
+      const [subject] = await transaction
+        .select({ recordType: vaultRecords.recordType })
+        .from(vaultRecords)
+        .where(and(
+          eq(vaultRecords.organizationId, bundle.organizationId),
+          eq(vaultRecords.id, bundle.subjectRecordId),
+          eq(vaultRecords.recordType, expectedRecordType),
+          isNull(vaultRecords.supersededAt),
+        ))
+        .limit(1);
+      if (!subject) {
+        throw new ApiError(404, "Encrypted proof subject was not found.", "PROOF_SUBJECT_NOT_FOUND");
+      }
+    }
 
-    for (const [label, existingRoot, proofRoot] of [
+    const rootsToMatch = payrollProfile ? [
       ["agreement", run.agreementRoot, agreementRoot],
       ["manifest", run.manifestRoot, manifestRoot],
       ["run nullifier", run.runNullifier, runNullifier],
-    ] as const) {
+    ] as const : [
+      ["agreement", run.agreementRoot, agreementRoot],
+      ["policy", run.policyRoot, policyRoot],
+      ["FX", run.fxRoot, fxRoot],
+    ] as const;
+    for (const [label, existingRoot, proofRoot] of rootsToMatch) {
       if (existingRoot && existingRoot.toLowerCase() !== proofRoot.toLowerCase()) {
         throw new ApiError(409, `Proof ${label} does not match the payroll run.`, "PROOF_RUN_MISMATCH");
       }
@@ -183,26 +214,29 @@ export async function storeEncryptedPayrollIntegrityBundle(input: {
         organizationId: bundle.organizationId,
         proofType: bundle.proofType,
         proofVersion: bundle.proofVersion,
+        subjectRecordId: bundle.subjectRecordId,
         proofPackage: metadata,
         proofHash: envelopeHash,
         verificationState: "locally_verified",
       })
       .returning();
-    const [updatedRun] = await transaction
-      .update(payrollRuns)
-      .set({
-        state: "proven",
-        agreementRoot,
-        manifestRoot,
-        policyRoot,
-        fxRoot,
-        runNullifier,
-        updatedAt: new Date(),
-        version: sql`${payrollRuns.version} + 1`,
-      })
-      .where(and(eq(payrollRuns.id, bundle.runId), eq(payrollRuns.state, "calculated")))
-      .returning({ id: payrollRuns.id });
-    if (!updatedRun) throw new ApiError(409, "Payroll state changed during proof storage.", "RUN_STATE_CONFLICT");
+    if (payrollProfile) {
+      const [updatedRun] = await transaction
+        .update(payrollRuns)
+        .set({
+          state: "proven",
+          agreementRoot,
+          manifestRoot,
+          policyRoot,
+          fxRoot,
+          runNullifier,
+          updatedAt: new Date(),
+          version: sql`${payrollRuns.version} + 1`,
+        })
+        .where(and(eq(payrollRuns.id, bundle.runId), eq(payrollRuns.state, "calculated")))
+        .returning({ id: payrollRuns.id });
+      if (!updatedRun) throw new ApiError(409, "Payroll state changed during proof storage.", "RUN_STATE_CONFLICT");
+    }
     await transaction.insert(auditEvents).values({
       id: generateUuidV7(),
       organizationId: bundle.organizationId,

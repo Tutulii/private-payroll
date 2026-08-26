@@ -19,6 +19,7 @@ import { requireOrganizationRole } from "./repository";
 import {
   auditEvents,
   organizationMembers,
+  payrollRuns,
   proofBundles,
   proofVerificationJobs,
   settlements,
@@ -98,6 +99,22 @@ export async function enqueueProofVerification(input: {
     ) {
       throw new ApiError(404, "Proof bundle does not belong to this settlement.", "PROOF_BUNDLE_NOT_FOUND");
     }
+    const expectedProofType = settlement.workflowType === "payroll"
+      ? "payroll_integrity"
+      : settlement.workflowType;
+    if (
+      proofBundle.proofType !== expectedProofType
+      || proofBundle.subjectRecordId !== settlement.subjectRecordId
+    ) {
+      throw new ApiError(
+        409,
+        "Proof bundle does not match the settlement workflow subject.",
+        "PROOF_SETTLEMENT_WORKFLOW_MISMATCH",
+      );
+    }
+    if (!["locally_verified", "onchain_verified"].includes(proofBundle.verificationState)) {
+      throw new ApiError(409, "Proof bundle has not passed local verification.", "PROOF_NOT_LOCALLY_VERIFIED");
+    }
     const metadata = payrollIntegrityBundleMetadataSchema.parse(proofBundle.proofPackage);
     for (const shardIndex of [0, 1] as const) {
       if (BigInt(shardHashes[shardIndex]) !== BigInt(metadata.shardCalldataHashes[shardIndex])) {
@@ -164,6 +181,7 @@ export type LeasedProofVerificationJob = {
   id: string;
   settlementId: string;
   proofBundleId: string;
+  runId: string;
   organizationId: string;
   attempts: number;
   nextShard: 0 | 1;
@@ -175,6 +193,7 @@ export type LeasedProofVerificationJob = {
   chainId: string;
   sealAddress: string;
   validityExpiry: string;
+  proofVersion: string;
   shardCalldataHashes: readonly [string, string];
   shards: readonly [string[], string[]];
   leaseOwner: string;
@@ -247,6 +266,7 @@ export async function leaseProofVerificationJobs(
         const [bundle] = await transaction
           .select({
             organizationId: proofBundles.organizationId,
+            runId: proofBundles.runId,
             proofPackage: proofBundles.proofPackage,
           })
           .from(proofBundles)
@@ -262,6 +282,7 @@ export async function leaseProofVerificationJobs(
           id: job.id,
           settlementId: job.settlementId,
           proofBundleId: job.proofBundleId,
+          runId: bundle.runId,
           organizationId: bundle.organizationId,
           attempts: job.attempts,
           nextShard: job.nextShard,
@@ -273,6 +294,7 @@ export async function leaseProofVerificationJobs(
           chainId: metadata.commonInputs.chainId,
           sealAddress: metadata.commonInputs.sealAddress,
           validityExpiry: metadata.commonInputs.validityExpiry,
+          proofVersion: metadata.proofVersion,
           shardCalldataHashes: metadata.shardCalldataHashes,
           shards,
           leaseOwner: workerId,
@@ -400,6 +422,17 @@ export async function recordProofVerificationProgress(
         .update(proofBundles)
         .set({ verificationState: "onchain_verified", verificationTransactionHash: verificationHash })
         .where(eq(proofBundles.id, job.proofBundleId));
+      if (BigInt(job.proofVersion) === 3n) {
+        await transaction
+          .update(payrollRuns)
+          .set({ state: "disputed", updatedAt: now, version: sql`${payrollRuns.version} + 1` })
+          .where(and(eq(payrollRuns.id, job.runId), eq(payrollRuns.state, "confirmed")));
+      } else if (BigInt(job.proofVersion) === 4n) {
+        await transaction
+          .update(payrollRuns)
+          .set({ state: "reconciled", updatedAt: now, version: sql`${payrollRuns.version} + 1` })
+          .where(and(eq(payrollRuns.id, job.runId), eq(payrollRuns.state, "disputed")));
+      }
       await transaction.insert(auditEvents).values({
         id: generateUuidV7(),
         organizationId: job.organizationId,

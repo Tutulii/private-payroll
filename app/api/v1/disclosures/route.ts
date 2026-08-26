@@ -1,13 +1,13 @@
 import { z } from "zod";
 import { encryptedVaultRecordSchema } from "@/lib/crypto/vault";
 import { uuidV7Schema } from "@/lib/domain/records";
-import { createDisclosureGrant, revokeDisclosureGrant } from "@/lib/persistence/receipt-repository";
+import { createDisclosureGrant, listDisclosureGrants, revokeDisclosureGrant } from "@/lib/persistence/receipt-repository";
 import { requirePrincipal } from "@/lib/server/auth";
 import { apiFailure, readJson } from "@/lib/server/http";
 
 const fieldScopeSchema = z.array(z.enum([
   "identity", "gross", "deductions", "net", "token", "schedule",
-  "classification", "aggregate", "settlement",
+  "classification", "aggregate", "settlement", "exception",
 ])).min(1);
 
 const createDisclosureSchema = z.object({
@@ -25,6 +25,16 @@ const revokeDisclosureSchema = z.object({
   organizationId: uuidV7Schema,
   grantId: uuidV7Schema,
 }).strict();
+
+export async function GET(request: Request) {
+  try {
+    const principal = await requirePrincipal(request);
+    const organizationId = uuidV7Schema.parse(new URL(request.url).searchParams.get("organizationId"));
+    return Response.json({ grants: await listDisclosureGrants(organizationId, principal) });
+  } catch (error) {
+    return apiFailure(error);
+  }
+}
 
 export async function POST(request: Request) {
   try {

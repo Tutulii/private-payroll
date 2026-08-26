@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-26T09:43:37.639Z",
+  "devnetVersion": "0.8.0-rc.3",
+  "rpcVersion": "0.10.2",
+  "rpcUrl": "http://127.0.0.1:5055",
+  "chainId": "0x534e5f5345504f4c4941",
+  "accountAddress": "0x49dfb8ce986e21d354ac93ea65e6a11f639c1934ea253e5ff14ca62eca0f38e",
+  "proofWindow": {
+    "validityStart": 1000,
+    "validityExpiry": 2000
+  },
+  "classes": {
+    "baseVerifier": {
+      "classHash": "0x601776a0980ab1b8e3d629d456dccc5eace85ba6f47a015d2e3c3448a758bb9",
+      "declarationTransactionHash": "0x5a33a2019716780b76f090b9ee78343d9c110c1ae10e7df87bc578a831a9539",
+      "artifactSha256": "b075a5c34344ae1b28a7199c003f9f34f4d1fbd9b22eafcc75bc0800980480fe"
+    },
+    "advancedVerifier": {
+      "classHash": "0x47b2585bd5baefdde63e15914797528339db0bc9e6ca3a4e7136d85ac59124f",
+      "declarationTransactionHash": "0x5b39562f320fc9839d3bf5e12e3eafe3fc99382839340b1a2c3562b9972be1f",
+      "artifactSha256": "e9cdb63ee3a550edc337496cda532a391da35074ed3a673522d72d1b6b630de7"
+    },
+    "claimVerifier": {
+      "classHash": "0x45b077d6b3ac2717d9e5b432cc2271f750b0cb75995155e0be179da2369bb0a",
+      "declarationTransactionHash": "0x11ff0591c339755fadb73df2f49329763da6f751d6e0eb69dfc09e9a9531961",
+      "artifactSha256": "44e2efab58ca29151a5307fa83215d6ca8616868eed346b5577512ef3f45f5d3"
+    },
+    "remediationVerifier": {
+      "classHash": "0x56046d0d93d0d401ec19aa4b3374e6f642bc59fae442689c7b1feccfa98246c",
+      "declarationTransactionHash": "0x494f60b718f3602d069f99a5de27dfd9f899efd597e8c9d3d775215d66c2bb4",
+      "artifactSha256": "619ca79d48517460c5aaaae5ebbbeb61e97e547aefb3b51e981846f7309ac396"
+    },
+    "advancedBundle": {
+      "classHash": "0x4aa085123d4a93f531b112e4928216b58c583373b28db9da3e4d57f97b8259f",
+      "declarationTransactionHash": "0x6ec686aa169114ee1430870ee0670dd51d0dd473ca24c510cdbd5e839f39e00",
+      "artifactSha256": "be551323dba96f0f52817ea64d9475264da1a428c7d552032f90a79199992e5a"
+    },
+    "integrityBundle": {
+      "classHash": "0x451e59b2f2e454a5a53914ca317069d84faf504498e1d56609a78fb626da2bc",
+      "declarationTransactionHash": "0x1801765f273666feda7c41688def299d969b2dd395ab443ebd0602ec041e80a",
+      "artifactSha256": "db071092f278df0fdcf744b3c50011f7c42a528269c96a4925a0b3662b7a1297"
+    },
+    "policyRegistry": {
+      "classHash": "0x6366141e5ae47f2e170409c6babaa4d6ae220b5b255f8dcbf9b0173f8681cfd",
+      "declarationTransactionHash": "0x553402faf9f9120eb0acd5e2a70c2248b644a70e134c72945a46c67ab4e0746",
+      "artifactSha256": "93096d0c7a5112e04c1bcbc5ee9f8ea0b0faf522b36f24ed9fef8c3047543dac"
+    },
+    "obligationRegistry": {
+      "classHash": "0xa7f868967f49461e948c8e8d70b2bccc74fc623e2d3ecd4af8cb4c2ccd8165",
+      "declarationTransactionHash": "0x774f29d66058df8358f7dbbf37222b5d076e0b08cebc032529cffeefe874a00",
+      "artifactSha256": "37a8dd9fd6d6b5bb54090e5157c840de30d2fa8b410683c6108e2dc125bcf585"
+    },
+    "payrollSeal": {
+      "classHash": "0x1500b1e66ef8c1528f5ea301cbb0420b28a19742d927c5d595ce567b0266148",
+      "declarationTransactionHash": "0x550fddf3150abde0d13c22ceb16e0be5f59341ffa3ab2edec8ef5fa582f656",
+      "artifactSha256": "67c5b2265f978214c1f251614e608eda825643ad0f39924a28f4b9dae02539fe"
+    }
+  },
+  "contracts": {
+    "baseVerifier": {
+      "address": "0x5cacaa61307b275163561369ff659bcde2f57792066a29e8e5ad5b5df23879",
+      "transactionHash": "0x48979fb85a515bc19d8ac902e6918b91538d323d722c8574523a2d593681028"
+    },
+    "advancedVerifier": {
+      "address": "0x4800cb4be340447b2e8d229de645da3d6aa62c1836539b5457092b1e4879567",
+      "transactionHash": "0x5f6d57891457adc8f27d2fd78072cc1c5f782d61162d1898a4df7f4be2d438b"
+    },
+    "claimVerifier": {
+      "address": "0x2e6971da7cd92c03e2bebb7ccdc67cde7d3f9aae9678d02ebded6e4e42d799a",
+      "transactionHash": "0x231102253c7c188c3068cf760a890353e5e932e6dd8bbc72f9a5e139a278993"
+    },
+    "remediationVerifier": {
+      "address": "0xcd0fd2fde3806d38869ead993a505e87a5d157b091664879bb3bdfb1ae5411",
+      "transactionHash": "0x6960740f78b05a7135c19b63a3386e1deb04eb6897c2ba295b15b6e8e67ee6e"
+    },
+    "advancedBundle": {
+      "address": "0x10923b628f5e2b158b728be62a5caf4db7e493ae4c6d3df0e484e198f7f0618",
+      "transactionHash": "0x16abc813e416c17709b1c69b859c280354442c904767939e215f9457abe3018"
+    },
+    "claimBundle": {
+      "address": "0x7825f82260d4852279e54930ccac1afecf3364c87bf58216e8f4a65e73f414",
+      "transactionHash": "0x4a8eef299bb91b2fe539984a25e0a69829fdd3eaa0cd1ff9918ac8aca173a7"
+    },
+    "remediationBundle": {
+      "address": "0x37673733211e16d2ea42ba85eb5eb6bf9913424a96136145834cd9d1d834b71",
+      "transactionHash": "0x161e4479458ab9a172b9c5836bfb466f88c1b9be069825317a295d9747c3b31"
+    },
+    "policyRegistry": {
+      "address": "0x722f2599180cdbda2bfc7afcb4631c657ad8b03d2a9e1f9e2aea32f40d156a3",
+      "transactionHash": "0x464c78de7fa61ac2a2192549292d806b0feaec6520271a9dc68f9afc6656b77"
+    },
+    "obligationRegistry": {
+      "address": "0x792b7f1313652843eedade9030154dfe1b4374c5678eec7394b0d4cbbe5f803",
+      "transactionHash": "0x16d79dac404ef91e4bac153b09e1d6de4fb5ec5a67a71bc5badcb1fa6e290c6"
+    },
+    "payrollSeal": {
+      "address": "0x1baedaf40fc4798951c681b63f2b31954709e1f4caf07c13d69036e57995c1f",
+      "transactionHash": "0x1e943953490b993613384f3e8d725e7fc55efc2653be53c5f699925f699889"
+    }
+  }
+}

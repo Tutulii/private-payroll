@@ -408,6 +408,12 @@ pub mod PayoPayrollSeal {
             assert(direct || sealed, errors::BAD_PROOF_FORM);
             if sealed {
                 assert(shard_0_hash != 0 && shard_1_hash != 0, errors::BAD_PROOF_HASH);
+                // CLAIM and REMEDIATE intentionally share the claim nullifier.
+                // Reset the per-shard cursor when the accepted claim advances
+                // into a fresh remediation proof; otherwise the claim's true
+                // bits would make remediation replay or skip verification.
+                self.shard_verified.write((run_nullifier_high, run_nullifier_low, 0), false);
+                self.shard_verified.write((run_nullifier_high, run_nullifier_low, 1), false);
                 self.sealed_proofs.write(nullifier, proof);
                 self.run_status.write(nullifier, STATUS_SEALED);
                 self.emit(

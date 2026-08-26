@@ -93,14 +93,14 @@ export async function checkPayoDeploymentReadiness(input: {
     readBool(input.rpc, {
       contractAddress: catalogRegistryAddress,
       entrypoint: "is_verifier_valid",
-      calldata: ["0x0", num.toHex(request.proofVersion)],
+      calldata: [num.toHex(request.mode), num.toHex(request.proofVersion)],
     }, blockNumber),
   ]);
   const verifierAddress = verifierReady
     ? await readFelt(input.rpc, {
       contractAddress: configuredSeal,
       entrypoint: "get_verifier",
-      calldata: ["0x0", num.toHex(request.proofVersion)],
+      calldata: [num.toHex(request.mode), num.toHex(request.proofVersion)],
     }, blockNumber)
     : null;
   const poolReady = BigInt(poolAddress) === BigInt(STRK20_MAINNET_POOL_ADDRESS);

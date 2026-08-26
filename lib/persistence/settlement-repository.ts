@@ -5,7 +5,9 @@ import { hashCanonicalJson } from "@/lib/crypto/digest";
 import { generateUuidV7 } from "@/lib/domain/records";
 import {
   assertSettlementTransition,
+  settlementWorkflowSchema,
   type SettlementObservation,
+  type SettlementWorkflow,
 } from "@/lib/domain/settlement";
 import { encryptedVaultRecordSchema, type EncryptedVaultRecord } from "@/lib/crypto/vault";
 import type { AuthenticatedPrincipal } from "@/lib/server/auth";
@@ -69,6 +71,8 @@ export async function createSettlementIntent(input: {
   id: string;
   organizationId: string;
   runId: string;
+  workflowType: SettlementWorkflow;
+  subjectRecordId: string;
   walletRequestId: string;
   idempotencyKey: string;
   tokenTotalsCommitment: string;
@@ -76,6 +80,7 @@ export async function createSettlementIntent(input: {
   principal: AuthenticatedPrincipal;
 }) {
   assertIdempotencyKey(input.idempotencyKey);
+  const workflowType = settlementWorkflowSchema.parse(input.workflowType);
   if (!/^0x[0-9a-fA-F]{64}$/.test(input.tokenTotalsCommitment)) {
     throw new ApiError(400, "A canonical token-totals commitment is required.", "TOTALS_COMMITMENT_INVALID");
   }
@@ -94,6 +99,8 @@ export async function createSettlementIntent(input: {
     organizationId: input.organizationId,
     settlementId: input.id,
     runId: input.runId,
+    workflowType,
+    subjectRecordId: input.subjectRecordId,
     walletRequestId: input.walletRequestId,
     tokenTotalsCommitment: input.tokenTotalsCommitment.toLowerCase(),
     envelopeHash,
@@ -119,6 +126,41 @@ export async function createSettlementIntent(input: {
       .limit(1);
     if (!run || run.organizationId !== input.organizationId) {
       throw new ApiError(404, "Payroll run not found in this organization.", "RUN_NOT_FOUND");
+    }
+
+    if (workflowType === "payroll") {
+      if (input.subjectRecordId !== input.runId) {
+        throw new ApiError(400, "Payroll settlement subject must be the payroll run.", "SETTLEMENT_SUBJECT_INVALID");
+      }
+    } else {
+      const expectedProofType = workflowType;
+      const expectedRecordType = workflowType === "wage_claim" ? "wage-claim" : "remediation";
+      const [subject] = await transaction
+        .select({ id: vaultRecords.id })
+        .from(vaultRecords)
+        .where(and(
+          eq(vaultRecords.organizationId, input.organizationId),
+          eq(vaultRecords.id, input.subjectRecordId),
+          eq(vaultRecords.recordType, expectedRecordType),
+          isNull(vaultRecords.supersededAt),
+        ))
+        .limit(1);
+      if (!subject) {
+        throw new ApiError(404, "Encrypted exception subject was not found.", "SETTLEMENT_SUBJECT_NOT_FOUND");
+      }
+      const [proof] = await transaction
+        .select({ id: proofBundles.id, verificationState: proofBundles.verificationState })
+        .from(proofBundles)
+        .where(and(
+          eq(proofBundles.organizationId, input.organizationId),
+          eq(proofBundles.runId, input.runId),
+          eq(proofBundles.proofType, expectedProofType),
+          eq(proofBundles.subjectRecordId, input.subjectRecordId),
+        ))
+        .limit(1);
+      if (!proof || !["locally_verified", "onchain_verified"].includes(proof.verificationState)) {
+        throw new ApiError(409, "A locally verified exception proof is required before approval.", "EXCEPTION_PROOF_REQUIRED");
+      }
     }
 
     const [insertedRequest] = await transaction
@@ -175,9 +217,19 @@ export async function createSettlementIntent(input: {
         ));
     }
 
-    if (run.state !== "proven") {
-      throw new ApiError(409, `Payroll must be proven before approval; current state is ${run.state}.`, "RUN_NOT_PROVEN");
+    const requiredRunState = workflowType === "payroll"
+      ? "proven"
+      : workflowType === "wage_claim"
+        ? "confirmed"
+        : "disputed";
+    if (run.state !== requiredRunState) {
+      throw new ApiError(
+        409,
+        `${workflowType} requires a ${requiredRunState} payroll; current state is ${run.state}.`,
+        workflowType === "payroll" ? "RUN_NOT_PROVEN" : "EXCEPTION_RUN_STATE_INVALID",
+      );
     }
+
     const id = input.id;
     await transaction.insert(vaultRecords).values({
       id,
@@ -195,17 +247,21 @@ export async function createSettlementIntent(input: {
         id,
         organizationId: input.organizationId,
         runId: input.runId,
+        workflowType,
+        subjectRecordId: input.subjectRecordId,
         walletRequestId: input.walletRequestId,
         idempotencyKey: input.idempotencyKey,
         tokenTotalsCommitment: input.tokenTotalsCommitment.toLowerCase(),
       })
       .returning();
-    const [updatedRun] = await transaction
-      .update(payrollRuns)
-      .set({ state: "approval_pending", updatedAt: now, version: sql`${payrollRuns.version} + 1` })
-      .where(and(eq(payrollRuns.id, input.runId), eq(payrollRuns.state, "proven")))
-      .returning({ id: payrollRuns.id });
-    if (!updatedRun) throw new ApiError(409, "Payroll state changed; refresh before approval.", "RUN_STATE_CONFLICT");
+    if (workflowType === "payroll") {
+      const [updatedRun] = await transaction
+        .update(payrollRuns)
+        .set({ state: "approval_pending", updatedAt: now, version: sql`${payrollRuns.version} + 1` })
+        .where(and(eq(payrollRuns.id, input.runId), eq(payrollRuns.state, "proven")))
+        .returning({ id: payrollRuns.id });
+      if (!updatedRun) throw new ApiError(409, "Payroll state changed; refresh before approval.", "RUN_STATE_CONFLICT");
+    }
     await transaction
       .update(idempotencyRequests)
       .set({ state: "succeeded", response: { settlementId: id }, lockedUntil: now, updatedAt: now })
@@ -220,7 +276,7 @@ export async function createSettlementIntent(input: {
       actorId: input.principal.principalId,
       action: "settlement.approval_requested",
       subjectId: id,
-      metadata: { runId: input.runId, requestHash },
+      metadata: { runId: input.runId, workflowType, subjectRecordId: input.subjectRecordId, requestHash },
     });
     return { ...settlement, replayed: false };
   });
@@ -256,12 +312,14 @@ export async function recordSettlementSubmission(input: {
       .where(and(eq(settlements.id, input.settlementId), eq(settlements.state, "approval_pending")))
       .returning();
     if (!settlement) throw new ApiError(409, "Settlement state changed; refresh and retry.", "SETTLEMENT_STATE_CONFLICT");
-    const [run] = await transaction
-      .update(payrollRuns)
-      .set({ state: "submitted", transactionHash, updatedAt: now, version: sql`${payrollRuns.version} + 1` })
-      .where(and(eq(payrollRuns.id, existing.runId), eq(payrollRuns.state, "approval_pending")))
-      .returning({ id: payrollRuns.id });
-    if (!run) throw new ApiError(409, "Payroll state changed during submission.", "RUN_STATE_CONFLICT");
+    if (existing.workflowType === "payroll") {
+      const [run] = await transaction
+        .update(payrollRuns)
+        .set({ state: "submitted", transactionHash, updatedAt: now, version: sql`${payrollRuns.version} + 1` })
+        .where(and(eq(payrollRuns.id, existing.runId), eq(payrollRuns.state, "approval_pending")))
+        .returning({ id: payrollRuns.id });
+      if (!run) throw new ApiError(409, "Payroll state changed during submission.", "RUN_STATE_CONFLICT");
+    }
     await transaction
       .insert(confirmationJobs)
       .values({ id: generateUuidV7(), settlementId: input.settlementId })
@@ -272,7 +330,7 @@ export async function recordSettlementSubmission(input: {
       actorId: input.principal.principalId,
       action: "settlement.submitted",
       subjectId: input.settlementId,
-      metadata: { transactionHash },
+      metadata: { transactionHash, workflowType: existing.workflowType, subjectRecordId: existing.subjectRecordId },
     });
     return { ...settlement, replayed: false };
   });
@@ -304,7 +362,11 @@ export async function recoverApprovalSubmissionsFromSealEvents(input: {
     })
     .from(settlements)
     .innerJoin(payrollRuns, eq(payrollRuns.id, settlements.runId))
-    .where(and(eq(settlements.state, "approval_pending"), isNull(settlements.transactionHash)))
+    .where(and(
+      eq(settlements.workflowType, "payroll"),
+      eq(settlements.state, "approval_pending"),
+      isNull(settlements.transactionHash),
+    ))
     .limit(limit);
   if (candidates.length === 0) return { recovered: 0 };
 
@@ -498,19 +560,21 @@ export async function cancelSettlementApproval(input: {
       ))
       .returning();
     if (!settlement) throw new ApiError(409, "Settlement state changed; refresh before cancelling.", "SETTLEMENT_STATE_CONFLICT");
-    const [run] = await transaction
-      .update(payrollRuns)
-      .set({ state: "cancelled", updatedAt: now, version: sql`${payrollRuns.version} + 1` })
-      .where(and(eq(payrollRuns.id, existing.runId), eq(payrollRuns.state, "approval_pending")))
-      .returning({ id: payrollRuns.id });
-    if (!run) throw new ApiError(409, "Payroll state changed during cancellation.", "RUN_STATE_CONFLICT");
+    if (existing.workflowType === "payroll") {
+      const [run] = await transaction
+        .update(payrollRuns)
+        .set({ state: "cancelled", updatedAt: now, version: sql`${payrollRuns.version} + 1` })
+        .where(and(eq(payrollRuns.id, existing.runId), eq(payrollRuns.state, "approval_pending")))
+        .returning({ id: payrollRuns.id });
+      if (!run) throw new ApiError(409, "Payroll state changed during cancellation.", "RUN_STATE_CONFLICT");
+    }
     await transaction.insert(auditEvents).values({
       id: generateUuidV7(),
       organizationId: existing.organizationId,
       actorId: input.principal.principalId,
       action: "settlement.approval_cancelled",
       subjectId: existing.id,
-      metadata: { runId: existing.runId },
+      metadata: { runId: existing.runId, workflowType: existing.workflowType, subjectRecordId: existing.subjectRecordId },
     });
     return settlement;
   });
@@ -539,6 +603,8 @@ export async function listSettlements(
     .select({
       id: settlements.id,
       runId: settlements.runId,
+      workflowType: settlements.workflowType,
+      subjectRecordId: settlements.subjectRecordId,
       state: settlements.state,
       tokenTotalsCommitment: settlements.tokenTotalsCommitment,
       transactionHash: settlements.transactionHash,
@@ -700,17 +766,21 @@ export async function applySettlementObservation(
       })
       .where(eq(settlements.id, job.settlementId));
 
-    if ((settlementState === "confirmed" || settlementState === "finalized") && current.state === "submitted") {
+    if (
+      current.workflowType === "payroll"
+      && (settlementState === "confirmed" || settlementState === "finalized")
+      && current.state === "submitted"
+    ) {
       await transaction
         .update(payrollRuns)
         .set({ state: "confirmed", updatedAt: now, version: sql`${payrollRuns.version} + 1` })
         .where(and(eq(payrollRuns.id, current.runId), eq(payrollRuns.state, "submitted")));
-    } else if (settlementState === "failed") {
+    } else if (current.workflowType === "payroll" && settlementState === "failed") {
       await transaction
         .update(payrollRuns)
         .set({ state: "failed", updatedAt: now, version: sql`${payrollRuns.version} + 1` })
         .where(and(eq(payrollRuns.id, current.runId), eq(payrollRuns.state, "submitted")));
-    } else if (settlementState === "reorged") {
+    } else if (current.workflowType === "payroll" && settlementState === "reorged") {
       await transaction
         .update(payrollRuns)
         .set({

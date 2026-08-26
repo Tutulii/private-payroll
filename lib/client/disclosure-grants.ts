@@ -1,9 +1,11 @@
 import type { VaultPrincipal, VaultPrincipalKeyPair } from "@/lib/crypto/vault";
 import { disclosureGrantRecordSchema, generateUuidV7 } from "@/lib/domain/records";
+import type { ProofPackageGrant } from "@/lib/disclosure/proof-package";
 import type { PayoClient } from "./payo-client";
 import { prepareCanonicalEncryptedRecord } from "./encrypted-records";
 
 export const aggregateDisclosureFields = ["aggregate", "token", "settlement"] as const;
+export type DisclosureField = ProofPackageGrant["fieldScope"][number];
 
 export async function createEncryptedDisclosureGrant(input: {
   client: Pick<PayoClient, "createDisclosureGrant">;
@@ -12,7 +14,7 @@ export async function createEncryptedDisclosureGrant(input: {
   granteePrincipalId: string;
   granteePublicKey: string;
   issuerPrincipal: VaultPrincipalKeyPair;
-  fieldScope?: Array<(typeof aggregateDisclosureFields)[number]>;
+  fieldScope?: DisclosureField[];
   validAfter?: string;
   expiresAt: string;
   now?: Date;

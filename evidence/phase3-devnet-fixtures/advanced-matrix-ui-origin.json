@@ -1,0 +1,835 @@
+{
+  "schemaVersion": "payo.phase3.ui-workflow-origin.v1",
+  "generatedAt": "2026-08-26T10:31:56.684Z",
+  "organizationId": "018f1000-0000-7000-8000-000000000003",
+  "validityStart": "1787702400",
+  "entries": [
+    {
+      "workflow": "recurring",
+      "formInputCommitment": "0x370a977fcea5abec834e7ce17cf44107e8934032879b26fd9784151861b3ff99",
+      "payee": {
+        "schemaVersion": 1,
+        "id": "01a03b5b-ff40-7135-bc7c-f8ca5771f607",
+        "organizationId": "018f1000-0000-7000-8000-000000000003",
+        "revision": 1,
+        "createdAt": "2026-08-25T23:58:00.000Z",
+        "updatedAt": "2026-08-25T23:58:00.000Z",
+        "principalId": "01a03b5b-ff41-7a04-aab6-d602bc5fc93b",
+        "principalKind": "human",
+        "displayName": "Synthetic recurring worker",
+        "recipientAddress": "0x0000000000000000000000000000000000000000000000000000000000000500",
+        "tokenPreference": "USDC",
+        "jurisdictionCode": "US",
+        "status": "active"
+      },
+      "agreementRecord": {
+        "schemaVersion": 1,
+        "id": "01a03b5b-ff40-7b4e-989a-3f03ab3a45ab",
+        "organizationId": "018f1000-0000-7000-8000-000000000003",
+        "revision": 1,
+        "createdAt": "2026-08-25T23:58:00.000Z",
+        "updatedAt": "2026-08-25T23:58:00.000Z",
+        "payeeId": "01a03b5b-ff40-7135-bc7c-f8ca5771f607",
+        "agreement": {
+          "id": "01a03b5b-ff41-7314-9c6a-d43ca7657023",
+          "organizationId": "018f1000-0000-7000-8000-000000000003",
+          "principalKind": "human",
+          "classification": "contractor",
+          "classificationFactsCommitment": "0x49e3e0dd47f2f28600be4f86e9aefc2bcc8ef17c61ff951fa5ed521daae3aba3",
+          "classificationAssessment": {
+            "assessmentVersion": "payo-classification-assessment-v1",
+            "rubricVersion": "payo-classification-facts-v1",
+            "answers": {
+              "companyControlsSchedule": false,
+              "companyControlsMethod": false,
+              "companyProvidesPrimaryTools": false,
+              "relationshipIsOngoing": false,
+              "workerIsEconomicallyDependent": false,
+              "workIsCoreToBusiness": false
+            },
+            "score": 0,
+            "employeeThreshold": 4,
+            "treatment": "contractor",
+            "reviewedAt": "2026-08-25T23:58:00.000Z",
+            "assessorCommitment": "0x0767a2d8f99ca1cdce7510fb9f5813eb083760fe676589a992263eb7f4653854",
+            "salt": "0x0bda85b4e241ed261fdb71dab3baa6699b4ec1a3110bbfc0b9c0b807c6497b55"
+          },
+          "jurisdictionCode": "US",
+          "settlementToken": "USDC",
+          "earningsAtomic": [
+            "1000000"
+          ],
+          "schedule": {
+            "kind": "recurring",
+            "cadence": "monthly",
+            "nextDueAt": "2026-08-26T00:00:00.000Z"
+          },
+          "statutoryPolicy": {
+            "catalogRoot": "0x16575a4f2517b43a894ae1d8ad892448892830da2cb8162b50354f396e3d6073",
+            "policyId": "payo-net-invoice-no-withholding-v1",
+            "policyVersion": 1
+          },
+          "agreementVersion": "payo-agreement-v2",
+          "paymentPlan": {
+            "planVersion": "payo-payment-plan-v1",
+            "kind": "recurring",
+            "cadence": "monthly",
+            "anchorAt": "2026-08-26T00:00:00.000Z",
+            "nextDueAt": "2026-08-26T00:00:00.000Z",
+            "occurrence": 0
+          },
+          "planSalt": "0x2d8aa4601c392d9b9ebe59eddb03b4c697aeb867c02f1735771e6b87ff6f892f"
+        },
+        "recipientCommitment": "0xfba3cd0e0f50e153f3e2f43f2520c16206eb09c1e5f5d7cb04f396578776da95",
+        "recipientSalt": "0xf04384ad3745b3be6afc98c5e3eb0ac72560d1afb8b79771d1575fc22df5b151",
+        "agreementSalt": "0x49e3e0dd47f2f28600be4f86e9aefc2bcc8ef17c61ff951fa5ed521daae3aba3",
+        "agreementCommitment": "0xb5649fa1b18d5dc1ccc21c7a877d035058a91d3efa1f2393e16365a160788acc",
+        "proofScheduleCommitment": "0x26d3030a688eeb7dd0f90a20ed9ff13b46d3f4a4927255f9852182f26697bc3a",
+        "effectiveFrom": "2026-08-25T23:58:00.000Z"
+      },
+      "encryptedEnvelope": {
+        "version": 1,
+        "algorithm": "XCHACHA20-POLY1305+X25519-HKDF-SHA256",
+        "aad": {
+          "schemaVersion": 1,
+          "organizationId": "018f1000-0000-7000-8000-000000000003",
+          "recordType": "pay-agreement",
+          "recordId": "01a03b5b-ff40-7b4e-989a-3f03ab3a45ab",
+          "revision": 1
+        },
+        "nonce": "Td5e7zfmpkX5cziSCS2G3xcgw1cOE42y",
+        "ciphertext": "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",
+        "wrappedKeys": [
+          {
+            "principalId": "phase3-ui-workflow-evidence",
+            "ephemeralPublicKey": "NAJVIn7I7LVyIOtOhE3PlqImStV6/l4NTv5W+neL7zg=",
+            "nonce": "v/BU/4hSibLe7RsirItZF5Md/Mytfgb6",
+            "ciphertext": "8LxXIb00hzzKbFGsnv4OPu6nMoKFtb12AZYN6+eHRV3+cntK0ktqNvk2XAhdmG2b"
+          }
+        ]
+      },
+      "checks": {
+        "productionCommand": "storeEncryptedAgreementFromForm",
+        "encryptedRoundTrip": true,
+        "plaintextAbsentFromEnvelope": true
+      }
+    },
+    {
+      "workflow": "checkpoint",
+      "formInputCommitment": "0x4eea1beedb9f459d4c9c67e89cb0126ad50f7bb52953fc0352d6af7a646b9cf4",
+      "payee": {
+        "schemaVersion": 1,
+        "id": "01a03b5b-fb58-73a3-8f15-42a3c2b553ca",
+        "organizationId": "018f1000-0000-7000-8000-000000000003",
+        "revision": 1,
+        "createdAt": "2026-08-25T23:57:59.000Z",
+        "updatedAt": "2026-08-25T23:57:59.000Z",
+        "principalId": "01a03b5b-fb59-71bb-89c1-1c9941049e75",
+        "principalKind": "human",
+        "displayName": "Synthetic checkpoint worker",
+        "recipientAddress": "0x0000000000000000000000000000000000000000000000000000000000000501",
+        "tokenPreference": "USDC",
+        "jurisdictionCode": "US",
+        "status": "active"
+      },
+      "agreementRecord": {
+        "schemaVersion": 1,
+        "id": "01a03b5b-fb58-7a19-9492-e0c141f19434",
+        "organizationId": "018f1000-0000-7000-8000-000000000003",
+        "revision": 1,
+        "createdAt": "2026-08-25T23:57:59.000Z",
+        "updatedAt": "2026-08-25T23:57:59.000Z",
+        "payeeId": "01a03b5b-fb58-73a3-8f15-42a3c2b553ca",
+        "agreement": {
+          "id": "01a03b5b-fb59-7712-93e8-8980a0ccd9ab",
+          "organizationId": "018f1000-0000-7000-8000-000000000003",
+          "principalKind": "human",
+          "classification": "contractor",
+          "classificationFactsCommitment": "0xa90aa96fbad49183acd2b9095220204d965075aaeaaa5243a95abb53b709c06c",
+          "classificationAssessment": {
+            "assessmentVersion": "payo-classification-assessment-v1",
+            "rubricVersion": "payo-classification-facts-v1",
+            "answers": {
+              "companyControlsSchedule": false,
+              "companyControlsMethod": false,
+              "companyProvidesPrimaryTools": false,
+              "relationshipIsOngoing": false,
+              "workerIsEconomicallyDependent": false,
+              "workIsCoreToBusiness": false
+            },
+            "score": 0,
+            "employeeThreshold": 4,
+            "treatment": "contractor",
+            "reviewedAt": "2026-08-25T23:57:59.000Z",
+            "assessorCommitment": "0x0767a2d8f99ca1cdce7510fb9f5813eb083760fe676589a992263eb7f4653854",
+            "salt": "0xd62f7ebd5a9673d41ea00a42ac701bbdcf90257e2c9a2c2c04824534d3299845"
+          },
+          "jurisdictionCode": "US",
+          "settlementToken": "USDC",
+          "earningsAtomic": [
+            "500000"
+          ],
+          "schedule": {
+            "kind": "stream",
+            "startsAt": "2026-08-25T23:00:00.000Z",
+            "endsAt": "2026-08-26T01:00:00.000Z",
+            "totalAtomic": "1000000",
+            "claimedAtomic": "0"
+          },
+          "statutoryPolicy": {
+            "catalogRoot": "0x16575a4f2517b43a894ae1d8ad892448892830da2cb8162b50354f396e3d6073",
+            "policyId": "payo-net-invoice-no-withholding-v1",
+            "policyVersion": 1
+          },
+          "agreementVersion": "payo-agreement-v2",
+          "paymentPlan": {
+            "planVersion": "payo-payment-plan-v1",
+            "kind": "checkpoint_stream",
+            "startsAt": "2026-08-25T23:00:00.000Z",
+            "endsAt": "2026-08-26T01:00:00.000Z",
+            "totalAtomic": "1000000",
+            "settledAtomic": "0",
+            "minimumCheckpointSeconds": 900,
+            "checkpoint": {
+              "sequence": 1,
+              "checkpointAt": "2026-08-26T00:00:00.000Z",
+              "cumulativeEntitlementAtomic": "500000",
+              "attestationCommitment": "0x9797979797979797979797979797979797979797979797979797979797979797"
+            }
+          },
+          "planSalt": "0xcfa204e5c8ccf03d56d43f9c2d32ca634d775bd33f34d2eec63c6cac85c3f0b5"
+        },
+        "recipientCommitment": "0xc6c5b93ff0487a45a52389dc89da154fbc761c17eeb43f05212c724570cd5e43",
+        "recipientSalt": "0x4534bd90cbac2e0e09f49f785c9b75f7d0b0785e6ed8548e70f721b141bbd7b9",
+        "agreementSalt": "0xa90aa96fbad49183acd2b9095220204d965075aaeaaa5243a95abb53b709c06c",
+        "agreementCommitment": "0xec04df0ad52222046326bb0036b080ac40d23ad690a82a01c14d48538fdc7b92",
+        "proofScheduleCommitment": "0x27ce525c7aab4a4fd5cc2c2391ab0c5deef1fc074e478489160506b0c273e490",
+        "effectiveFrom": "2026-08-25T23:57:59.000Z"
+      },
+      "encryptedEnvelope": {
+        "version": 1,
+        "algorithm": "XCHACHA20-POLY1305+X25519-HKDF-SHA256",
+        "aad": {
+          "schemaVersion": 1,
+          "organizationId": "018f1000-0000-7000-8000-000000000003",
+          "recordType": "pay-agreement",
+          "recordId": "01a03b5b-fb58-7a19-9492-e0c141f19434",
+          "revision": 1
+        },
+        "nonce": "m78aXEISxSRNsj57YtbUTPqVPOlL9PRK",
+        "ciphertext": "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",
+        "wrappedKeys": [
+          {
+            "principalId": "phase3-ui-workflow-evidence",
+            "ephemeralPublicKey": "GLXhcmOyK19w7HOuzKqgn+fDkV6qDMeE3zQ3IXqBxjA=",
+            "nonce": "Hq625yQqSQTUGUa4uJuaQzQGmrRnnEvJ",
+            "ciphertext": "e0flG0lO0KP6Hc9lYYfv3rsyN7YHUNTuHhlGotcp3fXV/wFWUdCmQLjFq47m56Jn"
+          }
+        ]
+      },
+      "checks": {
+        "productionCommand": "storeEncryptedAgreementFromForm",
+        "encryptedRoundTrip": true,
+        "plaintextAbsentFromEnvelope": true
+      }
+    },
+    {
+      "workflow": "milestone",
+      "formInputCommitment": "0xaae8d6741c8b5e44c72133c2e27238f57563c4dc2e6e613766c17b7367e9a6f0",
+      "payee": {
+        "schemaVersion": 1,
+        "id": "01a03b5b-f770-7d08-a3cf-ba21f04be03e",
+        "organizationId": "018f1000-0000-7000-8000-000000000003",
+        "revision": 1,
+        "createdAt": "2026-08-25T23:57:58.000Z",
+        "updatedAt": "2026-08-25T23:57:58.000Z",
+        "principalId": "01a03b5b-f771-7cc6-94e5-7e4a1088968c",
+        "principalKind": "human",
+        "displayName": "Synthetic milestone worker",
+        "recipientAddress": "0x0000000000000000000000000000000000000000000000000000000000000502",
+        "tokenPreference": "USDC",
+        "jurisdictionCode": "US",
+        "status": "active"
+      },
+      "agreementRecord": {
+        "schemaVersion": 1,
+        "id": "01a03b5b-f770-72a5-ade0-116c4c9d2e38",
+        "organizationId": "018f1000-0000-7000-8000-000000000003",
+        "revision": 1,
+        "createdAt": "2026-08-25T23:57:58.000Z",
+        "updatedAt": "2026-08-25T23:57:58.000Z",
+        "payeeId": "01a03b5b-f770-7d08-a3cf-ba21f04be03e",
+        "agreement": {
+          "id": "01a03b5b-f771-74a7-979b-c684019c5b3d",
+          "organizationId": "018f1000-0000-7000-8000-000000000003",
+          "principalKind": "human",
+          "classification": "contractor",
+          "classificationFactsCommitment": "0x70757236b3fa1f63c7ad40c5a5bc00f646d1e75516498b8b1253fa16e958e4c4",
+          "classificationAssessment": {
+            "assessmentVersion": "payo-classification-assessment-v1",
+            "rubricVersion": "payo-classification-facts-v1",
+            "answers": {
+              "companyControlsSchedule": false,
+              "companyControlsMethod": false,
+              "companyProvidesPrimaryTools": false,
+              "relationshipIsOngoing": false,
+              "workerIsEconomicallyDependent": false,
+              "workIsCoreToBusiness": false
+            },
+            "score": 0,
+            "employeeThreshold": 4,
+            "treatment": "contractor",
+            "reviewedAt": "2026-08-25T23:57:58.000Z",
+            "assessorCommitment": "0x0767a2d8f99ca1cdce7510fb9f5813eb083760fe676589a992263eb7f4653854",
+            "salt": "0x3a5202b7a73b80c08ea1d6bf4fc985ad62078be8fd160c896c4e0a99dfd5c849"
+          },
+          "jurisdictionCode": "US",
+          "settlementToken": "USDC",
+          "earningsAtomic": [
+            "300000"
+          ],
+          "schedule": {
+            "kind": "milestone",
+            "milestoneCommitment": "0x7979797979797979797979797979797979797979797979797979797979797979",
+            "approved": true,
+            "dueAt": "2026-08-26T00:00:00.000Z"
+          },
+          "statutoryPolicy": {
+            "catalogRoot": "0x16575a4f2517b43a894ae1d8ad892448892830da2cb8162b50354f396e3d6073",
+            "policyId": "payo-net-invoice-no-withholding-v1",
+            "policyVersion": 1
+          },
+          "agreementVersion": "payo-agreement-v2",
+          "paymentPlan": {
+            "planVersion": "payo-payment-plan-v1",
+            "kind": "milestone",
+            "dueAt": "2026-08-26T00:00:00.000Z",
+            "milestoneCommitment": "0x7979797979797979797979797979797979797979797979797979797979797979",
+            "approverCommitment": "0x8383838383838383838383838383838383838383838383838383838383838383",
+            "attestationCommitment": "0x8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d",
+            "approvedAt": "2026-08-26T00:00:00.000Z"
+          },
+          "planSalt": "0xcbc12fc25f94bcebc80c3602f545937138186db3612a82b395c5c69b7989ea7a"
+        },
+        "recipientCommitment": "0x0554152b97f945c67c7a7c03f8dc5aa783a9ea42f0e8cf9900eaaceecedb070a",
+        "recipientSalt": "0xc48ba3a5dd6ede084f1448cab56b0caf203d6b0b3c0527ac03ef87dd965ef3d0",
+        "agreementSalt": "0x70757236b3fa1f63c7ad40c5a5bc00f646d1e75516498b8b1253fa16e958e4c4",
+        "agreementCommitment": "0xb943f7c09514328262f492a5873673c6771586e572ed12be7f793f132c41a70a",
+        "proofScheduleCommitment": "0x2734929b90ca6d637e9ec782e584316b3d2cddff627aae13d114ea076c0e2ac5",
+        "effectiveFrom": "2026-08-25T23:57:58.000Z"
+      },
+      "encryptedEnvelope": {
+        "version": 1,
+        "algorithm": "XCHACHA20-POLY1305+X25519-HKDF-SHA256",
+        "aad": {
+          "schemaVersion": 1,
+          "organizationId": "018f1000-0000-7000-8000-000000000003",
+          "recordType": "pay-agreement",
+          "recordId": "01a03b5b-f770-72a5-ade0-116c4c9d2e38",
+          "revision": 1
+        },
+        "nonce": "2wiGT61QQMvE/TICtIjjNva0WX8InyIP",
+        "ciphertext": "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",
+        "wrappedKeys": [
+          {
+            "principalId": "phase3-ui-workflow-evidence",
+            "ephemeralPublicKey": "LBfI0QZymZd/eD9hkHaC1KGsn6Uph8HJLmzs2conyE0=",
+            "nonce": "iCkI72nevOZMUjP3lndr7f0hAroZbjwE",
+            "ciphertext": "5vSIXZ1BPMfp2uqHTSqpyrXxsjEi0IV5qtJhrRA94G4e/Hb1appuZcSkbrSt5n35"
+          }
+        ]
+      },
+      "checks": {
+        "productionCommand": "storeEncryptedAgreementFromForm",
+        "encryptedRoundTrip": true,
+        "plaintextAbsentFromEnvelope": true
+      }
+    },
+    {
+      "workflow": "vesting",
+      "formInputCommitment": "0x656e4b34ed36362062b07d6af9f45f5a1a81e5f25f90b15c5bd310ad71ce54e4",
+      "payee": {
+        "schemaVersion": 1,
+        "id": "01a03b5b-f388-767b-9836-5b4d6d59f8c8",
+        "organizationId": "018f1000-0000-7000-8000-000000000003",
+        "revision": 1,
+        "createdAt": "2026-08-25T23:57:57.000Z",
+        "updatedAt": "2026-08-25T23:57:57.000Z",
+        "principalId": "01a03b5b-f389-7597-9095-8982836ae5dd",
+        "principalKind": "human",
+        "displayName": "Synthetic vesting worker",
+        "recipientAddress": "0x0000000000000000000000000000000000000000000000000000000000000503",
+        "tokenPreference": "USDC",
+        "jurisdictionCode": "US",
+        "status": "active"
+      },
+      "agreementRecord": {
+        "schemaVersion": 1,
+        "id": "01a03b5b-f388-7606-af8d-9d6ac300ff33",
+        "organizationId": "018f1000-0000-7000-8000-000000000003",
+        "revision": 1,
+        "createdAt": "2026-08-25T23:57:57.000Z",
+        "updatedAt": "2026-08-25T23:57:57.000Z",
+        "payeeId": "01a03b5b-f388-767b-9836-5b4d6d59f8c8",
+        "agreement": {
+          "id": "01a03b5b-f389-771a-a735-44a8385741c9",
+          "organizationId": "018f1000-0000-7000-8000-000000000003",
+          "principalKind": "human",
+          "classification": "contractor",
+          "classificationFactsCommitment": "0x017e5ce819cc0cf2e1435bf1b7af3eae9e464b86a619cdbba13c5c24c2e7b0b8",
+          "classificationAssessment": {
+            "assessmentVersion": "payo-classification-assessment-v1",
+            "rubricVersion": "payo-classification-facts-v1",
+            "answers": {
+              "companyControlsSchedule": false,
+              "companyControlsMethod": false,
+              "companyProvidesPrimaryTools": false,
+              "relationshipIsOngoing": false,
+              "workerIsEconomicallyDependent": false,
+              "workIsCoreToBusiness": false
+            },
+            "score": 0,
+            "employeeThreshold": 4,
+            "treatment": "contractor",
+            "reviewedAt": "2026-08-25T23:57:57.000Z",
+            "assessorCommitment": "0x0767a2d8f99ca1cdce7510fb9f5813eb083760fe676589a992263eb7f4653854",
+            "salt": "0xc9b2e18e4c6c51b5ac47d5fc0c0c5fa63e6138492bcc9f3596b186a84d6939c1"
+          },
+          "jurisdictionCode": "US",
+          "settlementToken": "USDC",
+          "earningsAtomic": [
+            "500000"
+          ],
+          "schedule": {
+            "kind": "vesting",
+            "startsAt": "2026-08-25T23:00:00.000Z",
+            "cliffAt": "2026-08-25T23:30:00.000Z",
+            "endsAt": "2026-08-26T01:00:00.000Z",
+            "totalAtomic": "1000000",
+            "releasedAtomic": "0"
+          },
+          "statutoryPolicy": {
+            "catalogRoot": "0x16575a4f2517b43a894ae1d8ad892448892830da2cb8162b50354f396e3d6073",
+            "policyId": "payo-net-invoice-no-withholding-v1",
+            "policyVersion": 1
+          },
+          "agreementVersion": "payo-agreement-v2",
+          "paymentPlan": {
+            "planVersion": "payo-payment-plan-v1",
+            "kind": "private_vesting",
+            "startsAt": "2026-08-25T23:00:00.000Z",
+            "cliffAt": "2026-08-25T23:30:00.000Z",
+            "releaseAt": "2026-08-26T00:00:00.000Z",
+            "endsAt": "2026-08-26T01:00:00.000Z",
+            "totalAtomic": "1000000",
+            "releasedAtomic": "0",
+            "releaseSequence": 1
+          },
+          "planSalt": "0x5bd8754003646bdc21eaeda932bf8be1fe700b83def5db52d727a59a3b0b5f04"
+        },
+        "recipientCommitment": "0xca05f918d0c5baa2f51142cd4c097b8910ce31c4aa833c39bfb9288e799ec9e2",
+        "recipientSalt": "0x0c55d6517b1112f39b5a7adbf5a86a9c1683146d9f95e55eff599d59443687a8",
+        "agreementSalt": "0x017e5ce819cc0cf2e1435bf1b7af3eae9e464b86a619cdbba13c5c24c2e7b0b8",
+        "agreementCommitment": "0x160c74bde1a259707b54296d4c83513d53079ecbe83c6932194fb05f4fa9f915",
+        "proofScheduleCommitment": "0x1afe0712b7b2b02140cf90f9c786feb1d51fcff7ba8a957f7a1978a43f1bc266",
+        "effectiveFrom": "2026-08-25T23:57:57.000Z"
+      },
+      "encryptedEnvelope": {
+        "version": 1,
+        "algorithm": "XCHACHA20-POLY1305+X25519-HKDF-SHA256",
+        "aad": {
+          "schemaVersion": 1,
+          "organizationId": "018f1000-0000-7000-8000-000000000003",
+          "recordType": "pay-agreement",
+          "recordId": "01a03b5b-f388-7606-af8d-9d6ac300ff33",
+          "revision": 1
+        },
+        "nonce": "3UWwbng/Cmx2rTnkweaC2At8D3Jvj1BI",
+        "ciphertext": "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",
+        "wrappedKeys": [
+          {
+            "principalId": "phase3-ui-workflow-evidence",
+            "ephemeralPublicKey": "LY/YaoPqIyujwDWf9y2EtNAdKigdi09nZ4iCK6Upfkg=",
+            "nonce": "quDxFfWpp/isbB7MtqE2KNwUW6XMbshC",
+            "ciphertext": "EudGA4eZI/wNgHE/e2/qIedimisSRev+rj5tcTIml4IDKhadhtCEK6yUcJ8CmgL1"
+          }
+        ]
+      },
+      "checks": {
+        "productionCommand": "storeEncryptedAgreementFromForm",
+        "encryptedRoundTrip": true,
+        "plaintextAbsentFromEnvelope": true
+      }
+    },
+    {
+      "workflow": "final-pay",
+      "formInputCommitment": "0x3feeb62fe536026480c57b740a5d60dc97955cd71bd98e50a1bdc76c58a27b38",
+      "payee": {
+        "schemaVersion": 1,
+        "id": "01a03b5b-efa0-7c55-ab14-e1fb72e17f27",
+        "organizationId": "018f1000-0000-7000-8000-000000000003",
+        "revision": 1,
+        "createdAt": "2026-08-25T23:57:56.000Z",
+        "updatedAt": "2026-08-25T23:57:56.000Z",
+        "principalId": "01a03b5b-efa1-7a68-82bf-e5bd31684b51",
+        "principalKind": "human",
+        "displayName": "Synthetic final-pay worker",
+        "recipientAddress": "0x0000000000000000000000000000000000000000000000000000000000000504",
+        "tokenPreference": "USDC",
+        "jurisdictionCode": "US",
+        "status": "active"
+      },
+      "agreementRecord": {
+        "schemaVersion": 1,
+        "id": "01a03b5b-efa0-7abf-ac2f-1e2c80d44d6e",
+        "organizationId": "018f1000-0000-7000-8000-000000000003",
+        "revision": 1,
+        "createdAt": "2026-08-25T23:57:56.000Z",
+        "updatedAt": "2026-08-25T23:57:56.000Z",
+        "payeeId": "01a03b5b-efa0-7c55-ab14-e1fb72e17f27",
+        "agreement": {
+          "id": "01a03b5b-efa1-7dbd-a05f-788ddc4c34a9",
+          "organizationId": "018f1000-0000-7000-8000-000000000003",
+          "principalKind": "human",
+          "classification": "contractor",
+          "classificationFactsCommitment": "0x23eb83a09acc4140465767aa731aace8b643631c4febe577d39dd137399105b7",
+          "classificationAssessment": {
+            "assessmentVersion": "payo-classification-assessment-v1",
+            "rubricVersion": "payo-classification-facts-v1",
+            "answers": {
+              "companyControlsSchedule": false,
+              "companyControlsMethod": false,
+              "companyProvidesPrimaryTools": false,
+              "relationshipIsOngoing": false,
+              "workerIsEconomicallyDependent": false,
+              "workIsCoreToBusiness": false
+            },
+            "score": 0,
+            "employeeThreshold": 4,
+            "treatment": "contractor",
+            "reviewedAt": "2026-08-25T23:57:56.000Z",
+            "assessorCommitment": "0x0767a2d8f99ca1cdce7510fb9f5813eb083760fe676589a992263eb7f4653854",
+            "salt": "0xe0cb3e95848be8a66894e47c6522ba91834601c433087b1600b64d43bd8a950f"
+          },
+          "jurisdictionCode": "US",
+          "settlementToken": "USDC",
+          "earningsAtomic": [
+            "100000",
+            "20000",
+            "30000",
+            "40000",
+            "10000"
+          ],
+          "schedule": {
+            "kind": "milestone",
+            "milestoneCommitment": "0x7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a",
+            "approved": true,
+            "dueAt": "2026-08-26T00:00:00.000Z"
+          },
+          "statutoryPolicy": {
+            "catalogRoot": "0x16575a4f2517b43a894ae1d8ad892448892830da2cb8162b50354f396e3d6073",
+            "policyId": "payo-net-invoice-no-withholding-v1",
+            "policyVersion": 1
+          },
+          "agreementVersion": "payo-agreement-v2",
+          "paymentPlan": {
+            "planVersion": "payo-payment-plan-v1",
+            "kind": "milestone",
+            "dueAt": "2026-08-26T00:00:00.000Z",
+            "milestoneCommitment": "0x7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a",
+            "approverCommitment": "0x8484848484848484848484848484848484848484848484848484848484848484",
+            "attestationCommitment": "0x8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e",
+            "approvedAt": "2026-08-26T00:00:00.000Z"
+          },
+          "planSalt": "0x8681ccea42fc315bf4262a2e2eb65754b1729d4931b7f914071879e8fb449a1f",
+          "termination": {
+            "terminatedAt": "2026-08-26T00:00:00.000Z",
+            "reasonCommitment": "0xa0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
+            "pay": {
+              "ordinaryPayAtomic": "100000",
+              "accruedLeaveAtomic": "20000",
+              "noticeAtomic": "30000",
+              "severanceAtomic": "40000",
+              "adjustmentsAtomic": "10000",
+              "deductionsAtomic": "0",
+              "requiredComponents": {
+                "accruedLeave": true,
+                "notice": true,
+                "severance": true
+              },
+              "includedComponents": {
+                "accruedLeave": true,
+                "notice": true,
+                "severance": true
+              }
+            }
+          }
+        },
+        "recipientCommitment": "0xef3d3285b6ae0f64c1bd6095c2593dce72b9f00169d0197fa0a63af12956b960",
+        "recipientSalt": "0xdbb2fa981a38438b715259a3782f76d5d3008b7850b36d70a6430191b00a6f68",
+        "agreementSalt": "0x23eb83a09acc4140465767aa731aace8b643631c4febe577d39dd137399105b7",
+        "agreementCommitment": "0x24137156a50c9620d392b43d9bfe03db79577a3f726c88aef90f03f305a0201e",
+        "proofScheduleCommitment": "0x196ac9b3e44b3ab0353231bbf466a46e551c38608d155d310864168d3440746a",
+        "effectiveFrom": "2026-08-25T23:57:56.000Z"
+      },
+      "encryptedEnvelope": {
+        "version": 1,
+        "algorithm": "XCHACHA20-POLY1305+X25519-HKDF-SHA256",
+        "aad": {
+          "schemaVersion": 1,
+          "organizationId": "018f1000-0000-7000-8000-000000000003",
+          "recordType": "pay-agreement",
+          "recordId": "01a03b5b-efa0-7abf-ac2f-1e2c80d44d6e",
+          "revision": 1
+        },
+        "nonce": "ck2evoZx/vnrWTiHEqOqthrnoFmkHUiF",
+        "ciphertext": "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",
+        "wrappedKeys": [
+          {
+            "principalId": "phase3-ui-workflow-evidence",
+            "ephemeralPublicKey": "qFfEL0vwUrTWxy69IVP9RP074sJBwkZuoOWTJjuR7CU=",
+            "nonce": "lVoeMmVyb8bgp8tzBAzcAZ94KDivP/z+",
+            "ciphertext": "Y2Mk0bqWuydamy+PB0rq4dOHjnzFgcdep+xTpE46DvgIsseubmosNZ1DkJi+KFYf"
+          }
+        ]
+      },
+      "checks": {
+        "productionCommand": "storeEncryptedAgreementFromForm",
+        "encryptedRoundTrip": true,
+        "plaintextAbsentFromEnvelope": true
+      }
+    },
+    {
+      "workflow": "approved-adjustment",
+      "formInputCommitment": "0x5e71e6ddc925e3d2398ccc5459795e79bafafb7cb80b4cceb9f23224375cceb9",
+      "payee": {
+        "schemaVersion": 1,
+        "id": "01a03b5b-ebb8-794e-8556-25c365257c86",
+        "organizationId": "018f1000-0000-7000-8000-000000000003",
+        "revision": 1,
+        "createdAt": "2026-08-25T23:57:55.000Z",
+        "updatedAt": "2026-08-25T23:57:55.000Z",
+        "principalId": "01a03b5b-ebb9-7a89-815f-803c3e45df5e",
+        "principalKind": "human",
+        "displayName": "Synthetic approved-adjustment worker",
+        "recipientAddress": "0x0000000000000000000000000000000000000000000000000000000000000505",
+        "tokenPreference": "USDC",
+        "jurisdictionCode": "US",
+        "status": "active"
+      },
+      "agreementRecord": {
+        "schemaVersion": 1,
+        "id": "01a03b5b-ebb8-7709-81bf-5ca6ae6263ee",
+        "organizationId": "018f1000-0000-7000-8000-000000000003",
+        "revision": 1,
+        "createdAt": "2026-08-25T23:57:55.000Z",
+        "updatedAt": "2026-08-25T23:57:55.000Z",
+        "payeeId": "01a03b5b-ebb8-794e-8556-25c365257c86",
+        "agreement": {
+          "id": "01a03b5b-ebb9-7d21-89ee-6a9152795f5b",
+          "organizationId": "018f1000-0000-7000-8000-000000000003",
+          "principalKind": "human",
+          "classification": "contractor",
+          "classificationFactsCommitment": "0x56ed3cbfb1746a6dd6aac0a3c68580dc6faa1c502449ed51a545293f30b9d156",
+          "classificationAssessment": {
+            "assessmentVersion": "payo-classification-assessment-v1",
+            "rubricVersion": "payo-classification-facts-v1",
+            "answers": {
+              "companyControlsSchedule": false,
+              "companyControlsMethod": false,
+              "companyProvidesPrimaryTools": false,
+              "relationshipIsOngoing": false,
+              "workerIsEconomicallyDependent": false,
+              "workIsCoreToBusiness": false
+            },
+            "score": 0,
+            "employeeThreshold": 4,
+            "treatment": "contractor",
+            "reviewedAt": "2026-08-25T23:57:55.000Z",
+            "assessorCommitment": "0x0767a2d8f99ca1cdce7510fb9f5813eb083760fe676589a992263eb7f4653854",
+            "salt": "0xb9019447f7698542810c7296a2065d3a3271314061c8201cd5becf48729d8c60"
+          },
+          "jurisdictionCode": "US",
+          "settlementToken": "USDC",
+          "earningsAtomic": [
+            "250000"
+          ],
+          "schedule": {
+            "kind": "milestone",
+            "milestoneCommitment": "0x7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b",
+            "approved": true,
+            "dueAt": "2026-08-26T00:00:00.000Z"
+          },
+          "statutoryPolicy": {
+            "catalogRoot": "0x16575a4f2517b43a894ae1d8ad892448892830da2cb8162b50354f396e3d6073",
+            "policyId": "payo-net-invoice-no-withholding-v1",
+            "policyVersion": 1
+          },
+          "agreementVersion": "payo-agreement-v2",
+          "paymentPlan": {
+            "planVersion": "payo-payment-plan-v1",
+            "kind": "milestone",
+            "dueAt": "2026-08-26T00:00:00.000Z",
+            "milestoneCommitment": "0x7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b",
+            "approverCommitment": "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+            "attestationCommitment": "0x8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f",
+            "approvedAt": "2026-08-26T00:00:00.000Z"
+          },
+          "planSalt": "0xe29abe40890d60010d9d87ec5a4e2e24b5c2fe6f91329c7d76b7eb3c1dcaae68",
+          "adjustment": {
+            "amountAtomic": "250000",
+            "reasonCommitment": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "approverCommitment": "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
+          }
+        },
+        "recipientCommitment": "0xcf2a797f3f1a2cf48948e89d0bae95f21b01b87129e9fa2a3381b3da70e4486d",
+        "recipientSalt": "0x20e27c2eba96c8c62a88eca0a47f7afc0aa90b412a077f6cc4a80351fd68c559",
+        "agreementSalt": "0x56ed3cbfb1746a6dd6aac0a3c68580dc6faa1c502449ed51a545293f30b9d156",
+        "agreementCommitment": "0x22599da3127b4e887550774fbb629f8326ab78ef70b53f8313a81270d4515999",
+        "proofScheduleCommitment": "0x131a381f606a53ad76398b926723a131ae240cc3dfd4333c5bd8567d7717dcdf",
+        "effectiveFrom": "2026-08-25T23:57:55.000Z"
+      },
+      "encryptedEnvelope": {
+        "version": 1,
+        "algorithm": "XCHACHA20-POLY1305+X25519-HKDF-SHA256",
+        "aad": {
+          "schemaVersion": 1,
+          "organizationId": "018f1000-0000-7000-8000-000000000003",
+          "recordType": "pay-agreement",
+          "recordId": "01a03b5b-ebb8-7709-81bf-5ca6ae6263ee",
+          "revision": 1
+        },
+        "nonce": "oNIp/VpOnPYNca59PsBvaQbNO+G/k05t",
+        "ciphertext": "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",
+        "wrappedKeys": [
+          {
+            "principalId": "phase3-ui-workflow-evidence",
+            "ephemeralPublicKey": "8HNFiw+Y9uqX7rKvOilxQtkfAjWq8igczaOZpvrb8g8=",
+            "nonce": "XnA4XlrmQOaFGfcNeFrW2YFpJQ0kSsEy",
+            "ciphertext": "pjmmE76S5/JDyqSf9EtyoHz+akLFJB2VdgHLpluJURW8VAk2SMQQt/8rqkJ1JqdK"
+          }
+        ]
+      },
+      "checks": {
+        "productionCommand": "storeEncryptedAgreementFromForm",
+        "encryptedRoundTrip": true,
+        "plaintextAbsentFromEnvelope": true
+      }
+    },
+    {
+      "workflow": "statutory-fx-classification",
+      "formInputCommitment": "0xa0511ee4f15b150f95055052666d43e65fda086605be8703c1d41f7c7bff1a7c",
+      "payee": {
+        "schemaVersion": 1,
+        "id": "01a03b5b-e7d0-7126-a1d5-466f05df96e8",
+        "organizationId": "018f1000-0000-7000-8000-000000000003",
+        "revision": 1,
+        "createdAt": "2026-08-25T23:57:54.000Z",
+        "updatedAt": "2026-08-25T23:57:54.000Z",
+        "principalId": "01a03b5b-e7d1-7c7f-b96c-021ec576a848",
+        "principalKind": "human",
+        "displayName": "Synthetic statutory-fx-classification worker",
+        "recipientAddress": "0x0000000000000000000000000000000000000000000000000000000000000506",
+        "tokenPreference": "USDC",
+        "jurisdictionCode": "US",
+        "status": "active"
+      },
+      "agreementRecord": {
+        "schemaVersion": 1,
+        "id": "01a03b5b-e7d0-7974-99b6-06be510526fc",
+        "organizationId": "018f1000-0000-7000-8000-000000000003",
+        "revision": 1,
+        "createdAt": "2026-08-25T23:57:54.000Z",
+        "updatedAt": "2026-08-25T23:57:54.000Z",
+        "payeeId": "01a03b5b-e7d0-7126-a1d5-466f05df96e8",
+        "agreement": {
+          "id": "01a03b5b-e7d1-76f0-bd0b-e7d16af3122b",
+          "organizationId": "018f1000-0000-7000-8000-000000000003",
+          "principalKind": "human",
+          "classification": "employee",
+          "classificationFactsCommitment": "0xc24c1b358a8f2da6b2f18504a64479eec9c630626c33e72962ce3254665a9c3f",
+          "classificationAssessment": {
+            "assessmentVersion": "payo-classification-assessment-v1",
+            "rubricVersion": "payo-classification-facts-v1",
+            "answers": {
+              "companyControlsSchedule": true,
+              "companyControlsMethod": true,
+              "companyProvidesPrimaryTools": true,
+              "relationshipIsOngoing": true,
+              "workerIsEconomicallyDependent": false,
+              "workIsCoreToBusiness": false
+            },
+            "score": 4,
+            "employeeThreshold": 4,
+            "treatment": "employee",
+            "reviewedAt": "2026-08-25T23:57:54.000Z",
+            "assessorCommitment": "0x0767a2d8f99ca1cdce7510fb9f5813eb083760fe676589a992263eb7f4653854",
+            "salt": "0x6062520d6333e1fb82ab93102ad44bf6f809be80685c5735286d4ff9b462e1b5"
+          },
+          "jurisdictionCode": "US",
+          "settlementToken": "USDC",
+          "earningsAtomic": [
+            "10000000"
+          ],
+          "schedule": {
+            "kind": "recurring",
+            "cadence": "monthly",
+            "nextDueAt": "2026-08-26T00:00:00.000Z"
+          },
+          "statutoryPolicy": {
+            "catalogRoot": "0x2268a0aded87d370810a4fa92f02dd24adf09af7b56c56d740df4ea601696b33",
+            "policyId": "us-irs-supplemental-flat-2026-v1",
+            "policyVersion": 1
+          },
+          "fxProtection": {
+            "referenceCurrency": "USD",
+            "minimumReferenceAtomic": "7800000",
+            "maximumAgeSeconds": 300
+          },
+          "agreementVersion": "payo-agreement-v2",
+          "paymentPlan": {
+            "planVersion": "payo-payment-plan-v1",
+            "kind": "recurring",
+            "cadence": "monthly",
+            "anchorAt": "2026-08-26T00:00:00.000Z",
+            "nextDueAt": "2026-08-26T00:00:00.000Z",
+            "occurrence": 0
+          },
+          "planSalt": "0x2a4fcfff8392a7111bff35d8fe5f25b3e26245a5f1094156e59406afa52faaa1"
+        },
+        "recipientCommitment": "0x6e32a741286dd15d0677b93cfc7548e746b2813d9c4b801aacb29e726a98ade4",
+        "recipientSalt": "0xe0e68dca204740f5b20b68ee2b18f1ee6dec63b01b9f57b921018e888b1ab7ef",
+        "agreementSalt": "0xc24c1b358a8f2da6b2f18504a64479eec9c630626c33e72962ce3254665a9c3f",
+        "agreementCommitment": "0xeb4e556774190e968866330e5584fa2415b5502c0eaee9769d8254b5d59f0b9d",
+        "proofScheduleCommitment": "0x2b448ddf3cf04e4089b922b2b1c65480a157f632641d32dfd9812a1899a9fffa",
+        "effectiveFrom": "2026-08-25T23:57:54.000Z"
+      },
+      "encryptedEnvelope": {
+        "version": 1,
+        "algorithm": "XCHACHA20-POLY1305+X25519-HKDF-SHA256",
+        "aad": {
+          "schemaVersion": 1,
+          "organizationId": "018f1000-0000-7000-8000-000000000003",
+          "recordType": "pay-agreement",
+          "recordId": "01a03b5b-e7d0-7974-99b6-06be510526fc",
+          "revision": 1
+        },
+        "nonce": "f4wevTnP7NNUQYStKS+TSjune+cvDPIW",
+        "ciphertext": "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",
+        "wrappedKeys": [
+          {
+            "principalId": "phase3-ui-workflow-evidence",
+            "ephemeralPublicKey": "C9L/WO/+JA0ZIloWitjSw36RffuWuxA708feh5s0Yik=",
+            "nonce": "ECkNwVGMlEQusuEDdZU0gZjouNYJFtRy",
+            "ciphertext": "k9I9NfpWe8kl6sRU9mt7mtbmV05I5Wu6YDsYybqnEMROcR49Qel178sqcErGbmoL"
+          }
+        ]
+      },
+      "checks": {
+        "productionCommand": "storeEncryptedAgreementFromForm",
+        "encryptedRoundTrip": true,
+        "plaintextAbsentFromEnvelope": true
+      }
+    }
+  ]
+}

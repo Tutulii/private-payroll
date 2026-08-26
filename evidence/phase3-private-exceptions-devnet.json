@@ -1,0 +1,101 @@
+{
+  "schemaVersion": "payo.phase3.private-exceptions.v1",
+  "generatedAt": "2026-08-26T11:06:44.717Z",
+  "passed": true,
+  "chainId": "0x534e5f5345504f4c4941",
+  "devnetVersion": "0.8.0-rc.3",
+  "rpcVersion": "0.10.2",
+  "proofMode": "none",
+  "privacySdkRevision": "PRIVACY-0.14.3-RC.2",
+  "privacyPoolRevision": "PRIVACY-0.14.3-RC.0",
+  "privacyPoolClassHash": "0x52107fadffab71bdcbb6b2ccb68ba3e1b5558d94036538053e159d3076ad633",
+  "privacyPoolAddress": "0x427844bfdd54ba2a1447b5d1751b5319b2a2649e15adcaae60e3cccf5639ad2",
+  "payoSealAddress": "0x1baedaf40fc4798951c681b63f2b31954709e1f4caf07c13d69036e57995c1f",
+  "sharedClaimNullifier": [
+    "0x9fe1eabba7fa71f877babfe7896cee25",
+    "0x2a91c7af4509b894286372597fe6c816"
+  ],
+  "committedClaim": {
+    "token": "STRK",
+    "recipientAddress": "0x78662e7352d062084b0010068b99288486c2d8b914f6e2a55ce945f8792c8b1",
+    "shortfallAtomic": "3",
+    "disputedManifestRoot": "0x0b546bdb002be9756566fd9eff7e9cb98b06482163ca8f8285bc5f100e298675",
+    "remediationManifestRoot": "0x2d35d354cf450f6b4ca6f54b7a01da48bf62f076d706edd53e3baf8f3a095a0f"
+  },
+  "claim": {
+    "privateInvocationTransactionHash": "0x170d0a6f4cb2c2e390b1e7c5317a0b1f5fdcf4af714d48d7b97a581e1509971",
+    "verifierShards": [
+      {
+        "shardIndex": 0,
+        "transactionHash": "0x3b71747724e386fb87a7bcc63214693d58e4f7245421e18adc6ae2fc770c498",
+        "blockNumber": 176
+      },
+      {
+        "shardIndex": 1,
+        "transactionHash": "0x3f9873ea76b95bcfbdb9122ae99cb5b322ac163a1e13e3a5b78670f4412e82c",
+        "blockNumber": 177
+      }
+    ],
+    "finalStatus": 4,
+    "tamperedProofRejected": true,
+    "balancesBeforeAtomic": {
+      "alice": "43",
+      "bob": "57"
+    },
+    "balancesAfterAtomic": {
+      "alice": "43",
+      "bob": "57"
+    }
+  },
+  "remediation": {
+    "tokenAddress": "0x4718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
+    "amountAtomic": "3",
+    "recipientAddress": "0x78662e7352d062084b0010068b99288486c2d8b914f6e2a55ce945f8792c8b1",
+    "privatePaymentAndSealTransactionHash": "0x33dbb8703a09fe632e9cde6edb23735994161bea25e13fe8018963e07888c34",
+    "verifierShards": [
+      {
+        "shardIndex": 0,
+        "transactionHash": "0x6cfdc381f47f2b3c137abacd3b04a351de8f25497beb40fd254001f37f7cf73",
+        "blockNumber": 191
+      },
+      {
+        "shardIndex": 1,
+        "transactionHash": "0x7a9076c2ef0dfc54097c43a83c2e910760804ee65621b4c5d328fbce8280fe5",
+        "blockNumber": 192
+      }
+    ],
+    "finalStatus": 5,
+    "tamperedProofRejected": true,
+    "balancesBeforeAtomic": {
+      "alice": "43",
+      "bob": "57"
+    },
+    "balancesAfterAtomic": {
+      "alice": "40",
+      "bob": "60"
+    }
+  },
+  "transactions": {
+    "schedule": "0x5223bbbf574058b695c0b539f0ae662f4198371eb269716f5691174efcc531e"
+  },
+  "checks": {
+    "officialPoolClassMatched": true,
+    "sealConfiguredForOfficialPool": true,
+    "claimAndRemediationNullifierLinked": true,
+    "remediationMatchesCommittedClaimFields": true,
+    "claimReachedDisputedStatus": true,
+    "remediationPaymentAndSealAtomic": true,
+    "remediationReachedReconciledStatus": true,
+    "recipientDiscoveredPrivateRemediation": true,
+    "claimTamperRejected": true,
+    "remediationTamperRejected": true,
+    "poolOriginatedReplayRejected": true,
+    "replayPreservedPrivateBalances": true,
+    "fullTransactionProofVerification": false,
+    "directPrivateAmountToManifestReconciliation": false
+  },
+  "limitations": [
+    "Pinned Starknet Devnet does not implement full transaction-proof verification; the official pool executes in proof-mode none with SDK-compiled proof facts.",
+    "Direct private remediation amount reconciliation against the committed claim is a Phase 4 SettlementMatch requirement and is not claimed here."
+  ]
+}

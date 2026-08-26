@@ -165,6 +165,7 @@ export const proofBundles = pgTable(
       .references(() => organizations.id, { onDelete: "cascade" }),
     proofType: text("proof_type").notNull(),
     proofVersion: text("proof_version").notNull(),
+    subjectRecordId: text("subject_record_id").notNull(),
     proofPackage: jsonb("proof_package").notNull(),
     proofHash: text("proof_hash").notNull(),
     verificationState: text("verification_state").default("unverified").notNull(),
@@ -173,7 +174,11 @@ export const proofBundles = pgTable(
   },
   (table) => [
     index("proof_bundles_run_idx").on(table.runId),
-    uniqueIndex("proof_bundles_run_type_version_idx").on(table.runId, table.proofType, table.proofVersion),
+    uniqueIndex("proof_bundles_run_type_subject_idx").on(
+      table.runId,
+      table.proofType,
+      table.subjectRecordId,
+    ),
   ],
 );
 
@@ -187,6 +192,8 @@ export const settlements = pgTable(
     runId: text("run_id")
       .notNull()
       .references(() => payrollRuns.id, { onDelete: "cascade" }),
+    workflowType: text("workflow_type").default("payroll").notNull(),
+    subjectRecordId: text("subject_record_id").notNull(),
     walletRequestId: text("wallet_request_id").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
     state: settlementState("state").default("approval_pending").notNull(),
@@ -208,6 +215,7 @@ export const settlements = pgTable(
     uniqueIndex("settlements_transaction_hash_idx").on(table.transactionHash),
     index("settlements_state_updated_idx").on(table.state, table.updatedAt),
     index("settlements_run_idx").on(table.runId),
+    index("settlements_workflow_subject_idx").on(table.workflowType, table.subjectRecordId),
   ],
 );
 

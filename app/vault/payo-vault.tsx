@@ -47,7 +47,7 @@ export type VaultSession = {
   principal: VaultPrincipalKeyPair;
 };
 
-type PayoVaultContextValue = {
+export type PayoVaultContextValue = {
   configured: boolean;
   ready: boolean;
   authenticated: boolean;
@@ -99,7 +99,7 @@ const unavailableValue: PayoVaultContextValue = {
   refreshOrganizations: async () => undefined,
 };
 
-const PayoVaultContext = createContext<PayoVaultContextValue>(unavailableValue);
+export const PayoVaultContext = createContext<PayoVaultContextValue>(unavailableValue);
 
 function recoveryStorageKey(organizationId: string): string {
   return `payo:vault-recovery:v1:${organizationId}`;

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { num, type STRK20_INVOKE_ACTION } from "starknet";
 import { PAYROLL_TOKENS } from "./tokens";
 import {
+  buildPrivateExceptionActions,
   buildPrivatePayrollActions,
   requiredPayrollReserves,
   requiredPayrollReservesForQuotes,
@@ -11,7 +12,7 @@ const SEAL = "0x1234";
 const PAYO_ACTION: STRK20_INVOKE_ACTION = {
   type: "invoke",
   contract: SEAL,
-  calldata: ["0x1", "0x2"],
+  calldata: Array.from({ length: 19 }, (_, index) => num.toHex(index)),
 };
 
 describe("buildPrivatePayrollActions", () => {
@@ -59,6 +60,42 @@ describe("buildPrivatePayrollActions", () => {
       { ...PAYO_ACTION, contract: "0x9999" },
       SEAL,
     )).toThrow(/unapproved PAYO seal/);
+  });
+
+  it("allows invoke-only claims and requires one private remediation transfer", () => {
+    const claimAction = { ...PAYO_ACTION, calldata: ["0x2", ...PAYO_ACTION.calldata.slice(1)] };
+    expect(buildPrivateExceptionActions("wage_claim", [], claimAction, SEAL)).toEqual({
+      actions: [claimAction],
+      totals: { STRK: 0n, USDC: 0n },
+    });
+    expect(() => buildPrivateExceptionActions(
+      "wage_claim",
+      [{ address: "0x111", token: "STRK", amount: "1" }],
+      claimAction,
+      SEAL,
+    )).toThrow(/cannot transfer/i);
+
+    const remediationAction = { ...PAYO_ACTION, calldata: ["0x3", ...PAYO_ACTION.calldata.slice(1)] };
+    const remediation = buildPrivateExceptionActions(
+      "wage_remediation",
+      [{ address: "0x111", token: "USDC", amount: "2.5" }],
+      remediationAction,
+      SEAL,
+    );
+    expect(remediation.totals).toEqual({ STRK: 0n, USDC: 2_500_000n });
+    expect(remediation.actions.at(-1)).toBe(remediationAction);
+    expect(() => buildPrivateExceptionActions("wage_remediation", [], remediationAction, SEAL))
+      .toThrow(/exactly one/i);
+  });
+
+  it("rejects a proof action whose mode does not match its workflow", () => {
+    expect(() => buildPrivatePayrollActions(
+      [{ address: "0x111", token: "STRK", amount: "1" }],
+      { ...PAYO_ACTION, calldata: ["0x2", ...PAYO_ACTION.calldata.slice(1)] },
+      SEAL,
+    )).toThrow(/proof mode 0/i);
+    expect(() => buildPrivateExceptionActions("wage_claim", [], PAYO_ACTION, SEAL))
+      .toThrow(/proof mode 2/i);
   });
 });
 

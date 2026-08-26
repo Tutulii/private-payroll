@@ -24,9 +24,9 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { useAppShell } from "../ui/app-shell";
 import { usePayoVault } from "../vault/payo-vault";
-import { STARKNET_MAINNET_EXPLORER } from "../starknet/starknet-wallet";
+import { STARKNET_MAINNET_EXPLORER, useStarknetWallet } from "../starknet/starknet-wallet";
 import { createEncryptedSettlementReceipt } from "@/lib/client/settlement-receipts";
-import { createEncryptedDisclosureGrant } from "@/lib/client/disclosure-grants";
+import { createProofPackageForSettlement } from "@/lib/client/proof-package-workflow";
 import {
   createEncryptedRemediationDraft,
   createEncryptedWageClaimDraft,
@@ -39,12 +39,19 @@ import {
   loadEncryptedPayAgreements,
   type PayAgreementDirectoryRecord,
 } from "@/lib/client/agreement-directory";
+import {
+  executeProofBoundWageClaim,
+  executeProofBoundWageRemediation,
+} from "@/lib/client/exception-execution";
+import type { PayrollExecutionStage } from "@/lib/client/payroll-execution";
 
 type ActivityKind = "Payroll" | "Agent" | "Vault";
 
 type SettlementSummary = {
   id: string;
   runId: string;
+  workflowType: "payroll" | "wage_claim" | "wage_remediation";
+  subjectRecordId: string;
   state: string;
   tokenTotalsCommitment: string;
   transactionHash: string | null;
@@ -71,6 +78,17 @@ type PayrollRunSummary = {
   cycleId: string;
   state: string;
   dueAt: string;
+};
+
+type DisclosureGrantSummary = {
+  id: string;
+  runId: string;
+  granteePrincipalId: string;
+  fieldScope: string[];
+  validAfter: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  createdAt: string;
 };
 
 type ActivityEvent = {
@@ -146,6 +164,7 @@ function auditEvent(event: AuditSummary): ActivityEvent {
 export default function ActivityPage() {
   const { notify } = useAppShell();
   const vault = usePayoVault();
+  const starknet = useStarknetWallet();
   const [filter, setFilter] = useState<(typeof activityFilters)[number]>("All");
   const [query, setQuery] = useState("");
   const [copiedHash, setCopiedHash] = useState("");
@@ -156,10 +175,13 @@ export default function ActivityPage() {
   const [runs, setRuns] = useState<PayrollRunSummary[]>([]);
   const [claims, setClaims] = useState<WageClaimRecord[]>([]);
   const [remediations, setRemediations] = useState<RemediationRecord[]>([]);
+  const [disclosureGrants, setDisclosureGrants] = useState<DisclosureGrantSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [creatingReceipt, setCreatingReceipt] = useState(false);
   const [showDisclosure, setShowDisclosure] = useState(false);
-  const [disclosureScope, setDisclosureScope] = useState<"auditor" | "tax">("auditor");
+  const [disclosureSettlementId, setDisclosureSettlementId] = useState("");
+  const [disclosureScope, setDisclosureScope] = useState<"worker" | "employer" | "auditor" | "tax">("auditor");
+  const [disclosureAgreementId, setDisclosureAgreementId] = useState("");
   const [granteePrincipalId, setGranteePrincipalId] = useState("");
   const [granteePublicKey, setGranteePublicKey] = useState("");
   const [disclosureExpiry, setDisclosureExpiry] = useState("");
@@ -170,7 +192,12 @@ export default function ActivityPage() {
   const [claimAgreementId, setClaimAgreementId] = useState("");
   const [claimRunId, setClaimRunId] = useState("");
   const [claimKind, setClaimKind] = useState<WageClaimRecord["claimKind"]>("missing_obligation");
+  const [claimReferenceValue, setClaimReferenceValue] = useState("");
+  const [claimFinalMask, setClaimFinalMask] = useState("0");
   const [remediationClaimId, setRemediationClaimId] = useState("");
+  const [remediationAmount, setRemediationAmount] = useState("");
+  const [provingClaimId, setProvingClaimId] = useState("");
+  const [exceptionStage, setExceptionStage] = useState<PayrollExecutionStage | null>(null);
 
   const refreshActivity = useCallback(async () => {
     if (!vault.client || !vault.session) {
@@ -181,12 +208,13 @@ export default function ActivityPage() {
       setRuns([]);
       setClaims([]);
       setRemediations([]);
+      setDisclosureGrants([]);
       return;
     }
     setLoading(true);
     setActivityError("");
     try {
-      const [settlementResult, auditResult, receiptResult, agreementResult, runResult, claimResult, remediationResult] = await Promise.all([
+      const [settlementResult, auditResult, receiptResult, agreementResult, runResult, claimResult, remediationResult, disclosureResult] = await Promise.all([
         vault.client.listSettlements(vault.session.organizationId),
         vault.client.listAuditEvents(vault.session.organizationId),
         vault.client.listEncryptedRecords(vault.session.organizationId, "receipt"),
@@ -206,6 +234,7 @@ export default function ActivityPage() {
           organizationId: vault.session.organizationId,
           principal: vault.session.principal,
         }),
+        vault.client.listDisclosureGrants(vault.session.organizationId),
       ]);
       setSettlements(settlementResult.settlements);
       setAuditEvents(auditResult.events);
@@ -227,6 +256,7 @@ export default function ActivityPage() {
       }));
       setClaims(claimResult);
       setRemediations(remediationResult);
+      setDisclosureGrants(disclosureResult.grants);
     } catch (error) {
       setActivityError(error instanceof Error ? error.message : "PAYO activity could not be loaded.");
     } finally {
@@ -282,18 +312,24 @@ export default function ActivityPage() {
     notify("Operational audit export downloaded");
   };
 
-  const receiptableSettlement = settlements.find(({ state, transactionHash }) =>
+  const receiptableSettlement = settlements.find(({ state, transactionHash, workflowType }) =>
+    workflowType === "payroll"
+    && Boolean(transactionHash)
+    && ["confirmed", "finalized", "reconciled"].includes(state));
+  const disclosureSettlements = settlements.filter(({ state, transactionHash }) =>
     Boolean(transactionHash) && ["confirmed", "finalized", "reconciled"].includes(state));
+  const disclosureSettlement = disclosureSettlements.find(({ id }) => id === disclosureSettlementId)
+    ?? disclosureSettlements[0];
 
   const createReceipt = async () => {
-    if (!vault.client || !vault.session || !receiptableSettlement) return;
+    if (!vault.client || !vault.session || !disclosureSettlement) return;
     setCreatingReceipt(true);
     setActivityError("");
     try {
       const receipt = await createEncryptedSettlementReceipt({
         client: vault.client,
         organizationId: vault.session.organizationId,
-        settlementId: receiptableSettlement.id,
+        settlementId: disclosureSettlement.id,
         issuerPrincipal: vault.session.principal,
       });
       const exportBody = {
@@ -326,56 +362,58 @@ export default function ActivityPage() {
     setActivityError("");
     try {
       const grantee = { principalId: granteePrincipalId, publicKey: granteePublicKey };
-      const receipt = await createEncryptedSettlementReceipt({
+      const proofPackage = await createProofPackageForSettlement({
         client: vault.client,
         organizationId: vault.session.organizationId,
         settlementId: receiptableSettlement.id,
         issuerPrincipal: vault.session.principal,
+        grantee,
         scope: disclosureScope,
-        granteePrincipal: grantee,
-        granteePrincipalId,
-        expiresAt: new Date(disclosureExpiry).toISOString(),
-      });
-      const grant = await createEncryptedDisclosureGrant({
-        client: vault.client,
-        organizationId: vault.session.organizationId,
-        runId: receiptableSettlement.runId,
-        granteePrincipalId,
-        granteePublicKey,
-        issuerPrincipal: vault.session.principal,
+        ...(disclosureScope === "worker" && disclosureSettlement.workflowType === "payroll"
+          ? { workerAgreementId: disclosureAgreementId }
+          : {}),
         expiresAt: new Date(disclosureExpiry).toISOString(),
       });
       const exportBody = {
-        format: "payo-encrypted-disclosure-v1",
+        format: "payo-encrypted-proof-package-v1",
         organizationId: vault.session.organizationId,
-        runId: receiptableSettlement.runId,
+        runId: disclosureSettlement.runId,
         scope: disclosureScope,
-        receipt: {
-          id: receipt.record.id,
-          packageCommitment: receipt.record.packageCommitment,
-          envelope: receipt.envelope,
-        },
-        grant: {
-          id: grant.record.id,
-          expiresAt: grant.record.expiresAt,
-          envelope: grant.envelope,
-        },
+        grant: proofPackage.grant,
+        encryptedPackage: proofPackage.encryptedPackage,
       };
       const blob = new Blob([`${JSON.stringify(exportBody, null, 2)}\n`], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `payo-disclosure-${grant.record.id}.json`;
+      anchor.download = `payo-proof-package-${proofPackage.grant.id}.json`;
       anchor.click();
       URL.revokeObjectURL(url);
       setShowDisclosure(false);
+      setDisclosureSettlementId("");
+      setDisclosureAgreementId("");
       setGranteePrincipalId("");
       setGranteePublicKey("");
       setDisclosureExpiry("");
       await refreshActivity();
-      notify("Recipient-encrypted disclosure created");
+      notify("Recipient-encrypted proof package created and verified");
     } catch (error) {
       setActivityError(error instanceof Error ? error.message : "The recipient disclosure could not be created.");
+    } finally {
+      setCreatingReceipt(false);
+    }
+  };
+
+  const revokeDisclosure = async (grantId: string) => {
+    if (!vault.client || !vault.session) return;
+    setCreatingReceipt(true);
+    setActivityError("");
+    try {
+      await vault.client.revokeDisclosureGrant(vault.session.organizationId, grantId);
+      await refreshActivity();
+      notify("Disclosure grant revoked · offline verification now fails closed with the current grant state");
+    } catch (error) {
+      setActivityError(error instanceof Error ? error.message : "The disclosure grant could not be revoked.");
     } finally {
       setCreatingReceipt(false);
     }
@@ -399,17 +437,125 @@ export default function ActivityPage() {
         agreementId: agreement.agreement.id,
         runId: run.id,
         claimKind,
+        disputedReferenceValueAtomic: claimKind === "below_committed_floor" ? claimReferenceValue : undefined,
+        disputedFinalIncludedMask: claimKind === "incomplete_final_pay" ? Number(claimFinalMask) : undefined,
         principal: vault.session.principal,
       });
       setShowClaimForm(false);
       setClaimAgreementId("");
       setClaimRunId("");
+      setClaimReferenceValue("");
+      setClaimFinalMask("0");
       await refreshActivity();
       notify("Encrypted claim draft stored");
     } catch (error) {
       setActivityError(error instanceof Error ? error.message : "The encrypted claim draft could not be stored.");
     } finally {
       setCreatingException(false);
+    }
+  };
+
+  const proveClaim = async (claim: WageClaimRecord) => {
+    if (!vault.client || !vault.session) return;
+    setCreatingException(true);
+    setProvingClaimId(claim.id);
+    setExceptionStage(null);
+    setActivityError("");
+    try {
+      if (!starknet.isConnected || !starknet.isMainnet) {
+        throw new Error("Connect Ready on Starknet Mainnet before proving a private claim.");
+      }
+      const sealAddress = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
+      if (!sealAddress) throw new Error("The proof-bound PAYO seal is not configured.");
+      const proverBaseUrl = process.env.NEXT_PUBLIC_PAYO_PROVER_URL?.trim();
+      const result = await executeProofBoundWageClaim({
+        client: vault.client,
+        organizationId: vault.session.organizationId,
+        principal: vault.session.principal,
+        chainId: starknet.chainId,
+        sealAddress,
+        claim,
+        submitException: starknet.runProofBoundException,
+        onStage: setExceptionStage,
+        persistPendingSubmission: (submission) => {
+          const key = `payo:pending-exception:${vault.session!.organizationId}`;
+          if (submission) window.localStorage.setItem(key, JSON.stringify(submission));
+          else window.localStorage.removeItem(key);
+        },
+        prove: proverBaseUrl
+          ? async ({ encryptedWitness, principal, onProgress }) => {
+              onProgress?.("loading");
+              onProgress?.("proving");
+              return vault.client!.provePayrollIntegrityRemotely({
+                proverBaseUrl,
+                encryptedWitness,
+                principal,
+              });
+            }
+          : undefined,
+      });
+      await refreshActivity();
+      notify(`Private wage claim submitted · ${result.transactionHash.slice(0, 10)}…`);
+    } catch (error) {
+      setActivityError(error instanceof Error ? error.message : "The private wage claim could not be submitted.");
+      await refreshActivity();
+    } finally {
+      setCreatingException(false);
+      setProvingClaimId("");
+      setExceptionStage(null);
+    }
+  };
+
+  const settleRemediation = async (remediation: RemediationRecord) => {
+    if (!vault.client || !vault.session) return;
+    const claim = claims.find(({ id }) => id === remediation.claimId);
+    if (!claim) {
+      setActivityError("The encrypted wage claim for this remediation is unavailable.");
+      return;
+    }
+    setCreatingException(true);
+    setProvingClaimId(remediation.id);
+    setExceptionStage(null);
+    setActivityError("");
+    try {
+      if (!starknet.isConnected || !starknet.isMainnet) {
+        throw new Error("Connect Ready on Starknet Mainnet before settling private remediation.");
+      }
+      const sealAddress = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
+      if (!sealAddress) throw new Error("The proof-bound PAYO seal is not configured.");
+      const proverBaseUrl = process.env.NEXT_PUBLIC_PAYO_PROVER_URL?.trim();
+      const result = await executeProofBoundWageRemediation({
+        client: vault.client,
+        organizationId: vault.session.organizationId,
+        principal: vault.session.principal,
+        chainId: starknet.chainId,
+        sealAddress,
+        claim,
+        remediation,
+        submitException: starknet.runProofBoundException,
+        onStage: setExceptionStage,
+        persistPendingSubmission: (submission) => {
+          const key = `payo:pending-exception:${vault.session!.organizationId}`;
+          if (submission) window.localStorage.setItem(key, JSON.stringify(submission));
+          else window.localStorage.removeItem(key);
+        },
+        prove: proverBaseUrl
+          ? async ({ encryptedWitness, principal, onProgress }) => {
+              onProgress?.("loading");
+              onProgress?.("proving");
+              return vault.client!.provePayrollIntegrityRemotely({ proverBaseUrl, encryptedWitness, principal });
+            }
+          : undefined,
+      });
+      await refreshActivity();
+      notify(`Private remediation submitted · ${result.transactionHash.slice(0, 10)}…`);
+    } catch (error) {
+      setActivityError(error instanceof Error ? error.message : "The private remediation could not be submitted.");
+      await refreshActivity();
+    } finally {
+      setCreatingException(false);
+      setProvingClaimId("");
+      setExceptionStage(null);
     }
   };
 
@@ -427,11 +573,13 @@ export default function ActivityPage() {
       await createEncryptedRemediationDraft({
         client: vault.client,
         organizationId: vault.session.organizationId,
-        claimId: claim.id,
+        claim,
+        amountAtomic: remediationAmount || undefined,
         principal: vault.session.principal,
       });
       setShowRemediationForm(false);
       setRemediationClaimId("");
+      setRemediationAmount("");
       await refreshActivity();
       notify("Encrypted remediation draft stored");
     } catch (error) {
@@ -516,22 +664,35 @@ export default function ActivityPage() {
 
           <section className="receipts-card">
             <div className="receipt-doodle" aria-hidden="true"><FileText size={28} /><span>✓</span></div><span className="label">ENCRYPTED RECEIPT</span><h3>Keep the evidence.<br />Hide the payroll.</h3><p>Creates a locally encrypted receipt binding the private token totals to the confirmed Starknet transaction and totals commitment. PAYO stores ciphertext only.</p><button type="button" className="button button--ink button--wide" onClick={() => void createReceipt()} disabled={!vault.session || !receiptableSettlement || creatingReceipt}>{creatingReceipt ? <LoaderCircle className="spin" size={16} /> : <ReceiptText size={16} />} {receiptableSettlement ? "Create encrypted receipt" : "Awaiting confirmed settlement"}</button>
-            <button type="button" className="button button--soft button--wide" onClick={() => setShowDisclosure((current) => !current)} disabled={!vault.session || !receiptableSettlement || creatingReceipt}><KeyRound size={16} /> Share encrypted aggregate</button>
+            <button type="button" className="button button--soft button--wide" onClick={() => setShowDisclosure((current) => !current)} disabled={!vault.session || !disclosureSettlement || creatingReceipt}><KeyRound size={16} /> Create scoped proof package</button>
             {showDisclosure && <form className="receipt-disclosure-form" onSubmit={createDisclosure}>
-              <label><span>Recipient scope</span><select value={disclosureScope} onChange={(event) => setDisclosureScope(event.target.value as typeof disclosureScope)}><option value="auditor">Auditor</option><option value="tax">Tax reviewer</option></select></label>
+              <label><span>Verified workflow</span><select value={disclosureSettlement?.id ?? ""} onChange={(event) => { setDisclosureSettlementId(event.target.value); setDisclosureAgreementId(""); }} required>{disclosureSettlements.map((settlement) => <option value={settlement.id} key={settlement.id}>{settlement.workflowType.replaceAll("_", " ")} · {shortId(settlement.transactionHash)}</option>)}</select></label>
+              <label><span>Recipient scope</span><select value={disclosureScope} onChange={(event) => setDisclosureScope(event.target.value as typeof disclosureScope)}><option value="worker">Worker · own line only</option><option value="employer">Employer · full books</option><option value="auditor">Auditor · no identities</option><option value="tax">Tax reviewer · no classification</option></select></label>
+              {disclosureScope === "worker" && disclosureSettlement?.workflowType === "payroll" && <label><span>Worker payroll line</span><select value={disclosureAgreementId} onChange={(event) => setDisclosureAgreementId(event.target.value)} required><option value="">Choose a proved agreement</option>{agreements.map((agreement) => <option key={agreement.id} value={agreement.agreement.id}>{agreement.agreement.id.slice(0, 8)}… · {agreement.agreement.settlementToken}</option>)}</select></label>}
+              {disclosureScope === "worker" && disclosureSettlement?.workflowType !== "payroll" && <p>PAYO derives the claimant or remediation recipient from the encrypted, proof-bound exception record; no other payroll line can be selected.</p>}
               <label><span>Recipient principal UUID</span><input value={granteePrincipalId} onChange={(event) => setGranteePrincipalId(event.target.value)} placeholder="UUIDv7" required pattern="[0-9a-fA-F-]{36}" /></label>
               <label><span>Recipient X25519 public key</span><input value={granteePublicKey} onChange={(event) => setGranteePublicKey(event.target.value)} placeholder="Recipient encryption key" required /></label>
               <label><span>Expires</span><input type="datetime-local" value={disclosureExpiry} onChange={(event) => setDisclosureExpiry(event.target.value)} required /></label>
-              <p>Only aggregate totals, token selection, and settlement evidence are included. The recipient key never leaves the encrypted grant as plaintext.</p>
-              <button type="submit" className="button button--ink button--wide" disabled={creatingReceipt}>{creatingReceipt ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />} Encrypt and download</button>
+              <p>PAYO rebuilds the exact payroll, claim, or remediation manifest locally, requires both on-chain verifier shards, creates a balanced journal, and encrypts the package only to this recipient. Worker packages contain one workflow-specific Merkle opening; auditor and tax scopes omit restricted fields.</p>
+              <button type="submit" className="button button--ink button--wide" disabled={creatingReceipt || !disclosureSettlement || (disclosureScope === "worker" && disclosureSettlement.workflowType === "payroll" && !disclosureAgreementId)}>{creatingReceipt ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />} Verify, encrypt and download</button>
             </form>}
+            {disclosureGrants.length > 0 && <div className="disclosure-grant-list">
+              <small>SCOPED GRANTS</small>
+              {disclosureGrants.slice(0, 4).map((grant) => {
+                const expired = new Date(grant.expiresAt) <= new Date();
+                return <div className="disclosure-grant-row" key={grant.id}>
+                  <span><strong>{grant.fieldScope.join(" · ")}</strong><small>{grant.revokedAt ? "Revoked" : expired ? "Expired" : `Expires ${new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(grant.expiresAt))}`} · {grant.granteePrincipalId.slice(0, 8)}…</small></span>
+                  {!grant.revokedAt && !expired && <button type="button" onClick={() => void revokeDisclosure(grant.id)} disabled={creatingReceipt}>Revoke</button>}
+                </div>;
+              })}
+            </div>}
           </section>
 
           <section className="receipts-card private-exceptions-card">
             <div className="receipt-doodle receipt-doodle--warning" aria-hidden="true"><FileText size={28} /><span>!</span></div>
             <span className="label">PRIVATE EXCEPTIONS</span>
             <h3>Raise the issue.<br />Keep terms encrypted.</h3>
-            <p>Claim and remediation facts are encrypted in this browser. Phase 2 stores drafts only; proof and onchain CLAIM / REMEDIATE transitions remain Phase 3 work.</p>
+            <p>Claim and remediation facts remain encrypted. Draft claims can now generate the pinned wage-claim proof, seal CLAIM through Ready, and enter durable verification.</p>
             <div className="private-exception-counts">
               <span><strong>{claims.length}</strong> claim drafts</span>
               <span><strong>{remediations.length}</strong> remediation drafts</span>
@@ -541,15 +702,34 @@ export default function ActivityPage() {
               <label><span>Committed agreement</span><select value={claimAgreementId} onChange={(event) => setClaimAgreementId(event.target.value)} required><option value="">Choose agreement</option>{agreements.map((agreement) => <option value={agreement.agreement.id} key={agreement.id}>{agreement.agreement.classification} · {shortId(agreement.agreement.id)}</option>)}</select></label>
               <label><span>Payroll run</span><select value={claimRunId} onChange={(event) => setClaimRunId(event.target.value)} required><option value="">Choose run</option>{runs.map((run) => <option value={run.id} key={run.id}>{run.cycleId} · {run.state}</option>)}</select></label>
               <label><span>Claim type</span><select value={claimKind} onChange={(event) => setClaimKind(event.target.value as WageClaimRecord["claimKind"])}><option value="missing_obligation">Missing obligation</option><option value="below_committed_floor">Below committed floor</option><option value="incomplete_final_pay">Incomplete final pay</option></select></label>
+              {claimKind === "below_committed_floor" && <label><span>Disputed reference value (6-decimal atomic)</span><input inputMode="numeric" pattern="[0-9]+" value={claimReferenceValue} onChange={(event) => setClaimReferenceValue(event.target.value)} placeholder="900000" required /></label>}
+              {claimKind === "incomplete_final_pay" && <label><span>Included final-pay mask (0–31)</span><input type="number" min="0" max="31" step="1" value={claimFinalMask} onChange={(event) => setClaimFinalMask(event.target.value)} required /></label>}
               <p>This creates a salted, encrypted draft. It does not assert that a ZK claim proof has been generated or verified.</p>
               <button type="submit" className="button button--ink button--wide" disabled={creatingException}>{creatingException ? <LoaderCircle className="spin" size={16} /> : <LockKeyhole size={16} />} Encrypt claim draft</button>
             </form>}
+            {claims.length > 0 && <div className="private-exception-list">
+              {claims.map((claim) => <div key={claim.id} className="private-exception-row">
+                <span><small>{claim.claimKind.replaceAll("_", " ")}</small><strong>{shortId(claim.id)} · {claim.state}</strong></span>
+                {claim.state === "draft" && <button type="button" className="button button--soft" onClick={() => void proveClaim(claim)} disabled={creatingException || !starknet.isConnected}>{provingClaimId === claim.id ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />} Prove &amp; submit</button>}
+              </div>)}
+              {exceptionStage && <p>Private claim workflow: {exceptionStage.replaceAll("_", " ")}.</p>}
+            </div>}
             <button type="button" className="button button--soft button--wide" onClick={() => setShowRemediationForm((current) => !current)} disabled={!vault.session || creatingException || claims.length === 0}><ShieldCheck size={16} /> Draft remediation</button>
             {showRemediationForm && <form className="receipt-disclosure-form" onSubmit={createRemediationDraft}>
-              <label><span>Encrypted claim</span><select value={remediationClaimId} onChange={(event) => setRemediationClaimId(event.target.value)} required><option value="">Choose claim</option>{claims.map((claim) => <option value={claim.id} key={claim.id}>{claim.claimKind.replaceAll("_", " ")} · {shortId(claim.id)}</option>)}</select></label>
-              <p>The remediation remains an unproved draft until a settlement and proof bundle are attached in the later proof workflow.</p>
+              <label><span>Encrypted claim</span><select value={remediationClaimId} onChange={(event) => setRemediationClaimId(event.target.value)} required><option value="">Choose claim</option>{claims.filter((claim) => ["submitted", "accepted"].includes(claim.state)).map((claim) => <option value={claim.id} key={claim.id}>{claim.claimKind.replaceAll("_", " ")} · {shortId(claim.id)}</option>)}</select></label>
+              <label><span>Remediation amount (token atomic units)</span><input inputMode="numeric" pattern="[0-9]+" value={remediationAmount} onChange={(event) => setRemediationAmount(event.target.value)} placeholder="Leave empty for exact proved shortfall" /></label>
+              <p>The amount cannot be below the private proved shortfall. PAYO binds its token, amount, recipient, and claim nullifier in the remediation proof.</p>
               <button type="submit" className="button button--ink button--wide" disabled={creatingException}>{creatingException ? <LoaderCircle className="spin" size={16} /> : <LockKeyhole size={16} />} Encrypt remediation draft</button>
             </form>}
+            {remediations.length > 0 && <div className="private-exception-list">
+              {remediations.map((remediation) => {
+                const runDisputed = runs.some(({ id, state }) => id === remediation.runId && state === "disputed");
+                return <div key={remediation.id} className="private-exception-row">
+                  <span><small>remediation</small><strong>{shortId(remediation.id)} · {remediation.state}</strong></span>
+                  {remediation.state === "draft" && <button type="button" className="button button--soft" onClick={() => void settleRemediation(remediation)} disabled={creatingException || !starknet.isConnected || !runDisputed}>{provingClaimId === remediation.id ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />} Prove &amp; settle</button>}
+                </div>;
+              })}
+            </div>}
           </section>
 
           <section className="pool-status-card"><span className="pool-pulse"><i /></span><div><small>STRK20 pool</small><strong>Mainnet configured</strong></div><WalletCards size={18} /></section>

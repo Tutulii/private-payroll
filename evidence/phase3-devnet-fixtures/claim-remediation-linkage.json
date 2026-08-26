@@ -1,0 +1,17 @@
+{
+  "claimNullifier": "0x9fe1eabba7fa71f877babfe7896cee252a91c7af4509b894286372597fe6c816",
+  "disputedManifestRoot": "0x0b546bdb002be9756566fd9eff7e9cb98b06482163ca8f8285bc5f100e298675",
+  "remediationManifestRoot": "0x2d35d354cf450f6b4ca6f54b7a01da48bf62f076d706edd53e3baf8f3a095a0f",
+  "shortfallAtomic": "3",
+  "token": "STRK",
+  "recipientAddress": "0x078662e7352d062084b0010068b99288486c2d8b914f6e2a55ce945f8792c8b1",
+  "agreementId": "01a03dba-1381-7cda-9c91-872d5add691a",
+  "claimId": "01a03dba-138a-72ee-9fa0-e084c21f7951",
+  "remediationId": "01a03dba-139e-775b-bfca-63d4701d4e50",
+  "formInputCommitments": {
+    "agreement": "0x088b58d3977204d217a5c26fd8da64670c1d8f9639e8c8732e5aaab30e20b5d4",
+    "claim": "0x54266b1940cee8f9902d5383d670c0e14595d68729f905a63f9b883325ad8d92",
+    "remediation": "0x46d2efbff7d858e1a296bfd3ed809075b395f0275821de6c8b2bb0e9904e394c"
+  },
+  "sourceArtifact": "evidence/phase3-devnet-fixtures/claim-remediation-ui-origin.json"
+}

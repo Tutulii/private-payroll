@@ -18,6 +18,7 @@ describe("encrypted claim and remediation drafts", () => {
       agreementId,
       runId,
       claimKind: "below_committed_floor",
+      disputedReferenceValueAtomic: "900000",
       principal: generateVaultPrincipal("worker:test"),
       now: new Date("2026-08-24T12:00:00.000Z"),
     });
@@ -31,7 +32,24 @@ describe("encrypted claim and remediation drafts", () => {
     const remediation = await createEncryptedRemediationDraft({
       client: { storeEncryptedRecord } as never,
       organizationId,
-      claimId: agreementId,
+      claim: {
+        schemaVersion: 1,
+        id: agreementId,
+        organizationId,
+        revision: 2,
+        createdAt: "2026-08-24T11:00:00.000Z",
+        updatedAt: "2026-08-24T11:30:00.000Z",
+        agreementId,
+        runId,
+        claimNullifier: `0x${"31".repeat(32)}`,
+        claimSalt: `0x${"32".repeat(32)}`,
+        claimKind: "missing_obligation",
+        shortfallAtomic: "100",
+        token: "USDC",
+        proofBundleId: "018f1000-0000-7000-8000-000000000004",
+        settlementId: "018f1000-0000-7000-8000-000000000005",
+        state: "submitted",
+      },
       principal: generateVaultPrincipal("admin:test"),
       now: new Date("2026-08-24T12:00:00.000Z"),
     });

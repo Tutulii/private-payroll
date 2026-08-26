@@ -33,6 +33,7 @@ function rpc(overrides: Partial<Record<string, string>> = {}): PayoReadinessRpc 
 const request = {
   chainId: "0x1",
   sealAddress,
+  mode: 0 as const,
   proofVersion: 1,
   agreementRoot: root,
   policyRoot: root,

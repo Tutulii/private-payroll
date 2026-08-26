@@ -14,6 +14,8 @@ export const PAYO_PROOF_DOMAIN_MERKLE_NODE = 2n;
 export const PAYO_PROOF_DOMAIN_AGREEMENT = 3n;
 export const PAYO_PROOF_DOMAIN_PAYROLL_LINE = 4n;
 export const PAYO_PROOF_DOMAIN_CATALOG_LEAF = 5n;
+export const PAYO_PROOF_DOMAIN_REMEDIATION = 6n;
+export const PAYO_PROOF_DOMAIN_ADVANCED_PLAN = 7n;
 export const PAYO_PROOF_EMPTY_LEAF =
   "0x168758332d5b3e2d13be8048c8011b454590e06c44bce7f702f09103eef5a373" as const;
 
@@ -22,6 +24,12 @@ type ProofCommitter = {
   proofMerkleNode(left: string, right: string): `0x${string}`;
   proofCatalogLeaf(commitment: string): `0x${string}`;
   buildProofFixedMerkleRoot(leaves: readonly string[]): `0x${string}`;
+  buildProofFixedMerkleMembership(leaves: readonly string[], index: number): {
+    root: `0x${string}`;
+    leaf: `0x${string}`;
+    siblings: `0x${string}`[];
+    pathBits: boolean[];
+  };
   firstProofCatalogMembership(): {
     siblings: `0x${string}`[];
     pathBits: boolean[];
@@ -44,6 +52,13 @@ type ProofCommitter = {
       referenceValueAtomic: bigint | string;
     },
   ): `0x${string}`;
+  proofRemediationCommitment(input: {
+    claimNullifier: string;
+    agreementLeaf: string;
+    amountAtomic: bigint | string;
+    token: 0 | 1;
+    salt: string;
+  }): `0x${string}`;
 };
 
 const PACKED_AMOUNT_LIMIT = 1n << 120n;
@@ -124,6 +139,35 @@ export async function createProofCommitter(): Promise<ProofCommitter> {
       );
     }
     return level[0];
+  };
+
+  const buildProofFixedMerkleMembership = (leaves: readonly string[], index: number) => {
+    if (!Number.isInteger(index) || index < 0 || index >= leaves.length) {
+      throw new Error("A proof opening index must select a real manifest leaf.");
+    }
+    if (leaves.length > PAYO_MAX_PAYROLL_LINES) {
+      throw new Error(`PAYO supports at most ${PAYO_MAX_PAYROLL_LINES} real payroll leaves.`);
+    }
+    let level: `0x${string}`[] = Array.from(
+      { length: PAYO_MERKLE_LEAF_COUNT },
+      (_, leafIndex) => leafIndex < leaves.length
+        ? toHex(normalizedHexBytes(leaves[leafIndex], 32))
+        : PAYO_PROOF_EMPTY_LEAF,
+    );
+    const leaf = level[index];
+    const siblings: `0x${string}`[] = [];
+    const pathBits: boolean[] = [];
+    let cursor = index;
+    while (level.length > 1) {
+      const isRight = cursor % 2 === 1;
+      siblings.push(level[isRight ? cursor - 1 : cursor + 1]);
+      pathBits.push(isRight);
+      level = Array.from({ length: level.length / 2 }, (_, node) =>
+        proofMerkleNode(level[node * 2], level[node * 2 + 1]),
+      );
+      cursor = Math.floor(cursor / 2);
+    }
+    return { root: level[0], leaf, siblings, pathBits };
   };
 
   const firstProofCatalogMembership = () => {
@@ -252,15 +296,31 @@ export async function createProofCommitter(): Promise<ProofCommitter> {
     ]);
   };
 
+  const proofRemediationCommitment = (input: {
+    claimNullifier: string;
+    agreementLeaf: string;
+    amountAtomic: bigint | string;
+    token: 0 | 1;
+    salt: string;
+  }): `0x${string}` => proofHash(PAYO_PROOF_DOMAIN_REMEDIATION, [
+    ...limbs(input.claimNullifier),
+    BigInt(toHex(normalizedHexBytes(input.agreementLeaf, 32))),
+    packedAmount(input.amountAtomic),
+    BigInt(input.token),
+    ...limbs(input.salt),
+  ]);
+
   return {
     proofHash,
     proofMerkleNode,
     proofCatalogLeaf,
     buildProofFixedMerkleRoot,
+    buildProofFixedMerkleMembership,
     firstProofCatalogMembership,
     proofCatalogRoot,
     buildProofCatalog,
     proofAgreementCommitment,
     proofPayrollCommitment,
+    proofRemediationCommitment,
   };
 }

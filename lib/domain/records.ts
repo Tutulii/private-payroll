@@ -98,11 +98,26 @@ export const payAgreementRecordSchema = recordHeaderSchema.extend({
   recipientSalt: commitmentSchema,
   agreementSalt: commitmentSchema,
   agreementCommitment: commitmentSchema,
+  // The v2 circuit uses a Poseidon plan commitment while the externally
+  // disclosed agreement commitment remains Keccak. Persist the exact proof
+  // schedule binding so durable-run locking never compares different domains.
+  proofScheduleCommitment: commitmentSchema.optional(),
   supersedesAgreementId: uuidV7Schema.optional(),
   effectiveFrom: z.string().datetime(),
   effectiveUntil: z.string().datetime().optional(),
   offboardingTerms: offboardingPaySchema.optional(),
-}).strict();
+}).strict().superRefine((record, context) => {
+  if (
+    record.agreement.classificationAssessment
+    && record.agreementSalt.toLowerCase() !== record.agreement.classificationFactsCommitment.toLowerCase()
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["agreementSalt"],
+      message: "The proved agreement salt must bind the versioned classification-facts commitment.",
+    });
+  }
+});
 
 export const payrollLineRecordSchema = recordHeaderSchema.extend({
   runId: uuidV7Schema,
@@ -140,6 +155,8 @@ export const proofBundleRecordSchema = recordHeaderSchema.extend({
 
 export const settlementRecordSchema = recordHeaderSchema.extend({
   runId: uuidV7Schema,
+  workflowType: z.enum(["payroll", "wage_claim", "wage_remediation"]).optional(),
+  subjectRecordId: uuidV7Schema.optional(),
   walletRequestId: z.string().min(1).max(256),
   idempotencyKey: z.string().min(16).max(256),
   tokenTotals: z.object({
@@ -190,6 +207,7 @@ export const disclosureGrantRecordSchema = recordHeaderSchema.extend({
     "classification",
     "aggregate",
     "settlement",
+    "exception",
   ])).min(1),
   recipientEncryptionKey: z.string().min(16),
   validAfter: z.string().datetime(),
@@ -217,30 +235,58 @@ export const agentCapabilityRecordSchema = recordHeaderSchema.extend({
 export const wageClaimRecordSchema = recordHeaderSchema.extend({
   agreementId: uuidV7Schema,
   runId: uuidV7Schema,
-  claimNullifier: commitmentSchema,
+  claimNullifier: commitmentSchema.optional(),
   claimSalt: commitmentSchema,
   claimKind: z.enum(["missing_obligation", "below_committed_floor", "incomplete_final_pay"]),
+  disputedReferenceValueAtomic: atomicAmountSchema.optional(),
+  disputedFinalIncludedMask: z.number().int().min(0).max(31).optional(),
+  shortfallAtomic: atomicAmountSchema.optional(),
+  token: payrollTokenSchema.optional(),
   proofBundleId: uuidV7Schema.optional(),
+  settlementId: uuidV7Schema.optional(),
   state: z.enum(["draft", "proven", "submitted", "accepted", "remediated", "rejected"]),
 }).strict().superRefine((claim, context) => {
-  if (claim.state !== "draft" && !claim.proofBundleId) {
-    context.addIssue({ code: "custom", path: ["proofBundleId"], message: "A non-draft claim requires its proof bundle." });
+  if (claim.claimKind === "below_committed_floor" && claim.disputedReferenceValueAtomic === undefined) {
+    context.addIssue({ code: "custom", path: ["disputedReferenceValueAtomic"], message: "A below-floor claim requires the disputed reference value." });
+  }
+  if (claim.claimKind === "incomplete_final_pay" && claim.disputedFinalIncludedMask === undefined) {
+    context.addIssue({ code: "custom", path: ["disputedFinalIncludedMask"], message: "A final-pay claim requires the disputed included-component mask." });
+  }
+  if (claim.state !== "draft") {
+    for (const field of ["claimNullifier", "shortfallAtomic", "token", "proofBundleId"] as const) {
+      if (claim[field] === undefined) {
+        const label = field === "proofBundleId" ? "its proof bundle" : field;
+        context.addIssue({ code: "custom", path: [field], message: `A non-draft claim requires ${label}.` });
+      }
+    }
+  }
+  if (["submitted", "accepted", "remediated"].includes(claim.state) && !claim.settlementId) {
+    context.addIssue({ code: "custom", path: ["settlementId"], message: "A submitted claim requires its settlement." });
   }
 });
 
 export const remediationRecordSchema = recordHeaderSchema.extend({
   claimId: uuidV7Schema,
+  runId: uuidV7Schema.optional(),
+  agreementId: uuidV7Schema.optional(),
+  claimNullifier: commitmentSchema.optional(),
+  amountAtomic: atomicAmountSchema.optional(),
+  token: payrollTokenSchema.optional(),
   settlementId: uuidV7Schema.optional(),
   proofBundleId: uuidV7Schema.optional(),
-  remediationNullifier: commitmentSchema,
+  remediationNullifier: commitmentSchema.optional(),
   remediationSalt: commitmentSchema,
-  state: z.enum(["draft", "submitted", "confirmed", "proved"]),
+  state: z.enum(["draft", "proven", "approval_pending", "submitted", "confirmed", "proved"]),
 }).strict().superRefine((remediation, context) => {
-  if (remediation.state !== "draft" && !remediation.settlementId) {
-    context.addIssue({ code: "custom", path: ["settlementId"], message: "Submitted remediation requires a settlement." });
+  if (remediation.state !== "draft") {
+    for (const field of ["runId", "agreementId", "claimNullifier", "amountAtomic", "token", "proofBundleId"] as const) {
+      if (remediation[field] === undefined) {
+        context.addIssue({ code: "custom", path: [field], message: `A non-draft remediation requires ${field}.` });
+      }
+    }
   }
-  if (remediation.state === "proved" && !remediation.proofBundleId) {
-    context.addIssue({ code: "custom", path: ["proofBundleId"], message: "Proved remediation requires a proof bundle." });
+  if (["approval_pending", "submitted", "confirmed", "proved"].includes(remediation.state) && !remediation.settlementId) {
+    context.addIssue({ code: "custom", path: ["settlementId"], message: "Submitted remediation requires a settlement." });
   }
 });
 

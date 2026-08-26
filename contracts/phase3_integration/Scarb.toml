@@ -1,0 +1,31 @@
+[package]
+name = "phase3_integration"
+version = "0.1.0"
+edition = "2024_07"
+
+[dependencies]
+starknet = "2.16.1"
+garaga = { git = "https://github.com/keep-starknet-strange/garaga.git", tag = "v1.1.0" }
+integrity_verifier = { path = "../integrity_verifier" }
+advanced_verifier = { path = "../advanced_verifier" }
+claim_verifier = { path = "../claim_verifier" }
+remediation_verifier = { path = "../remediation_verifier" }
+payo_contracts = { path = ".." }
+
+[dev-dependencies]
+snforge_std = { git = "https://github.com/foundry-rs/starknet-foundry.git", tag = "v0.57.0" }
+
+[target-defaults.test]
+build-external-contracts = [
+  "integrity_verifier::honk_verifier::UltraKeccakZKHonkVerifier",
+  "advanced_verifier::honk_verifier::PayoAdvancedObligationVerifier",
+  "claim_verifier::honk_verifier::PayoWageClaimVerifier",
+  "remediation_verifier::honk_verifier::PayoWageRemediationVerifier",
+  "payo_contracts::advanced_bundle_verifier::PayoAdvancedBundleVerifier",
+  "payo_contracts::integrity_bundle_verifier::PayoIntegrityBundleVerifier",
+  "payo_contracts::obligation_registry::PayoObligationRootRegistry",
+  "payo_contracts::payroll_seal::PayoPayrollSeal",
+  "payo_contracts::policy_registry::PayoPolicyRegistry",
+]
+
+[lib]

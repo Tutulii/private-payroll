@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { EncryptedVaultRecord, VaultPrincipalKeyPair } from "@/lib/crypto/vault";
 import { starknetFeltSchema } from "@/lib/domain/proof-bundle";
-import type { ProofWorkerSuccess } from "./protocol";
+import { PAYO_MAX_PROOF_CALLDATA_FELTS, type ProofWorkerSuccess } from "./protocol";
 
 const publicInputsSchema = z.object({
   chainId: z.string(),
@@ -34,14 +34,14 @@ export const remoteProofResponseSchema = z.object({
     z.object({
       shardIndex: z.literal(0),
       proofBase64: z.string().min(1).max(100_000),
-      proofCalldata: z.array(starknetFeltSchema).min(1).max(5_000),
+      proofCalldata: z.array(starknetFeltSchema).min(1).max(PAYO_MAX_PROOF_CALLDATA_FELTS),
       calldataHash: starknetFeltSchema,
       publicInputs: publicInputsSchema,
     }).strict(),
     z.object({
       shardIndex: z.literal(1),
       proofBase64: z.string().min(1).max(100_000),
-      proofCalldata: z.array(starknetFeltSchema).min(1).max(5_000),
+      proofCalldata: z.array(starknetFeltSchema).min(1).max(PAYO_MAX_PROOF_CALLDATA_FELTS),
       calldataHash: starknetFeltSchema,
       publicInputs: publicInputsSchema,
     }).strict(),

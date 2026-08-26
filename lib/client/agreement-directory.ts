@@ -2,14 +2,30 @@ import { hashRecipientCommitment } from "@/lib/crypto/commitments";
 import { hashCanonicalJson } from "@/lib/crypto/digest";
 import { toHex } from "@/lib/crypto/encoding";
 import type { VaultPrincipalKeyPair } from "@/lib/crypto/vault";
+import { advancedObligationCommitment } from "@/lib/domain/advanced-obligation-commitment";
+import {
+  buildClassificationAssessment,
+  classificationFactsCommitment,
+  type ClassificationFactsAnswers,
+} from "@/lib/domain/classification";
 import { generateUuidV7, payAgreementRecordSchema } from "@/lib/domain/records";
-import { advanceRecurringSchedule, type EmploymentAgreement } from "@/lib/domain/obligations";
+import {
+  advanceRecurringSchedule,
+  advancedPlanEntitlement,
+  proofScheduleForAdvancedPlan,
+  settleAdvancedPaymentPlan,
+  type AdvancedPaymentPlan,
+  type EmploymentAgreement,
+  type OffboardingPay,
+} from "@/lib/domain/obligations";
 import {
   buildPolicyCatalogRoot,
   PAYO_NET_INVOICE_POLICY,
   randomCommitmentSalt,
 } from "@/lib/proof/input-builder";
+import { advancedPlanProofCommitment } from "@/lib/proof/advanced-plan-commitment";
 import { parseTokenAmount, type PayrollTokenSymbol } from "@/lib/starknet/tokens";
+import { resolveExecutionPolicy } from "@/lib/policy/execution-catalog";
 import type { PayoClient } from "./payo-client";
 import type { PayeeDirectoryRecord } from "./payee-directory";
 import {
@@ -20,11 +36,26 @@ import {
 export type PayAgreementDirectoryRecord = ReturnType<typeof payAgreementRecordSchema.parse>;
 
 export function agreementScheduleCommitment(agreement: EmploymentAgreement): `0x${string}` {
+  if (agreement.agreementVersion === "payo-agreement-v2") {
+    return advancedObligationCommitment(agreement);
+  }
   return hashCanonicalJson({
     domain: "PAYO_SCHEDULE_V1",
     agreementId: agreement.id,
     schedule: agreement.schedule,
   });
+}
+
+export async function agreementProofScheduleCommitment(
+  agreement: EmploymentAgreement,
+): Promise<`0x${string}`> {
+  return agreement.agreementVersion === "payo-agreement-v2"
+    ? advancedPlanProofCommitment(agreement)
+    : agreementScheduleCommitment(agreement);
+}
+
+export function recordProofScheduleCommitment(record: PayAgreementDirectoryRecord): `0x${string}` {
+  return (record.proofScheduleCommitment ?? agreementScheduleCommitment(record.agreement)) as `0x${string}`;
 }
 
 export async function advanceEncryptedRecurringAgreement(input: {
@@ -34,7 +65,7 @@ export async function advanceEncryptedRecurringAgreement(input: {
   principal: VaultPrincipalKeyPair;
   now?: Date;
 }): Promise<PayAgreementDirectoryRecord> {
-  const currentCommitment = agreementScheduleCommitment(input.record.agreement);
+  const currentCommitment = await agreementProofScheduleCommitment(input.record.agreement);
   if (BigInt(currentCommitment) !== BigInt(input.expectedScheduleCommitment)) {
     throw new Error("The confirmed payroll does not match the agreement's current schedule revision.");
   }
@@ -42,15 +73,30 @@ export async function advanceEncryptedRecurringAgreement(input: {
     throw new Error("Only a recurring agreement can advance after one settled cycle.");
   }
   const now = input.now ?? new Date();
+  const nextSchedule = advanceRecurringSchedule(input.record.agreement.schedule);
+  const advancedPlan = input.record.agreement.agreementVersion === "payo-agreement-v2"
+    ? (() => {
+        if (input.record.agreement.paymentPlan.kind !== "recurring") {
+          throw new Error("The advanced payment plan does not match its recurring proof schedule.");
+        }
+        return {
+          ...input.record.agreement.paymentPlan,
+          nextDueAt: nextSchedule.nextDueAt,
+          occurrence: input.record.agreement.paymentPlan.occurrence + 1,
+        };
+      })()
+    : undefined;
   const agreement = {
     ...input.record.agreement,
-    schedule: advanceRecurringSchedule(input.record.agreement.schedule),
+    schedule: nextSchedule,
+    ...(advancedPlan ? { paymentPlan: advancedPlan } : {}),
   };
   const record = payAgreementRecordSchema.parse({
     ...input.record,
     revision: input.record.revision + 1,
     updatedAt: now.toISOString(),
     agreement,
+    proofScheduleCommitment: await agreementProofScheduleCommitment(agreement),
     agreementCommitment: hashCanonicalJson({
       domain: "PAYO_ENCRYPTED_AGREEMENT_V1",
       agreement,
@@ -70,11 +116,13 @@ export async function advanceEncryptedRecurringAgreement(input: {
 export type PayrollScheduleReference = {
   agreementId: string;
   scheduleCommitment: string;
+  paidAtomic?: string;
 };
 
 export type PayrollScheduleRun = {
   state: string;
   updatedAt: string;
+  dueAt?: string;
   lines: readonly PayrollScheduleReference[];
 };
 
@@ -100,8 +148,47 @@ export async function synchronizeConfirmedRecurringAgreements(input: {
   for (const run of confirmedRuns) {
     for (const line of run.lines) {
       const current = currentByAgreementId.get(line.agreementId);
-      if (!current || current.agreement.schedule.kind !== "recurring") continue;
-      if (BigInt(agreementScheduleCommitment(current.agreement)) !== BigInt(line.scheduleCommitment)) continue;
+      if (!current) continue;
+      if (BigInt(await agreementProofScheduleCommitment(current.agreement)) !== BigInt(line.scheduleCommitment)) continue;
+      if (current.agreement.agreementVersion === "payo-agreement-v2") {
+        if (!line.paidAtomic) throw new Error("A confirmed advanced payment is missing its exact settled amount.");
+        const settledAt = new Date(run.dueAt ?? run.updatedAt);
+        const paymentPlan = settleAdvancedPaymentPlan({
+          plan: current.agreement.paymentPlan,
+          paidAtomic: line.paidAtomic,
+          at: settledAt,
+        });
+        const updatedAt = new Date(run.updatedAt).toISOString();
+        const agreement = {
+          ...current.agreement,
+          paymentPlan,
+          schedule: proofScheduleForAdvancedPlan(paymentPlan),
+        };
+        const advanced = payAgreementRecordSchema.parse({
+          ...current,
+          revision: current.revision + 1,
+          updatedAt,
+          ...(current.agreement.termination ? { effectiveUntil: updatedAt } : {}),
+          agreement,
+          proofScheduleCommitment: await agreementProofScheduleCommitment(agreement),
+          agreementCommitment: hashCanonicalJson({
+            domain: "PAYO_ENCRYPTED_AGREEMENT_V1",
+            agreement,
+            recipientCommitment: current.recipientCommitment,
+            agreementSalt: current.agreementSalt,
+          }),
+        });
+        await storeCanonicalEncryptedRecord({
+          client: input.client,
+          organizationId: advanced.organizationId,
+          recordType: "pay-agreement",
+          record: advanced,
+          principals: [input.principal],
+        });
+        currentByAgreementId.set(line.agreementId, advanced);
+        continue;
+      }
+      if (current.agreement.schedule.kind !== "recurring") continue;
       const advanced = await advanceEncryptedRecurringAgreement({
         client: input.client,
         record: current,
@@ -122,6 +209,7 @@ export async function storeEncryptedRecurringAgreement(input: {
   amount: string;
   token: PayrollTokenSymbol;
   classification: "employee" | "contractor" | "agent_service";
+  classificationAnswers: ClassificationFactsAnswers;
   cadence: "weekly" | "biweekly" | "monthly";
   nextDueAt: string;
   policyId: string;
@@ -141,34 +229,46 @@ export async function storeEncryptedRecurringAgreement(input: {
   ) {
     throw new Error("The agreement classification does not match the contributor kind.");
   }
-  if (input.classification === "employee" || input.policyId !== PAYO_NET_INVOICE_POLICY.id) {
-    throw new Error("Phase 2 agreement execution currently supports only the contractor/agent net-invoice reference policy.");
-  }
   const now = input.now ?? new Date();
+  const policy = resolveExecutionPolicy({
+    policyId: input.policyId,
+    policyVersion: input.policyVersion,
+    jurisdictionCode: input.payee.jurisdictionCode,
+    classification: input.classification,
+    settlementToken: input.token,
+    at: now,
+  });
   const timestamp = now.toISOString();
   const id = generateUuidV7(now.getTime());
   const agreementId = generateUuidV7(now.getTime() + 1);
   const recipientSalt = randomCommitmentSalt();
-  const agreementSalt = randomCommitmentSalt();
-  const policyCatalogRoot = await buildPolicyCatalogRoot([PAYO_NET_INVOICE_POLICY]);
+  const classificationAssessment = buildClassificationAssessment({
+    answers: input.classificationAnswers,
+    treatment: input.classification,
+    principalKind: input.payee.principalKind,
+    reviewedAt: timestamp,
+    assessorCommitment: hashCanonicalJson({
+      domain: "PAYO_CLASSIFICATION_ASSESSOR_V1",
+      principalId: input.principal.principalId,
+      publicKey: input.principal.publicKey,
+    }),
+    salt: randomCommitmentSalt(),
+  });
+  const classificationCommitment = classificationFactsCommitment({ agreementId, assessment: classificationAssessment });
+  const agreementSalt = classificationCommitment;
+  const policyCatalogRoot = await buildPolicyCatalogRoot([policy]);
   const recipientCommitment = toHex(hashRecipientCommitment(
     input.payee.recipientAddress,
     recipientSalt,
   ));
-  const classificationFactsCommitment = hashCanonicalJson({
-    domain: "PAYO_CLASSIFICATION_FACTS_V1",
-    agreementId,
-    principalKind: input.payee.principalKind,
-    classification: input.classification,
-    salt: agreementSalt,
-  });
   const agreement = {
     agreementVersion: "payo-agreement-v1" as const,
     id: agreementId,
     organizationId: input.organizationId,
     principalKind: input.payee.principalKind,
     classification: input.classification,
-    classificationFactsCommitment,
+    classificationFactsCommitment: classificationCommitment,
+    classificationAssessment,
     jurisdictionCode: input.payee.jurisdictionCode,
     settlementToken: input.token,
     earningsAtomic: [parseTokenAmount(input.amount, input.token).toString()],
@@ -202,6 +302,170 @@ export async function storeEncryptedRecurringAgreement(input: {
     recipientSalt,
     agreementSalt,
     agreementCommitment,
+    proofScheduleCommitment: agreementScheduleCommitment(agreement),
+    effectiveFrom: timestamp,
+  });
+  return storeCanonicalEncryptedRecord({
+    client: input.client,
+    organizationId: input.organizationId,
+    recordType: "pay-agreement",
+    record,
+    principals: [input.principal],
+  });
+}
+
+export async function storeEncryptedAdvancedAgreement(input: {
+  client: Pick<PayoClient, "storeEncryptedRecord">;
+  organizationId: string;
+  payee: PayeeDirectoryRecord;
+  token: PayrollTokenSymbol;
+  classification: "employee" | "contractor" | "agent_service";
+  classificationAnswers: ClassificationFactsAnswers;
+  policyId?: string;
+  policyVersion?: number;
+  paymentPlan: AdvancedPaymentPlan;
+  fixedAmount?: string;
+  termination?: {
+    terminatedAt: string;
+    reasonCommitment: `0x${string}`;
+    pay: OffboardingPay;
+  };
+  adjustment?: {
+    amount: string;
+    reasonCommitment: `0x${string}`;
+    approverCommitment: `0x${string}`;
+  };
+  fxProtection?: {
+    referenceCurrency: "USD";
+    minimumReferenceAtomic: string;
+    oracleSnapshotCommitment?: `0x${string}`;
+    maximumAgeSeconds: number;
+  };
+  principal: VaultPrincipalKeyPair;
+  now?: Date;
+}): Promise<PayAgreementDirectoryRecord> {
+  if (input.payee.organizationId !== input.organizationId) {
+    throw new Error("The selected contributor belongs to another organization.");
+  }
+  if (input.payee.tokenPreference !== input.token) {
+    throw new Error("The advanced agreement token must match the contributor's committed preference.");
+  }
+  if (
+    (input.payee.principalKind === "agent" && input.classification !== "agent_service")
+    || (input.payee.principalKind === "human" && input.classification === "agent_service")
+  ) throw new Error("The advanced agreement classification does not match the contributor kind.");
+
+  const now = input.now ?? new Date();
+  const policy = resolveExecutionPolicy({
+    policyId: input.policyId ?? PAYO_NET_INVOICE_POLICY.id,
+    policyVersion: input.policyVersion ?? PAYO_NET_INVOICE_POLICY.revision,
+    jurisdictionCode: input.payee.jurisdictionCode,
+    classification: input.classification,
+    settlementToken: input.token,
+    at: now,
+  });
+
+  const plan = input.paymentPlan;
+  let earningsAtomic: string[];
+  if (input.termination) {
+    earningsAtomic = [
+      input.termination.pay.ordinaryPayAtomic,
+      input.termination.pay.accruedLeaveAtomic,
+      input.termination.pay.noticeAtomic,
+      input.termination.pay.severanceAtomic,
+      input.termination.pay.adjustmentsAtomic,
+    ];
+  } else if (plan.kind === "checkpoint_stream" || plan.kind === "private_vesting") {
+    const entitlementAt = new Date(plan.kind === "checkpoint_stream"
+      ? plan.checkpoint.checkpointAt
+      : plan.releaseAt);
+    earningsAtomic = [advancedPlanEntitlement(plan, entitlementAt).payableAtomic.toString()];
+  } else {
+    if (!input.fixedAmount) throw new Error("Recurring and milestone plans require a fixed private amount.");
+    earningsAtomic = [parseTokenAmount(input.fixedAmount, input.token).toString()];
+  }
+  let adjustment: {
+    amountAtomic: string;
+    reasonCommitment: `0x${string}`;
+    approverCommitment: `0x${string}`;
+  } | undefined;
+  if (input.adjustment) {
+    const amountAtomic = parseTokenAmount(input.adjustment.amount, input.token).toString();
+    if (!earningsAtomic.includes(amountAtomic)) earningsAtomic.push(amountAtomic);
+    adjustment = {
+      amountAtomic,
+      reasonCommitment: input.adjustment.reasonCommitment,
+      approverCommitment: input.adjustment.approverCommitment,
+    };
+  }
+  if (earningsAtomic.length > 8 || earningsAtomic.every((amount) => BigInt(amount) === 0n)) {
+    throw new Error("An advanced agreement requires 1–8 non-zero earnings components.");
+  }
+
+  const timestamp = now.toISOString();
+  const id = generateUuidV7(now.getTime());
+  const agreementId = generateUuidV7(now.getTime() + 1);
+  const recipientSalt = randomCommitmentSalt();
+  const classificationAssessment = buildClassificationAssessment({
+    answers: input.classificationAnswers,
+    treatment: input.classification,
+    principalKind: input.payee.principalKind,
+    reviewedAt: timestamp,
+    assessorCommitment: hashCanonicalJson({
+      domain: "PAYO_CLASSIFICATION_ASSESSOR_V1",
+      principalId: input.principal.principalId,
+      publicKey: input.principal.publicKey,
+    }),
+    salt: randomCommitmentSalt(),
+  });
+  const classificationCommitment = classificationFactsCommitment({ agreementId, assessment: classificationAssessment });
+  const agreementSalt = classificationCommitment;
+  const planSalt = randomCommitmentSalt();
+  const policyCatalogRoot = await buildPolicyCatalogRoot([policy]);
+  const recipientCommitment = toHex(hashRecipientCommitment(input.payee.recipientAddress, recipientSalt));
+  const agreement = {
+    agreementVersion: "payo-agreement-v2" as const,
+    id: agreementId,
+    organizationId: input.organizationId,
+    principalKind: input.payee.principalKind,
+    classification: input.classification,
+    classificationFactsCommitment: classificationCommitment,
+    classificationAssessment,
+    jurisdictionCode: input.payee.jurisdictionCode,
+    settlementToken: input.token,
+    earningsAtomic,
+    schedule: proofScheduleForAdvancedPlan(plan),
+    paymentPlan: plan,
+    planSalt,
+    statutoryPolicy: {
+      catalogRoot: policyCatalogRoot,
+      policyId: policy.id,
+      policyVersion: policy.revision,
+    },
+    ...(input.fxProtection ? { fxProtection: input.fxProtection } : {}),
+    ...(input.termination ? { termination: input.termination } : {}),
+    ...(adjustment ? { adjustment } : {}),
+  };
+  const agreementCommitment = hashCanonicalJson({
+    domain: "PAYO_ENCRYPTED_AGREEMENT_V1",
+    agreement,
+    recipientCommitment,
+    agreementSalt,
+  });
+  const record = payAgreementRecordSchema.parse({
+    schemaVersion: 1,
+    id,
+    organizationId: input.organizationId,
+    revision: 1,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    payeeId: input.payee.id,
+    agreement,
+    recipientCommitment,
+    recipientSalt,
+    agreementSalt,
+    agreementCommitment,
+    proofScheduleCommitment: await agreementProofScheduleCommitment(agreement),
     effectiveFrom: timestamp,
   });
   return storeCanonicalEncryptedRecord({
@@ -224,7 +488,14 @@ export async function loadEncryptedPayAgreements(input: {
     recordType: "pay-agreement",
     principal: input.principal,
   });
-  return records.sort((left, right) =>
+  const proofBoundRecords = await Promise.all(records.map(async (record) =>
+    record.proofScheduleCommitment
+      ? record
+      : payAgreementRecordSchema.parse({
+          ...record,
+          proofScheduleCommitment: await agreementProofScheduleCommitment(record.agreement),
+        })));
+  return proofBoundRecords.sort((left, right) =>
     left.agreement.schedule.kind === "recurring"
     && right.agreement.schedule.kind === "recurring"
       ? left.agreement.schedule.nextDueAt.localeCompare(right.agreement.schedule.nextDueAt)

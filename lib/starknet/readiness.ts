@@ -5,6 +5,7 @@ const commitmentSchema = z.string().regex(/^0x[0-9a-fA-F]{64}$/);
 export const payoReadinessRequestSchema = z.object({
   chainId: z.string().regex(/^(?:0x[0-9a-fA-F]+|[1-9]\d*)$/),
   sealAddress: z.string().regex(/^0x[0-9a-fA-F]+$/),
+  mode: z.union([z.literal(0), z.literal(2), z.literal(3)]),
   proofVersion: z.number().int().positive().max(0xffff_ffff),
   agreementRoot: commitmentSchema,
   policyRoot: commitmentSchema,

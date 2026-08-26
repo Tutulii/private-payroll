@@ -22,7 +22,7 @@ const publicInputs = {
   shardIndex: "0",
 };
 
-function responseWithHash(calldataHash: string) {
+function responseWithHash(calldataHash: string, calldataLength = 1) {
   return {
     version: 1,
     type: "proof-complete",
@@ -33,7 +33,7 @@ function responseWithHash(calldataHash: string) {
     shards: ([0, 1] as const).map((shardIndex) => ({
       shardIndex,
       proofBase64: "AA==",
-      proofCalldata: ["0x1"],
+      proofCalldata: Array.from({ length: calldataLength }, (_, index) => `0x${(index + 1).toString(16)}`),
       calldataHash,
       publicInputs: { ...publicInputs, shardIndex: shardIndex.toString() },
     })),
@@ -50,5 +50,9 @@ describe("remote payroll prover response", () => {
 
   it("rejects a non-canonical felt with a leading zero", () => {
     expect(() => remoteProofResponseSchema.parse(responseWithHash("0x01"))).toThrow();
+  });
+
+  it("accepts the measured Phase 3 composite calldata size", () => {
+    expect(() => remoteProofResponseSchema.parse(responseWithHash("0x1", 6_339))).not.toThrow();
   });
 });

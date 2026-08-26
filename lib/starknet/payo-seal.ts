@@ -9,7 +9,11 @@ import {
 } from "@/lib/proof/starknet-calldata";
 
 export const PAYO_PROOF_MODE_PRECOMMIT = 0;
+export const PAYO_PROOF_MODE_FINALIZE = 1;
+export const PAYO_PROOF_MODE_CLAIM = 2;
+export const PAYO_PROOF_MODE_REMEDIATE = 3;
 export const PAYO_MAX_PROOF_VALIDITY_SECONDS = 3_600n;
+export type PayoProofMode = 0 | 1 | 2 | 3;
 
 const U8_LIMIT = 1n << 8n;
 const U32_LIMIT = 1n << 32n;
@@ -29,6 +33,13 @@ export type PayoSealedPayroll = {
   validityStart: bigint;
   validityExpiry: bigint;
   shardHashes: readonly [string, string];
+};
+
+const PROOF_VERSIONS_BY_MODE: Readonly<Record<PayoProofMode, readonly number[]>> = {
+  [PAYO_PROOF_MODE_PRECOMMIT]: [1, 2],
+  [PAYO_PROOF_MODE_FINALIZE]: [5],
+  [PAYO_PROOF_MODE_CLAIM]: [3],
+  [PAYO_PROOF_MODE_REMEDIATE]: [4],
 };
 
 function parseBounded(value: string, label: string, limit: bigint): bigint {
@@ -78,10 +89,11 @@ function assertProofHash(shard: PayrollIntegrityShardProof): string {
  * Builds the pool-owned `privacy_invoke` fallback action. The STRK20 protocol
  * calls that fixed selector, so this action intentionally contains no selector.
  */
-export function buildPayoSealedPayroll(input: {
+export function buildPayoSealedAction(input: {
   sealAddress: string;
   chainId: string;
   shards: LinkedProofs;
+  mode: PayoProofMode;
   nowUnixSeconds?: bigint;
 }): PayoSealedPayroll {
   const sealAddress = canonicalAddress(input.sealAddress, "PAYO seal address");
@@ -102,6 +114,9 @@ export function buildPayoSealedPayroll(input: {
   const schemaVersion = parseBounded(proof.schemaVersion, "Schema version", U32_LIMIT);
   if (proofVersion === 0n || schemaVersion !== 1n) {
     throw new Error("PAYO requires a non-zero proof version and schema version 1.");
+  }
+  if (!PROOF_VERSIONS_BY_MODE[input.mode].includes(Number(proofVersion))) {
+    throw new Error(`PAYO proof version ${proofVersion} is invalid for mode ${input.mode}.`);
   }
   const agreementRootHigh = parseBounded(proof.agreementRootHigh, "Agreement root high", U128_LIMIT);
   const agreementRootLow = parseBounded(proof.agreementRootLow, "Agreement root low", U128_LIMIT);
@@ -128,7 +143,7 @@ export function buildPayoSealedPayroll(input: {
 
   const shardHashes = [assertProofHash(shardZero), assertProofHash(shardOne)] as const;
   const calldata = [
-    PAYO_PROOF_MODE_PRECOMMIT,
+    input.mode,
     proofVersion,
     schemaVersion,
     agreementRootHigh,
@@ -161,6 +176,15 @@ export function buildPayoSealedPayroll(input: {
     validityExpiry,
     shardHashes,
   };
+}
+
+export function buildPayoSealedPayroll(input: {
+  sealAddress: string;
+  chainId: string;
+  shards: LinkedProofs;
+  nowUnixSeconds?: bigint;
+}): PayoSealedPayroll {
+  return buildPayoSealedAction({ ...input, mode: PAYO_PROOF_MODE_PRECOMMIT });
 }
 
 export function buildVerifySealedShardCall(input: {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertSettlementTransition,
+  commitPayoActionTokenTotals,
   evaluateStarknetReceipt,
   tokenTotalsSchema,
 } from "./settlement";
@@ -49,5 +50,22 @@ describe("durable settlement state", () => {
     expect(tokenTotalsSchema.parse({ STRK: "1", USDC: "0" })).toEqual({ STRK: "1", USDC: "0" });
     expect(() => tokenTotalsSchema.parse({ STRK: "0", USDC: "0" })).toThrow();
     expect(() => tokenTotalsSchema.parse({ STRK: "1.5", USDC: "0" })).toThrow();
+  });
+
+  it("allows zero-value claim sealing but requires value for payroll remediation", () => {
+    expect(commitPayoActionTokenTotals({
+      organizationId: "org",
+      runId: "run",
+      workflowType: "wage_claim",
+      subjectRecordId: "claim",
+      totals: { STRK: "0", USDC: "0" },
+    })).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(() => commitPayoActionTokenTotals({
+      organizationId: "org",
+      runId: "run",
+      workflowType: "wage_remediation",
+      subjectRecordId: "remediation",
+      totals: { STRK: "0", USDC: "0" },
+    })).toThrow(/positive private settlement total/i);
   });
 });

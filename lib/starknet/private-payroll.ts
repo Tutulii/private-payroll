@@ -22,15 +22,14 @@ export type PrivatePayrollActionBundle = {
   totals: Record<PayrollTokenSymbol, bigint>;
 };
 
-export function buildPrivatePayrollActions(
-  recipients: PrivatePayrollRecipient[],
+export type PrivateExceptionWorkflow = "wage_claim" | "wage_remediation";
+
+function assertProofBoundAction(
   payoAction: STRK20_INVOKE_ACTION,
   configuredSeal: string,
-): PrivatePayrollActionBundle {
-  if (recipients.length === 0) throw new Error("Add at least one recipient.");
-  if (recipients.length > 50) throw new Error("A payroll can contain up to 50 recipients.");
+  expectedMode: 0 | 2 | 3,
+): string {
   if (!configuredSeal) throw new Error("The proof-bound PAYO seal is not deployed/configured.");
-
   let normalizedSeal: string;
   try {
     normalizedSeal = validateAndParseAddress(configuredSeal);
@@ -43,6 +42,20 @@ export function buildPrivatePayrollActions(
   ) {
     throw new Error("Payroll contains an unapproved PAYO seal action.");
   }
+  if (payoAction.calldata.length !== 19 || BigInt(String(payoAction.calldata[0])) !== BigInt(expectedMode)) {
+    throw new Error(`PAYO action is not the expected proof mode ${expectedMode}.`);
+  }
+  return normalizedSeal;
+}
+
+export function buildPrivatePayrollActions(
+  recipients: PrivatePayrollRecipient[],
+  payoAction: STRK20_INVOKE_ACTION,
+  configuredSeal: string,
+): PrivatePayrollActionBundle {
+  if (recipients.length === 0) throw new Error("Add at least one recipient.");
+  if (recipients.length > 50) throw new Error("A payroll can contain up to 50 recipients.");
+  assertProofBoundAction(payoAction, configuredSeal, 0);
 
   const seenDestinations = new Set<string>();
   const totals: Record<PayrollTokenSymbol, bigint> = { STRK: 0n, USDC: 0n };
@@ -72,6 +85,35 @@ export function buildPrivatePayrollActions(
     };
   });
   actions.push(payoAction);
+  return { actions, totals };
+}
+
+/**
+ * Builds the only two non-payroll actions accepted by the Phase 3 wallet
+ * boundary. A claim seals proof state without transferring funds; remediation
+ * must privately transfer one proved amount before its REMEDIATE invocation.
+ */
+export function buildPrivateExceptionActions(
+  workflow: PrivateExceptionWorkflow,
+  recipients: PrivatePayrollRecipient[],
+  payoAction: STRK20_INVOKE_ACTION,
+  configuredSeal: string,
+): PrivatePayrollActionBundle {
+  const expectedMode = workflow === "wage_claim" ? 2 : 3;
+  assertProofBoundAction(payoAction, configuredSeal, expectedMode);
+  if (workflow === "wage_claim") {
+    if (recipients.length !== 0) throw new Error("A wage claim cannot transfer private funds.");
+    return { actions: [payoAction], totals: { STRK: 0n, USDC: 0n } };
+  }
+  if (recipients.length !== 1) {
+    throw new Error("A wage remediation proof must settle exactly one private recipient.");
+  }
+  const { actions, totals } = buildPrivatePayrollActions(
+    recipients,
+    { ...payoAction, calldata: ["0x0", ...payoAction.calldata.slice(1)] },
+    configuredSeal,
+  );
+  actions[actions.length - 1] = payoAction;
   return { actions, totals };
 }
 

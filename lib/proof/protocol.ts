@@ -1,6 +1,7 @@
 import type { InputMap } from "@noir-lang/noir_js";
 import type { EncryptedVaultRecord, VaultPrincipalKeyPair } from "@/lib/crypto/vault";
 import type { SerializedPayrollIntegrityBuildRequest } from "./input-builder";
+import type { EmploymentAgreement } from "@/lib/domain/obligations";
 
 export const PAYROLL_INTEGRITY_CIRCUIT_URL = "/circuits/payroll_integrity-v1.json";
 export const PAYROLL_INTEGRITY_CIRCUIT_SHA256 =
@@ -9,7 +10,29 @@ export const PAYROLL_INTEGRITY_VERIFICATION_KEY_URL =
   "/circuits/payroll_integrity-v1.vk.hex";
 export const PAYROLL_INTEGRITY_VERIFICATION_KEY_SHA256 =
   "0xd622dff7f86da80f1b9e2fae58d4aee071d2fdec5ae018bcec353a6ce8941d96";
+export const ADVANCED_OBLIGATION_CIRCUIT_URL = "/circuits/advanced_obligation-v2.json";
+export const ADVANCED_OBLIGATION_CIRCUIT_SHA256 =
+  "0x33a1fec50488d5913f6e6664f86b096c68fcf189eec8297f3aab2a6a8926b717";
+export const ADVANCED_OBLIGATION_VERIFICATION_KEY_URL = "/circuits/advanced_obligation-v2.vk.hex";
+export const ADVANCED_OBLIGATION_VERIFICATION_KEY_SHA256 =
+  "0x5546c5d41beec3097b05933af59da36c473d3b1183feda74e8f23a19d22faf5c";
+export const WAGE_CLAIM_CIRCUIT_SHA256 =
+  "0x00dc2ef57f65d12d5d7c3ad8c1fefd2835c5474bbef5df9400b9e73d4f940287";
+export const WAGE_CLAIM_CIRCUIT_URL = "/circuits/wage_claim-v3.json";
+export const WAGE_CLAIM_VERIFICATION_KEY_URL = "/circuits/wage_claim-v3.vk.hex";
+export const WAGE_CLAIM_VERIFICATION_KEY_SHA256 =
+  "0x5e5f5ec0d36b41000470cbc7641a4312faabadf3f8e9da4f2c7d8db273db42d9";
+export const WAGE_REMEDIATION_CIRCUIT_SHA256 =
+  "0xd82738ad7db9867f4f86a8edcac02e72ee6d5fbbaa7d68bf9a521a23540e1d0c";
+export const WAGE_REMEDIATION_CIRCUIT_URL = "/circuits/wage_remediation-v4.json";
+export const WAGE_REMEDIATION_VERIFICATION_KEY_URL = "/circuits/wage_remediation-v4.vk.hex";
+export const WAGE_REMEDIATION_VERIFICATION_KEY_SHA256 =
+  "0x09c496d66bbf803a92b617840e12a403c8036a05e7e6437acd59d01d87910045";
 export const PAYROLL_INTEGRITY_PUBLIC_INPUT_COUNT = 17;
+// A Phase 3 advanced shard packs PayrollIntegrity and AdvancedObligation
+// verifier calldata. The reproducible fixture is 6,339 felts, so retain
+// bounded headroom without accepting unbounded request bodies.
+export const PAYO_MAX_PROOF_CALLDATA_FELTS = 8_000;
 // The pinned 2^20-domain circuit peaks below 2 GiB in the one-thread WASM
 // benchmark. Android Chrome can reject bb.js' 4 GiB default reservation even
 // when the circuit never consumes it, so mobile workers use a measured 2.25
@@ -34,6 +57,14 @@ export type EncryptedPayrollWitness = {
   circuitInputs: [InputMap, InputMap];
 } | {
   buildInput: SerializedPayrollIntegrityBuildRequest;
+} | {
+  advancedBuildInput: {
+    payroll: SerializedPayrollIntegrityBuildRequest;
+    agreements: EmploymentAgreement[];
+  };
+} | {
+  circuitProfile: "wage_claim" | "wage_remediation";
+  circuitInputs: [InputMap, InputMap];
 };
 
 export type ProofWorkerRequest = {

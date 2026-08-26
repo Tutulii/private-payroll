@@ -1,0 +1,172 @@
+{
+  "schemaVersion": "payo.phase3.private-settlement.v1",
+  "generatedAt": "2026-08-26T10:57:41.508Z",
+  "passed": true,
+  "chainId": "0x534e5f5345504f4c4941",
+  "devnetVersion": "0.8.0-rc.3",
+  "rpcVersion": "0.10.2",
+  "proofMode": "none",
+  "privacySdkRevision": "PRIVACY-0.14.3-RC.2",
+  "privacyPoolRevision": "PRIVACY-0.14.3-RC.0",
+  "privacyPoolClassHash": "0x52107fadffab71bdcbb6b2ccb68ba3e1b5558d94036538053e159d3076ad633",
+  "privacyPoolAddress": "0x427844bfdd54ba2a1447b5d1751b5319b2a2649e15adcaae60e3cccf5639ad2",
+  "payoSealAddress": "0x1baedaf40fc4798951c681b63f2b31954709e1f4caf07c13d69036e57995c1f",
+  "workflowCoverage": [
+    {
+      "workflow": "recurring",
+      "formInputCommitment": "0x370a977fcea5abec834e7ce17cf44107e8934032879b26fd9784151861b3ff99",
+      "agreementId": "01a03b5b-ff41-7314-9c6a-d43ca7657023",
+      "policyId": "payo-net-invoice-no-withholding-v1",
+      "fxFloorAtomic": "0",
+      "classification": "contractor"
+    },
+    {
+      "workflow": "checkpoint",
+      "formInputCommitment": "0x4eea1beedb9f459d4c9c67e89cb0126ad50f7bb52953fc0352d6af7a646b9cf4",
+      "agreementId": "01a03b5b-fb59-7712-93e8-8980a0ccd9ab",
+      "policyId": "payo-net-invoice-no-withholding-v1",
+      "fxFloorAtomic": "0",
+      "classification": "contractor"
+    },
+    {
+      "workflow": "milestone",
+      "formInputCommitment": "0xaae8d6741c8b5e44c72133c2e27238f57563c4dc2e6e613766c17b7367e9a6f0",
+      "agreementId": "01a03b5b-f771-74a7-979b-c684019c5b3d",
+      "policyId": "payo-net-invoice-no-withholding-v1",
+      "fxFloorAtomic": "0",
+      "classification": "contractor"
+    },
+    {
+      "workflow": "vesting",
+      "formInputCommitment": "0x656e4b34ed36362062b07d6af9f45f5a1a81e5f25f90b15c5bd310ad71ce54e4",
+      "agreementId": "01a03b5b-f389-771a-a735-44a8385741c9",
+      "policyId": "payo-net-invoice-no-withholding-v1",
+      "fxFloorAtomic": "0",
+      "classification": "contractor"
+    },
+    {
+      "workflow": "final-pay",
+      "formInputCommitment": "0x3feeb62fe536026480c57b740a5d60dc97955cd71bd98e50a1bdc76c58a27b38",
+      "agreementId": "01a03b5b-efa1-7dbd-a05f-788ddc4c34a9",
+      "policyId": "payo-net-invoice-no-withholding-v1",
+      "fxFloorAtomic": "0",
+      "classification": "contractor"
+    },
+    {
+      "workflow": "approved-adjustment",
+      "formInputCommitment": "0x5e71e6ddc925e3d2398ccc5459795e79bafafb7cb80b4cceb9f23224375cceb9",
+      "agreementId": "01a03b5b-ebb9-7d21-89ee-6a9152795f5b",
+      "policyId": "payo-net-invoice-no-withholding-v1",
+      "fxFloorAtomic": "0",
+      "classification": "contractor"
+    },
+    {
+      "workflow": "statutory-fx-classification",
+      "formInputCommitment": "0xa0511ee4f15b150f95055052666d43e65fda086605be8703c1d41f7c7bff1a7c",
+      "agreementId": "01a03b5b-e7d1-76f0-bd0b-e7d16af3122b",
+      "policyId": "us-irs-supplemental-flat-2026-v1",
+      "fxFloorAtomic": "7800000",
+      "classification": "employee"
+    }
+  ],
+  "proofBindings": {
+    "manifestRoot": [
+      "0x394189476bcd6a4ce59243479585a23",
+      "0x58ace8782364bf9cd31e7b5c924eebaa"
+    ],
+    "runNullifier": [
+      "0x94faf64a6b127aac525f2008f6862bac",
+      "0x695a221402238e5e1b5da0a2e7030159"
+    ],
+    "proofHashes": [
+      "0x783b08e581129928222e37ecaa6ca34c56def8dfcc30eba675d9b327cb6d1b9",
+      "0x6867df0c5953b99e5667d9ee9cfe075c0d4d75df3cee7a910ff276770007a91"
+    ]
+  },
+  "privateSettlement": {
+    "tokenAddress": "0x4718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
+    "recipientAddress": "0x78662e7352d062084b0010068b99288486c2d8b914f6e2a55ce945f8792c8b1",
+    "amountAtomic": "7",
+    "workflowOutputs": [
+      {
+        "workflow": "recurring",
+        "recipientAddress": "0x78662e7352d062084b0010068b99288486c2d8b914f6e2a55ce945f8792c8b1",
+        "amountAtomic": "1"
+      },
+      {
+        "workflow": "checkpoint",
+        "recipientAddress": "0x78662e7352d062084b0010068b99288486c2d8b914f6e2a55ce945f8792c8b1",
+        "amountAtomic": "1"
+      },
+      {
+        "workflow": "milestone",
+        "recipientAddress": "0x78662e7352d062084b0010068b99288486c2d8b914f6e2a55ce945f8792c8b1",
+        "amountAtomic": "1"
+      },
+      {
+        "workflow": "vesting",
+        "recipientAddress": "0x78662e7352d062084b0010068b99288486c2d8b914f6e2a55ce945f8792c8b1",
+        "amountAtomic": "1"
+      },
+      {
+        "workflow": "final-pay",
+        "recipientAddress": "0x78662e7352d062084b0010068b99288486c2d8b914f6e2a55ce945f8792c8b1",
+        "amountAtomic": "1"
+      },
+      {
+        "workflow": "approved-adjustment",
+        "recipientAddress": "0x78662e7352d062084b0010068b99288486c2d8b914f6e2a55ce945f8792c8b1",
+        "amountAtomic": "1"
+      },
+      {
+        "workflow": "statutory-fx-classification",
+        "recipientAddress": "0x78662e7352d062084b0010068b99288486c2d8b914f6e2a55ce945f8792c8b1",
+        "amountAtomic": "1"
+      }
+    ],
+    "transactionHash": "0x18160c08132dd95394e23341fb6f8137c17dabfe8ef00c9fe7eefe517651f3",
+    "blockNumber": 143,
+    "balancesBeforeAtomic": {
+      "alice": "50",
+      "bob": "50"
+    },
+    "balancesAfterAtomic": {
+      "alice": "43",
+      "bob": "57"
+    }
+  },
+  "transactions": {
+    "schedule": "0x4232fb8b007e05b93848fd5469fe23f0db246fa14cd674536d989f504c48ef5",
+    "privateSettlementAndSeal": "0x18160c08132dd95394e23341fb6f8137c17dabfe8ef00c9fe7eefe517651f3",
+    "verifierShards": [
+      {
+        "shardIndex": 0,
+        "transactionHash": "0x776e271efd9a75c33589868c7aecb0ec029ac8ce0e305a819ade720e671fdaa",
+        "blockNumber": 146
+      },
+      {
+        "shardIndex": 1,
+        "transactionHash": "0x3f9a6986095c7066b7a72172a82d42586380a2af57d8e01db8057b88881f46b",
+        "blockNumber": 147
+      }
+    ]
+  },
+  "finalStatus": 2,
+  "checks": {
+    "officialPoolClassMatched": true,
+    "sealConfiguredForOfficialPool": true,
+    "privateTransferAndPayoSealAtomic": true,
+    "recipientDiscoveredPrivateNote": true,
+    "payoProofVerifiedOnchain": true,
+    "tamperedProofRejected": true,
+    "poolOriginatedReplayRejected": true,
+    "replayPreservedPrivateBalances": true,
+    "proofBytesPresent": false,
+    "fullTransactionProofVerification": false,
+    "directPrivateAmountToManifestReconciliation": false
+  },
+  "limitations": [
+    "Pinned Starknet Devnet does not implement full transaction-proof verification; the official pool executes in proof-mode none with SDK-compiled proof facts.",
+    "Direct private-note amount reconciliation against the payroll manifest is a Phase 4 SettlementMatch requirement and is not claimed here."
+  ]
+}

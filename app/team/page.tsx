@@ -27,9 +27,19 @@ import {
 } from "@/lib/client/payee-directory";
 import {
   loadEncryptedPayAgreements,
-  storeEncryptedRecurringAgreement,
   type PayAgreementDirectoryRecord,
 } from "@/lib/client/agreement-directory";
+import {
+  storeEncryptedAgreementFromForm,
+  type AgreementPlanKind,
+} from "@/lib/client/agreement-form-workflow";
+import { PAYO_EMPLOYEE_POLICY_OPTIONS } from "@/lib/policy/execution-catalog";
+import {
+  CLASSIFICATION_EMPLOYEE_THRESHOLD,
+  CLASSIFICATION_FACTS,
+  scoreClassificationFacts,
+  type ClassificationFactsAnswers,
+} from "@/lib/domain/classification";
 import { formatTokenAmount, type PayrollTokenSymbol } from "@/lib/starknet/tokens";
 import {
   completeEncryptedPrincipalDirectory,
@@ -45,6 +55,23 @@ import {
 
 const teamFilters = ["Everyone", "Humans", "Agents"] as const;
 const memberTones = ["coral", "blue", "green", "yellow"] as const;
+type ClassificationFactKey = (typeof CLASSIFICATION_FACTS)[number]["key"];
+type ClassificationAnswerDraft = Record<ClassificationFactKey, "" | "yes" | "no">;
+const NET_INVOICE_POLICY_ID = "payo-net-invoice-no-withholding-v1";
+
+function classificationAnswerDraft(principalKind: "human" | "agent"): ClassificationAnswerDraft {
+  return Object.fromEntries(CLASSIFICATION_FACTS.map(({ key }) => [key, principalKind === "agent" ? "no" : ""])) as ClassificationAnswerDraft;
+}
+
+function policyForClassification(
+  payee: PayeeDirectoryRecord,
+  classification: "employee" | "contractor" | "agent_service",
+): string {
+  if (classification !== "employee") return NET_INVOICE_POLICY_ID;
+  return payee.tokenPreference === "USDC" && payee.jurisdictionCode.split("-")[0] === "US"
+    ? PAYO_EMPLOYEE_POLICY_OPTIONS.US.id
+    : "";
+}
 
 function localDateTimeInputValue(value: Date): string {
   return new Date(value.getTime() - value.getTimezoneOffset() * 60_000)
@@ -74,10 +101,45 @@ export default function TeamPage() {
   const [agreementPayeeId, setAgreementPayeeId] = useState("");
   const [agreementAmount, setAgreementAmount] = useState("");
   const [agreementClassification, setAgreementClassification] = useState<"employee" | "contractor" | "agent_service">("contractor");
+  const [classificationAnswerDrafts, setClassificationAnswerDrafts] = useState<ClassificationAnswerDraft>(() => classificationAnswerDraft("human"));
   const [agreementCadence, setAgreementCadence] = useState<"weekly" | "biweekly" | "monthly">("monthly");
   const [agreementNextDueAt, setAgreementNextDueAt] = useState("");
-  const [policyId, setPolicyId] = useState("payo-net-invoice-no-withholding-v1");
+  const [agreementPlanKind, setAgreementPlanKind] = useState<AgreementPlanKind>("recurring");
+  const [planStartsAt, setPlanStartsAt] = useState("");
+  const [planEndsAt, setPlanEndsAt] = useState("");
+  const [planCheckpointAt, setPlanCheckpointAt] = useState("");
+  const [planCliffAt, setPlanCliffAt] = useState("");
+  const [planTotalAmount, setPlanTotalAmount] = useState("");
+  const [milestoneCommitment, setMilestoneCommitment] = useState("");
+  const [approverCommitment, setApproverCommitment] = useState("");
+  const [attestationCommitment, setAttestationCommitment] = useState("");
+  const [adjustmentReasonCommitment, setAdjustmentReasonCommitment] = useState("");
+  const [terminationReasonCommitment, setTerminationReasonCommitment] = useState("");
+  const [finalOrdinaryAmount, setFinalOrdinaryAmount] = useState("");
+  const [finalLeaveAmount, setFinalLeaveAmount] = useState("0");
+  const [finalNoticeAmount, setFinalNoticeAmount] = useState("0");
+  const [finalSeveranceAmount, setFinalSeveranceAmount] = useState("0");
+  const [finalAdjustmentAmount, setFinalAdjustmentAmount] = useState("0");
+  const [finalDeductionsAmount, setFinalDeductionsAmount] = useState("0");
+  const [requireLeave, setRequireLeave] = useState(true);
+  const [requireNotice, setRequireNotice] = useState(false);
+  const [requireSeverance, setRequireSeverance] = useState(false);
+  const [policyId, setPolicyId] = useState(NET_INVOICE_POLICY_ID);
+  const [fxFloorAmount, setFxFloorAmount] = useState("");
   const [directoryLoadedAt] = useState(() => Date.now());
+
+  const classificationAnswers = useMemo<ClassificationFactsAnswers | null>(() => {
+    if (Object.values(classificationAnswerDrafts).some((answer) => answer === "")) return null;
+    return Object.fromEntries(
+      CLASSIFICATION_FACTS.map(({ key }) => [key, classificationAnswerDrafts[key] === "yes"]),
+    ) as ClassificationFactsAnswers;
+  }, [classificationAnswerDrafts]);
+  const classificationScore = classificationAnswers ? scoreClassificationFacts(classificationAnswers) : null;
+  const classificationMatches = classificationScore !== null && (
+    agreementClassification === "employee"
+      ? classificationScore >= CLASSIFICATION_EMPLOYEE_THRESHOLD
+      : classificationScore < CLASSIFICATION_EMPLOYEE_THRESHOLD
+  );
 
   const refreshPayees = useCallback(async () => {
     if (!vault.client || !vault.session) {
@@ -164,6 +226,7 @@ export default function TeamPage() {
 
   const humanCount = members.filter(({ kind }) => kind === "Human").length;
   const agentCount = members.length - humanCount;
+  const agreementFormPayee = payees.find(({ id }) => id === agreementPayeeId);
   const missingPrincipalCount = (vault.session && !principals.some(({ vaultPrincipalId }) =>
     vaultPrincipalId === vault.session!.principal.principalId) ? 1 : 0)
     + payees.filter((payee) => !principals.some(({ id }) => id === payee.principalId)).length;
@@ -200,10 +263,32 @@ export default function TeamPage() {
   };
 
   const openAgreementForm = (payee: PayeeDirectoryRecord) => {
+    const now = new Date(directoryLoadedAt - 60_000);
     setAgreementPayeeId(payee.id);
-    setAgreementClassification(payee.principalKind === "agent" ? "agent_service" : "contractor");
+    const classification = payee.principalKind === "agent" ? "agent_service" : "contractor";
+    setAgreementClassification(classification);
+    setClassificationAnswerDrafts(classificationAnswerDraft(payee.principalKind));
+    setPolicyId(policyForClassification(payee, classification));
+    setAgreementPlanKind("recurring");
     setAgreementAmount("");
-    setAgreementNextDueAt(localDateTimeInputValue(new Date(directoryLoadedAt - 60_000)));
+    setAgreementNextDueAt(localDateTimeInputValue(now));
+    setPlanStartsAt(localDateTimeInputValue(new Date(now.getTime() - 4 * 60 * 60 * 1_000)));
+    setPlanCheckpointAt(localDateTimeInputValue(now));
+    setPlanCliffAt(localDateTimeInputValue(new Date(now.getTime() - 2 * 60 * 60 * 1_000)));
+    setPlanEndsAt(localDateTimeInputValue(new Date(now.getTime() + 4 * 60 * 60 * 1_000)));
+    setPlanTotalAmount("");
+    setMilestoneCommitment("");
+    setApproverCommitment("");
+    setAttestationCommitment("");
+    setAdjustmentReasonCommitment("");
+    setTerminationReasonCommitment("");
+    setFinalOrdinaryAmount("");
+    setFinalLeaveAmount("0");
+    setFinalNoticeAmount("0");
+    setFinalSeveranceAmount("0");
+    setFinalAdjustmentAmount("0");
+    setFinalDeductionsAmount("0");
+    setFxFloorAmount("");
     setShowAddAgreement(true);
   };
 
@@ -221,23 +306,53 @@ export default function TeamPage() {
     setDirectoryLoading(true);
     setDirectoryError("");
     try {
-      await storeEncryptedRecurringAgreement({
+      if (!classificationAnswers) {
+        throw new Error("Answer every classification fact before encrypting the agreement.");
+      }
+      if (!classificationMatches) {
+        throw new Error("The selected treatment does not match the versioned classification fact rubric.");
+      }
+      await storeEncryptedAgreementFromForm({
         client: vault.client,
         organizationId: vault.session.organizationId,
         payee,
-        amount: agreementAmount,
-        token: payee.tokenPreference,
-        classification: agreementClassification,
-        cadence: agreementCadence,
-        nextDueAt: new Date(agreementNextDueAt).toISOString(),
-        policyId,
-        policyVersion: 1,
         principal: vault.session.principal,
+        draft: {
+          planKind: agreementPlanKind,
+          amount: agreementAmount,
+          classification: agreementClassification,
+          classificationAnswers,
+          cadence: agreementCadence,
+          nextDueAt: agreementNextDueAt,
+          planStartsAt,
+          planEndsAt,
+          planCheckpointAt,
+          planCliffAt,
+          planTotalAmount,
+          milestoneCommitment,
+          approverCommitment,
+          attestationCommitment,
+          adjustmentReasonCommitment,
+          terminationReasonCommitment,
+          finalOrdinaryAmount,
+          finalLeaveAmount,
+          finalNoticeAmount,
+          finalSeveranceAmount,
+          finalAdjustmentAmount,
+          finalDeductionsAmount,
+          requireLeave,
+          requireNotice,
+          requireSeverance,
+          policyId,
+          policyVersion: 1,
+          fxFloorAmount,
+          fxMaximumAgeSeconds: 300,
+        },
       });
       setShowAddAgreement(false);
       setAgreementNextDueAt("");
       await refreshPayees();
-      notify("Encrypted pay agreement added · return to Payroll to authorize and send");
+      notify(`${agreementPlanKind === "recurring" ? "Recurring" : "Advanced proof-bound"} agreement encrypted · return to Payroll to authorize and send`);
     } catch (error) {
       setDirectoryError(error instanceof Error ? error.message : "The agreement could not be encrypted.");
     } finally {
@@ -428,19 +543,102 @@ export default function TeamPage() {
           </form>
         )}
         {showAddAgreement && (
-          <form className="team-add-form" onSubmit={addAgreement}>
-            <div className="team-add-form__heading"><span><small>AUTHORITATIVE ENCRYPTED TERMS</small><strong>Add recurring pay agreement</strong></span><button type="button" onClick={() => setShowAddAgreement(false)} aria-label="Close agreement form">×</button></div>
+          <form className={`team-add-form ${agreementPlanKind !== "recurring" ? "team-add-form--advanced" : ""}`} onSubmit={addAgreement}>
+            <div className="team-add-form__heading"><span><small>AUTHORITATIVE ENCRYPTED TERMS</small><strong>Add a proof-bound pay agreement</strong></span><button type="button" onClick={() => setShowAddAgreement(false)} aria-label="Close agreement form">×</button></div>
             <label><span>Contributor</span><select value={agreementPayeeId} onChange={(event) => {
               const payee = payees.find(({ id }) => id === event.target.value);
               setAgreementPayeeId(event.target.value);
-              if (payee) setAgreementClassification(payee.principalKind === "agent" ? "agent_service" : "contractor");
+              if (payee) {
+                const classification = payee.principalKind === "agent" ? "agent_service" : "contractor";
+                setAgreementClassification(classification);
+                setClassificationAnswerDrafts(classificationAnswerDraft(payee.principalKind));
+                setPolicyId(policyForClassification(payee, classification));
+              }
             }}>{payees.map((payee) => <option value={payee.id} key={payee.id}>{payee.displayName}</option>)}</select></label>
-            <label><span>Private amount</span><input value={agreementAmount} onChange={(event) => setAgreementAmount(event.target.value)} inputMode="decimal" placeholder="1250.00" required /></label>
-            <label><span>Classification</span><select value={agreementClassification} onChange={(event) => setAgreementClassification(event.target.value as typeof agreementClassification)}><option value="contractor">Contractor</option><option value="agent_service">Agent service</option></select></label>
-            <label><span>Cadence</span><select value={agreementCadence} onChange={(event) => setAgreementCadence(event.target.value as typeof agreementCadence)}><option value="weekly">Weekly</option><option value="biweekly">Biweekly</option><option value="monthly">Monthly</option></select></label>
-            <label><span>First payment due</span><input type="datetime-local" value={agreementNextDueAt} onChange={(event) => setAgreementNextDueAt(event.target.value)} required /><small>Defaults to now so the first payroll can be sent immediately.</small></label>
-            <label className="team-add-form__address"><span>Policy profile</span><input value={policyId} onChange={(event) => setPolicyId(event.target.value)} required maxLength={160} readOnly /><small>The proof catalog root is derived locally from this version-pinned policy, never pasted into the agreement.</small></label>
-            <button className="button button--ink" type="submit" disabled={directoryLoading}>{directoryLoading ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />} Encrypt agreement</button>
+            <label><span>Payment plan</span><select value={agreementPlanKind} onChange={(event) => {
+              const plan = event.target.value as AgreementPlanKind;
+              setAgreementPlanKind(plan);
+            }}>
+              <option value="recurring">Recurring payroll</option>
+              <option value="checkpoint_stream">Checkpoint stream</option>
+              <option value="milestone">Approved milestone</option>
+              <option value="private_vesting">Private vesting release</option>
+              <option value="approved_adjustment">Approved pay adjustment</option>
+              <option value="final_pay">Final pay / offboarding</option>
+            </select></label>
+            <label><span>Classification</span><select value={agreementClassification} onChange={(event) => {
+              const classification = event.target.value as typeof agreementClassification;
+              setAgreementClassification(classification);
+              const payee = payees.find(({ id }) => id === agreementPayeeId);
+              if (payee) setPolicyId(policyForClassification(payee, classification));
+            }}>
+              {agreementFormPayee?.principalKind === "human" ? <>
+                <option value="employee">Employee · narrow reference policy</option>
+                <option value="contractor">Contractor</option>
+              </> : <option value="agent_service">Agent service</option>}
+            </select></label>
+            {agreementFormPayee?.principalKind === "human" && (
+              <fieldset className="team-add-form__classification">
+                <legend>Private classification facts · rubric v1</legend>
+                <p>Answer factual working-condition questions. PAYO proves internal treatment consistency; it does not decide legal status.</p>
+                {CLASSIFICATION_FACTS.map(({ key, label }) => (
+                  <label key={key}>
+                    <span>{label}</span>
+                    <select
+                      value={classificationAnswerDrafts[key]}
+                      onChange={(event) => setClassificationAnswerDrafts((current) => ({
+                        ...current,
+                        [key]: event.target.value as ClassificationAnswerDraft[ClassificationFactKey],
+                      }))}
+                      required
+                    >
+                      <option value="">Choose</option>
+                      <option value="yes">Yes</option>
+                      <option value="no">No</option>
+                    </select>
+                  </label>
+                ))}
+                <small className={classificationAnswers && !classificationMatches ? "classification-score classification-score--mismatch" : "classification-score"}>
+                  {classificationScore === null
+                    ? "Complete all six facts to derive the private consistency score."
+                    : `Reference score ${classificationScore}/6 · employee threshold ${CLASSIFICATION_EMPLOYEE_THRESHOLD}/6${classificationMatches ? " · treatment consistent" : " · change the facts or selected treatment"}`}
+                </small>
+              </fieldset>
+            )}
+            {(agreementPlanKind === "recurring" || agreementPlanKind === "milestone" || agreementPlanKind === "approved_adjustment") && <label><span>{agreementPlanKind === "approved_adjustment" ? "Private adjustment amount" : "Private amount"}</span><input value={agreementAmount} onChange={(event) => setAgreementAmount(event.target.value)} inputMode="decimal" placeholder="1250.00" required /></label>}
+            {agreementPlanKind === "recurring" && <label><span>Cadence</span><select value={agreementCadence} onChange={(event) => setAgreementCadence(event.target.value as typeof agreementCadence)}><option value="weekly">Weekly</option><option value="biweekly">Biweekly</option><option value="monthly">Monthly</option></select></label>}
+            {(agreementPlanKind === "recurring" || agreementPlanKind === "milestone" || agreementPlanKind === "approved_adjustment" || agreementPlanKind === "final_pay") && <label><span>{agreementPlanKind === "recurring" ? "First payment due" : agreementPlanKind === "milestone" ? "Milestone due" : agreementPlanKind === "approved_adjustment" ? "Adjustment effective" : "Termination effective"}</span><input type="datetime-local" value={agreementNextDueAt} onChange={(event) => setAgreementNextDueAt(event.target.value)} required /><small>Set this to now or earlier when the obligation is ready for the next payroll.</small></label>}
+            {(agreementPlanKind === "checkpoint_stream" || agreementPlanKind === "private_vesting") && <>
+              <label><span>Total committed value</span><input value={planTotalAmount} onChange={(event) => setPlanTotalAmount(event.target.value)} inputMode="decimal" placeholder="5000.00" required /></label>
+              <label><span>Plan starts</span><input type="datetime-local" value={planStartsAt} onChange={(event) => setPlanStartsAt(event.target.value)} required /></label>
+              <label><span>{agreementPlanKind === "checkpoint_stream" ? "Settlement checkpoint" : "Release checkpoint"}</span><input type="datetime-local" value={planCheckpointAt} onChange={(event) => setPlanCheckpointAt(event.target.value)} required /><small>PAYO derives the exact accrued amount; the browser cannot choose it.</small></label>
+              {agreementPlanKind === "private_vesting" && <label><span>Vesting cliff</span><input type="datetime-local" value={planCliffAt} onChange={(event) => setPlanCliffAt(event.target.value)} required /></label>}
+              <label><span>Plan ends</span><input type="datetime-local" value={planEndsAt} onChange={(event) => setPlanEndsAt(event.target.value)} required /></label>
+            </>}
+            {(agreementPlanKind === "milestone" || agreementPlanKind === "approved_adjustment" || agreementPlanKind === "final_pay") && <>
+              <label className="team-add-form__address"><span>{agreementPlanKind === "final_pay" ? "Offboarding obligation commitment" : agreementPlanKind === "approved_adjustment" ? "Adjustment obligation commitment" : "Milestone commitment"}</span><input value={milestoneCommitment} onChange={(event) => setMilestoneCommitment(event.target.value)} placeholder="0x + 64 hex characters" pattern="^0x[0-9a-fA-F]{64}$" required /></label>
+              <label className="team-add-form__address"><span>Approver commitment</span><input value={approverCommitment} onChange={(event) => setApproverCommitment(event.target.value)} placeholder="0x + 64 hex characters" pattern="^0x[0-9a-fA-F]{64}$" required /></label>
+              <label className="team-add-form__address"><span>Approval evidence commitment</span><input value={attestationCommitment} onChange={(event) => setAttestationCommitment(event.target.value)} placeholder="0x + 64 hex characters" pattern="^0x[0-9a-fA-F]{64}$" required /><small>Only the 32-byte commitment is encrypted into the agreement; the evidence itself stays with its issuer.</small></label>
+            </>}
+            {agreementPlanKind === "approved_adjustment" && <label className="team-add-form__address"><span>Adjustment reason commitment</span><input value={adjustmentReasonCommitment} onChange={(event) => setAdjustmentReasonCommitment(event.target.value)} placeholder="0x + 64 hex characters" pattern="^0x[0-9a-fA-F]{64}$" required /><small>The proof binds the approved delta to this private reason without revealing the reason itself.</small></label>}
+            {agreementPlanKind === "checkpoint_stream" && <label className="team-add-form__address"><span>Checkpoint attestation commitment</span><input value={attestationCommitment} onChange={(event) => setAttestationCommitment(event.target.value)} placeholder="0x + 64 hex characters" pattern="^0x[0-9a-fA-F]{64}$" required /></label>}
+            {agreementPlanKind === "final_pay" && <>
+              <label className="team-add-form__address"><span>Termination reason commitment</span><input value={terminationReasonCommitment} onChange={(event) => setTerminationReasonCommitment(event.target.value)} placeholder="0x + 64 hex characters" pattern="^0x[0-9a-fA-F]{64}$" required /></label>
+              <div className="team-add-form__subhead"><small>PRIVATE FINAL-PAY COMPONENTS</small><strong>Every required component is committed separately.</strong></div>
+              <label><span>Ordinary pay</span><input value={finalOrdinaryAmount} onChange={(event) => setFinalOrdinaryAmount(event.target.value)} inputMode="decimal" placeholder="1000.00" required /></label>
+              <label><span>Accrued leave</span><input value={finalLeaveAmount} onChange={(event) => setFinalLeaveAmount(event.target.value)} inputMode="decimal" required /></label>
+              <label><span>Notice pay</span><input value={finalNoticeAmount} onChange={(event) => setFinalNoticeAmount(event.target.value)} inputMode="decimal" required /></label>
+              <label><span>Severance</span><input value={finalSeveranceAmount} onChange={(event) => setFinalSeveranceAmount(event.target.value)} inputMode="decimal" required /></label>
+              <label><span>Adjustments</span><input value={finalAdjustmentAmount} onChange={(event) => setFinalAdjustmentAmount(event.target.value)} inputMode="decimal" required /></label>
+              <fieldset className="team-add-form__requirements"><legend>Required by committed terms</legend><label><input type="checkbox" checked={requireLeave} onChange={(event) => setRequireLeave(event.target.checked)} /> Accrued leave</label><label><input type="checkbox" checked={requireNotice} onChange={(event) => setRequireNotice(event.target.checked)} /> Notice</label><label><input type="checkbox" checked={requireSeverance} onChange={(event) => setRequireSeverance(event.target.checked)} /> Severance</label></fieldset>
+            </>}
+            <label className="team-add-form__address"><span>Policy profile</span><select value={policyId} onChange={(event) => setPolicyId(event.target.value)} required>
+              {agreementClassification === "employee"
+                ? <option value={agreementFormPayee ? policyForClassification(agreementFormPayee, "employee") : ""}>{policyId ? "US 2026 supplemental wages · 22% withholding" : "No executable employee policy for this jurisdiction/token"}</option>
+                : <option value={NET_INVOICE_POLICY_ID}>Net invoice · no withholding</option>}
+            </select><small>{agreementClassification === "employee" ? "Narrow example only: US employee, separately identified supplemental wages, and USDC settlement. It is not a general payroll-tax engine or legal advice." : "The proof catalog root is derived locally from this version-pinned policy, never pasted into the agreement."}</small></label>
+            {agreementPlanKind === "recurring" && <label><span>Optional USD value floor</span><input value={fxFloorAmount} onChange={(event) => setFxFloorAmount(event.target.value)} inputMode="decimal" placeholder="1250.00" /><small>Six-decimal USD floor chosen by the worker. Payroll binds it to a fresh protected Pragma snapshot (maximum age: 5 minutes).</small></label>}
+            <button className="button button--ink" type="submit" disabled={directoryLoading || !classificationAnswers || !classificationMatches || !policyId}>{directoryLoading ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />} Encrypt proof-bound agreement</button>
           </form>
         )}
         {directoryError && <p className="team-directory-error"><KeyRound size={15} /> {directoryError}</p>}

@@ -14,21 +14,30 @@ import {
   type VaultPrincipalKeyPair,
 } from "@/lib/crypto/vault";
 import type { PrivatePayrollLine } from "@/lib/domain/payroll";
-import { fxCatalogPublicationWindow, type FxSnapshot } from "@/lib/domain/fx";
-import { isScheduleDue } from "@/lib/domain/obligations";
+import {
+  fxCatalogPublicationWindow,
+  protectedFxSnapshotToPayrollSnapshot,
+  type FxSnapshot,
+} from "@/lib/domain/fx";
+import { isAgreementDue } from "@/lib/domain/obligations";
 import { generateUuidV7, settlementRecordSchema } from "@/lib/domain/records";
 import { commitTokenTotals } from "@/lib/domain/settlement";
 import { policyPackCommitment } from "@/lib/policy/engine";
 import {
-  PAYO_NET_INVOICE_POLICY,
+  calculatePolicyDeductions,
+  resolveExecutionPolicyForAgreement,
+  resolvePayrollPolicyCohort,
+} from "@/lib/policy/execution-catalog";
+import {
   buildFxCatalogRoot,
   buildPayrollAgreementRoot,
   randomCommitmentSalt,
   serializePayrollIntegrityBuildRequest,
   type PayrollIntegrityLineInput,
 } from "@/lib/proof/input-builder";
+import { advancedPlanProofCommitment } from "@/lib/proof/advanced-plan-commitment";
 import { proveEncryptedPayroll, type ProofProgressListener } from "@/lib/proof/client";
-import type { ProofWorkerSuccess } from "@/lib/proof/protocol";
+import { PAYO_MAX_PROOF_CALLDATA_FELTS, type ProofWorkerSuccess } from "@/lib/proof/protocol";
 import { buildPayoSealedPayroll } from "@/lib/starknet/payo-seal";
 import { agreementScheduleCommitment, type PayAgreementDirectoryRecord } from "./agreement-directory";
 import type { PayeeDirectoryRecord } from "./payee-directory";
@@ -78,6 +87,7 @@ export function buildPayrollExecutionLines(input: {
   obligations: readonly PayrollExecutionObligation[];
   validityStart: bigint;
   createLineSalt?: () => `0x${string}`;
+  advancedScheduleCommitments?: ReadonlyMap<string, `0x${string}`>;
 }): PayrollIntegrityLineInput[] {
   return input.obligations.map(({ agreement: record, payee }) => {
     const agreement = record.agreement;
@@ -110,20 +120,26 @@ export function buildPayrollExecutionLines(input: {
       (payee.principalKind === "agent" && agreement.classification !== "agent_service")
       || (payee.principalKind === "human" && agreement.classification === "agent_service")
     ) throw new Error(`Agreement ${agreement.id} does not match its committed contributor kind.`);
-    if (!isScheduleDue(agreement.schedule, new Date(Number(input.validityStart) * 1_000))) {
+    if (!isAgreementDue(agreement, new Date(Number(input.validityStart) * 1_000))) {
       throw new Error(`Agreement ${agreement.id} is not due yet.`);
     }
-    if (agreement.statutoryPolicy.policyId !== PAYO_NET_INVOICE_POLICY.id) {
-      throw new Error(`Agreement ${agreement.id} selects an unavailable local policy implementation.`);
-    }
-    if (agreement.classification === "employee") {
-      throw new Error(`Agreement ${agreement.id} requires an employee deductions policy, not the net-invoice reference policy.`);
-    }
+    const policy = resolveExecutionPolicyForAgreement(
+      agreement,
+      new Date(Number(input.validityStart) * 1_000),
+    );
     const referenceCurrency = agreement.fxProtection?.referenceCurrency ?? "USD";
     if (referenceCurrency !== "USD" && referenceCurrency !== "GBP") {
       throw new Error(`Agreement ${agreement.id} selects an unsupported proof reference currency.`);
     }
-    const dueAt = agreement.schedule.kind === "recurring"
+    const dueAt = agreement.agreementVersion === "payo-agreement-v2"
+      ? agreement.paymentPlan.kind === "recurring"
+        ? BigInt(Math.floor(new Date(agreement.paymentPlan.nextDueAt).getTime() / 1_000))
+        : agreement.paymentPlan.kind === "checkpoint_stream"
+          ? BigInt(Math.floor(new Date(agreement.paymentPlan.checkpoint.checkpointAt).getTime() / 1_000))
+          : agreement.paymentPlan.kind === "milestone"
+            ? BigInt(Math.floor(new Date(agreement.paymentPlan.dueAt).getTime() / 1_000))
+            : BigInt(Math.floor(new Date(agreement.paymentPlan.releaseAt).getTime() / 1_000))
+      : agreement.schedule.kind === "recurring"
       ? BigInt(Math.floor(new Date(agreement.schedule.nextDueAt).getTime() / 1_000))
       : agreement.schedule.kind === "milestone"
         ? BigInt(Math.floor(new Date(agreement.schedule.dueAt).getTime() / 1_000))
@@ -141,12 +157,43 @@ export function buildPayrollExecutionLines(input: {
       lineSalt: input.createLineSalt?.() ?? randomCommitmentSalt(),
       token: agreement.settlementToken,
       earningsAtomic: agreement.earningsAtomic,
-      deductionsAtomic: [],
+      deductionsAtomic: calculatePolicyDeductions(policy, agreement.earningsAtomic),
       policyId: agreement.statutoryPolicy.policyId,
-      scheduleCommitment: agreementScheduleCommitment(agreement),
+      scheduleCommitment: agreement.agreementVersion === "payo-agreement-v2"
+        ? input.advancedScheduleCommitments?.get(agreement.id) ?? agreementScheduleCommitment(agreement)
+        : agreementScheduleCommitment(agreement),
       dueAt,
       validUntil,
-      classification: { declared: 2 as const, score: 2, employeeThreshold: 5 },
+      classification: agreement.classification === "employee"
+        ? {
+            declared: 1 as const,
+            score: agreement.classificationAssessment?.score ?? 5,
+            employeeThreshold: agreement.classificationAssessment?.employeeThreshold ?? 5,
+          }
+        : {
+            declared: 2 as const,
+            score: agreement.classificationAssessment?.score ?? 2,
+            employeeThreshold: agreement.classificationAssessment?.employeeThreshold ?? 5,
+          },
+      ...(agreement.agreementVersion === "payo-agreement-v2" && agreement.termination
+        ? {
+            finalPay: {
+              requiredMask: (agreement.termination.pay.requiredComponents.accruedLeave ? 1 : 0)
+                | (agreement.termination.pay.requiredComponents.notice ? 2 : 0)
+                | (agreement.termination.pay.requiredComponents.severance ? 4 : 0),
+              includedMask: (agreement.termination.pay.includedComponents.accruedLeave ? 1 : 0)
+                | (agreement.termination.pay.includedComponents.notice ? 2 : 0)
+                | (agreement.termination.pay.includedComponents.severance ? 4 : 0),
+              componentsAtomic: [
+                agreement.termination.pay.ordinaryPayAtomic,
+                agreement.termination.pay.accruedLeaveAtomic,
+                agreement.termination.pay.noticeAtomic,
+                agreement.termination.pay.severanceAtomic,
+                agreement.termination.pay.adjustmentsAtomic,
+              ],
+            },
+          }
+        : {}),
       fxFloorAtomic: agreement.fxProtection?.minimumReferenceAtomic ?? "0",
       referenceCurrency,
     };
@@ -162,6 +209,15 @@ export async function preparePayrollObligationRoot(input: {
     throw new Error("An obligation-root schedule requires 1–50 authoritative obligations.");
   }
   const at = input.at ?? new Date();
+  const policies = resolvePayrollPolicyCohort(
+    input.obligations.map(({ agreement }) => agreement.agreement),
+    at,
+  );
+  const advancedScheduleCommitments = new Map<string, `0x${string}`>(await Promise.all(
+    input.obligations.flatMap(({ agreement }) => agreement.agreement.agreementVersion === "payo-agreement-v2"
+      ? [advancedPlanProofCommitment(agreement.agreement).then((commitment) => [agreement.agreement.id, commitment] as const)]
+      : []),
+  ));
   const lines = buildPayrollExecutionLines({
     organizationId: input.organizationId,
     obligations: input.obligations,
@@ -169,10 +225,11 @@ export async function preparePayrollObligationRoot(input: {
     // Salary-line salts do not enter the agreement root. A fixed value keeps
     // this preflight deterministic and makes accidental coupling testable.
     createLineSalt: () => `0x${"00".repeat(32)}`,
+    advancedScheduleCommitments,
   });
   return {
     root: await buildPayrollAgreementRoot({
-      policies: [PAYO_NET_INVOICE_POLICY],
+      policies,
       lines,
     }),
     lines,
@@ -215,8 +272,8 @@ const pendingPayrollSubmissionV2Schema = z.object({
   tokenTotalsCommitment: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
   settlementEnvelope: encryptedVaultRecordSchema,
   proofShards: z.tuple([
-    z.array(z.string().regex(/^0x[0-9a-fA-F]+$/)).min(1).max(5_000),
-    z.array(z.string().regex(/^0x[0-9a-fA-F]+$/)).min(1).max(5_000),
+    z.array(z.string().regex(/^0x[0-9a-fA-F]+$/)).min(1).max(PAYO_MAX_PROOF_CALLDATA_FELTS),
+    z.array(z.string().regex(/^0x[0-9a-fA-F]+$/)).min(1).max(PAYO_MAX_PROOF_CALLDATA_FELTS),
   ]),
   transactionHash: z.string().regex(/^0x[0-9a-fA-F]{1,64}$/),
   createdAt: z.string().datetime(),
@@ -319,6 +376,8 @@ export async function resumePendingPayrollSubmission(input: {
       id: submitted.settlementId,
       organizationId: submitted.organizationId,
       runId: submitted.runId,
+      workflowType: "payroll",
+      subjectRecordId: submitted.runId,
       walletRequestId: submitted.walletRequestId,
       idempotencyKey: submitted.idempotencyKey,
       tokenTotalsCommitment: submitted.tokenTotalsCommitment,
@@ -352,11 +411,11 @@ const sealedRecoveryProofSchema = z.object({
   shards: z.tuple([
     z.object({
       shardIndex: z.literal(0),
-      proofCalldata: z.array(z.string().regex(/^0x[0-9a-fA-F]+$/)).min(1).max(5_000),
+      proofCalldata: z.array(z.string().regex(/^0x[0-9a-fA-F]+$/)).min(1).max(PAYO_MAX_PROOF_CALLDATA_FELTS),
     }).passthrough(),
     z.object({
       shardIndex: z.literal(1),
-      proofCalldata: z.array(z.string().regex(/^0x[0-9a-fA-F]+$/)).min(1).max(5_000),
+      proofCalldata: z.array(z.string().regex(/^0x[0-9a-fA-F]+$/)).min(1).max(PAYO_MAX_PROOF_CALLDATA_FELTS),
     }).passthrough(),
   ]),
 }).passthrough();
@@ -449,6 +508,8 @@ export async function recoverSealedProvenPayroll(input: {
       id: settlementId,
       organizationId: input.organizationId,
       runId: input.runId,
+      workflowType: "payroll",
+      subjectRecordId: input.runId,
       walletRequestId,
       idempotencyKey,
       tokenTotalsCommitment,
@@ -500,14 +561,34 @@ export async function executeProofBoundPayroll(
   const revision = input.runRevision ?? 1;
   if (!Number.isInteger(revision) || revision < 1) throw new Error("Payroll run revision must be a positive integer.");
   const usedTokens = [...new Set(input.obligations.map(({ agreement }) => agreement.agreement.settlementToken))];
+  const advancedCount = input.obligations.filter(
+    ({ agreement }) => agreement.agreement.agreementVersion === "payo-agreement-v2",
+  ).length;
+  if (advancedCount > 0 && advancedCount !== input.obligations.length) {
+    throw new Error("Legacy and advanced obligations must be settled in separate proof-bound runs.");
+  }
+  const advancedProfile = advancedCount === input.obligations.length;
+  const policies = resolvePayrollPolicyCohort(
+    input.obligations.map(({ agreement }) => agreement.agreement),
+    now,
+  );
 
   input.onStage?.("fx");
-  const { snapshots } = await input.client.getFxSnapshots(usedTokens);
+  const snapshots = advancedProfile
+    ? (await input.client.getProtectedFxSnapshots(usedTokens)).snapshots
+      .map(protectedFxSnapshotToPayrollSnapshot)
+    : (await input.client.getFxSnapshots(usedTokens)).snapshots;
   const precomputedFxRoot = await buildFxCatalogRoot(snapshots);
+  const advancedScheduleCommitments = new Map<string, `0x${string}`>(await Promise.all(
+    input.obligations.flatMap(({ agreement }) => agreement.agreement.agreementVersion === "payo-agreement-v2"
+      ? [advancedPlanProofCommitment(agreement.agreement).then((commitment) => [agreement.agreement.id, commitment] as const)]
+      : []),
+  ));
   const lines = buildPayrollExecutionLines({
     organizationId: input.organizationId,
     obligations: input.obligations,
     validityStart,
+    advancedScheduleCommitments,
   });
   const buildInput = serializePayrollIntegrityBuildRequest({
     chainId: input.chainId,
@@ -517,7 +598,7 @@ export async function executeProofBoundPayroll(
     revision,
     validityStart,
     validityExpiry,
-    policies: [PAYO_NET_INVOICE_POLICY],
+    policies,
     fxSnapshots: snapshots,
     lines,
   });
@@ -531,7 +612,12 @@ export async function executeProofBoundPayroll(
   }
   const proofRequestId = generateUuidV7();
   const encryptedWitness = encryptVaultRecord(
-    { buildInput },
+    advancedProfile ? {
+      advancedBuildInput: {
+        payroll: buildInput,
+        agreements: input.obligations.map(({ agreement }) => agreement.agreement),
+      },
+    } : { buildInput },
     {
       schemaVersion: 1,
       organizationId: input.organizationId,
@@ -565,6 +651,7 @@ export async function executeProofBoundPayroll(
   const { readiness } = await input.client.checkDeploymentReadiness({
     chainId: input.chainId,
     sealAddress: input.sealAddress,
+    mode: 0,
     proofVersion: Number(BigInt(publicInputs.proofVersion)),
     agreementRoot,
     policyRoot,
@@ -597,11 +684,14 @@ export async function executeProofBoundPayroll(
       agreementId: agreement.agreement.id,
       payeeId: payee.id,
       recipientCommitment: agreement.recipientCommitment as `0x${string}`,
-      policyCommitment: policyPackCommitment(PAYO_NET_INVOICE_POLICY),
+      policyCommitment: policyPackCommitment(
+        resolveExecutionPolicyForAgreement(agreement.agreement, now),
+      ),
     })),
     organizationSecret: input.organizationSecret,
     principals: [input.principal],
     proofBinding: { agreementRoot, manifestRoot, policyRoot, fxRoot, runNullifier },
+    claimProofSource: { buildInput },
     now,
   });
   await input.client.createPayrollRun(preparedRun);
@@ -700,6 +790,8 @@ export async function executeProofBoundPayroll(
       id: settlementId,
       organizationId: input.organizationId,
       runId,
+      workflowType: "payroll",
+      subjectRecordId: runId,
       walletRequestId,
       idempotencyKey,
       tokenTotalsCommitment,

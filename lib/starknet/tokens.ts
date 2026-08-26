@@ -66,7 +66,11 @@ export function tokenByAddress(address: string): PayrollToken | undefined {
   }
 }
 
-export function parseTokenAmount(value: string, tokenOrSymbol: PayrollToken | PayrollTokenSymbol): bigint {
+function parseTokenAmountValue(
+  value: string,
+  tokenOrSymbol: PayrollToken | PayrollTokenSymbol,
+  allowZero: boolean,
+): bigint {
   const token = typeof tokenOrSymbol === "string" ? PAYROLL_TOKENS[tokenOrSymbol] : tokenOrSymbol;
   const trimmed = value.trim();
   const pattern = new RegExp(`^\\d+(\\.\\d{0,${token.decimals}})?$`);
@@ -77,8 +81,21 @@ export function parseTokenAmount(value: string, tokenOrSymbol: PayrollToken | Pa
   const [whole, fraction = ""] = trimmed.split(".");
   const amount = BigInt(whole) * 10n ** BigInt(token.decimals)
     + BigInt(fraction.padEnd(token.decimals, "0") || "0");
-  if (amount <= 0n) throw new Error("Amount must be greater than zero.");
+  if (allowZero ? amount < 0n : amount <= 0n) {
+    throw new Error(allowZero ? "Amount cannot be negative." : "Amount must be greater than zero.");
+  }
   return amount;
+}
+
+export function parseTokenAmount(value: string, tokenOrSymbol: PayrollToken | PayrollTokenSymbol): bigint {
+  return parseTokenAmountValue(value, tokenOrSymbol, false);
+}
+
+export function parseTokenAmountOrZero(
+  value: string,
+  tokenOrSymbol: PayrollToken | PayrollTokenSymbol,
+): bigint {
+  return parseTokenAmountValue(value, tokenOrSymbol, true);
 }
 
 export function formatTokenAmount(

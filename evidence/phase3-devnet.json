@@ -1,0 +1,196 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-26T05:10:46.954Z",
+  "passed": true,
+  "standaloneRpc": "http://127.0.0.1:5050",
+  "devnetVersion": "0.9.2",
+  "rpcVersion": "0.10.2",
+  "chainId": "0x534e5f5345504f4c4941",
+  "proofSealAddress": "0x1cb287fe6cb475b072fafaa942172b2a9b6d669a37f45e030a4e30db528e810",
+  "topology": {
+    "pool": "0x64b48806902a367c8598f4f95c305e8c1a1acba5f082d294a43793113115691",
+    "policyRegistry": "0x7c68c14225af9fe361115d3b479c4e91e4be0dceea713d5fa45715c0d5748d5",
+    "obligationRegistry": "0x6d5a158d899f74f7e78089dfa1da1f739645face72606bd67ef4ef15fcfb7ca",
+    "advancedBaseVerifier": "0x5cacaa61307b275163561369ff659bcde2f57792066a29e8e5ad5b5df23879",
+    "advancedVerifier": "0x4800cb4be340447b2e8d229de645da3d6aa62c1836539b5457092b1e4879567",
+    "claimVerifier": "0x2e6971da7cd92c03e2bebb7ccdc67cde7d3f9aae9678d02ebded6e4e42d799a",
+    "remediationVerifier": "0xcd0fd2fde3806d38869ead993a505e87a5d157b091664879bb3bdfb1ae5411"
+  },
+  "classes": {
+    "baseVerifier": {
+      "classHash": "0x601776a0980ab1b8e3d629d456dccc5eace85ba6f47a015d2e3c3448a758bb9",
+      "declarationTransactionHash": "0x1ae343c0b6441e7c047123cfdea58137425960b8fc3961b3956eb38f9dc4e97",
+      "artifactSha256": "b075a5c34344ae1b28a7199c003f9f34f4d1fbd9b22eafcc75bc0800980480fe"
+    },
+    "advancedVerifier": {
+      "classHash": "0x47b2585bd5baefdde63e15914797528339db0bc9e6ca3a4e7136d85ac59124f",
+      "declarationTransactionHash": "0x6b65d0a2343be79b3d5391e5c54cef9f05bf6510ae6b09da92568951763f87b",
+      "artifactSha256": "e9cdb63ee3a550edc337496cda532a391da35074ed3a673522d72d1b6b630de7"
+    },
+    "claimVerifier": {
+      "classHash": "0x45b077d6b3ac2717d9e5b432cc2271f750b0cb75995155e0be179da2369bb0a",
+      "declarationTransactionHash": "0x404fae60ce652bcff6b313f9740407f3b8ab63647343eed38712bd698b4370d",
+      "artifactSha256": "44e2efab58ca29151a5307fa83215d6ca8616868eed346b5577512ef3f45f5d3"
+    },
+    "remediationVerifier": {
+      "classHash": "0x56046d0d93d0d401ec19aa4b3374e6f642bc59fae442689c7b1feccfa98246c",
+      "declarationTransactionHash": "0x437445c889b07ab30ae53dcb839248943784c97c93d5899259393f5117e4de6",
+      "artifactSha256": "619ca79d48517460c5aaaae5ebbbeb61e97e547aefb3b51e981846f7309ac396"
+    },
+    "advancedBundle": {
+      "classHash": "0x4aa085123d4a93f531b112e4928216b58c583373b28db9da3e4d57f97b8259f",
+      "declarationTransactionHash": "0x559630b82f46558ff3815e3b9afdfea839fda12525fce416a35935aed06a8f4",
+      "artifactSha256": "be551323dba96f0f52817ea64d9475264da1a428c7d552032f90a79199992e5a"
+    },
+    "integrityBundle": {
+      "classHash": "0x451e59b2f2e454a5a53914ca317069d84faf504498e1d56609a78fb626da2bc",
+      "declarationTransactionHash": "0x2c6aa9ed4c115edf4ff8df42275e6f6b74bb6f69d9b369467524cf861f97c82",
+      "artifactSha256": "db071092f278df0fdcf744b3c50011f7c42a528269c96a4925a0b3662b7a1297"
+    },
+    "policyRegistry": {
+      "classHash": "0x6366141e5ae47f2e170409c6babaa4d6ae220b5b255f8dcbf9b0173f8681cfd",
+      "declarationTransactionHash": "0x2d8b1c6746c537ef6df82360d0d6b5a009309ef462d893c044decd5e3bde2e1",
+      "artifactSha256": "93096d0c7a5112e04c1bcbc5ee9f8ea0b0faf522b36f24ed9fef8c3047543dac"
+    },
+    "obligationRegistry": {
+      "classHash": "0xa7f868967f49461e948c8e8d70b2bccc74fc623e2d3ecd4af8cb4c2ccd8165",
+      "declarationTransactionHash": "0x22830a542abd128c8130f7c52263001f38f2f64e86222da151ba400b67bbea3",
+      "artifactSha256": "37a8dd9fd6d6b5bb54090e5157c840de30d2fa8b410683c6108e2dc125bcf585"
+    },
+    "payrollSeal": {
+      "classHash": "0x1500b1e66ef8c1528f5ea301cbb0420b28a19742d927c5d595ce567b0266148",
+      "declarationTransactionHash": "0x2464ed11ab68deca25faba78cd44ba3b1d3f1aa4d97c04029e8f29bd4a4e6b0",
+      "artifactSha256": "67c5b2265f978214c1f251614e608eda825643ad0f39924a28f4b9dae02539fe"
+    }
+  },
+  "contracts": {
+    "baseVerifier": {
+      "address": "0x5cacaa61307b275163561369ff659bcde2f57792066a29e8e5ad5b5df23879",
+      "transactionHash": "0x44324a33bbcab239c40241b5256fab247965e36d9ac9010a4ae20bd3b2f54c1"
+    },
+    "advancedVerifier": {
+      "address": "0x4800cb4be340447b2e8d229de645da3d6aa62c1836539b5457092b1e4879567",
+      "transactionHash": "0x67b93d3f554755619fcc6710ee60e67e923982ee7cedfbdde60b86a74e118ca"
+    },
+    "claimVerifier": {
+      "address": "0x2e6971da7cd92c03e2bebb7ccdc67cde7d3f9aae9678d02ebded6e4e42d799a",
+      "transactionHash": "0x4ed0159e4956dfbb9b63066be531dca9dd099313ef475a3b7423b8d2f89fe81"
+    },
+    "remediationVerifier": {
+      "address": "0xcd0fd2fde3806d38869ead993a505e87a5d157b091664879bb3bdfb1ae5411",
+      "transactionHash": "0x2278aa9f5a0d25a1545641094df0a33172fa23d7165bacaf5b1079503e8c65a"
+    },
+    "advancedBundle": {
+      "address": "0x10923b628f5e2b158b728be62a5caf4db7e493ae4c6d3df0e484e198f7f0618",
+      "transactionHash": "0x7b2e64f90a60e53a3c04d6afbf9fc688ed1c36fa3c732a02a99491886828d8c"
+    },
+    "claimBundle": {
+      "address": "0x7825f82260d4852279e54930ccac1afecf3364c87bf58216e8f4a65e73f414",
+      "transactionHash": "0x5f77c759c8e604e29524fb711bfb3fca011ce6496b0d49f15abda71fb647598"
+    },
+    "remediationBundle": {
+      "address": "0x37673733211e16d2ea42ba85eb5eb6bf9913424a96136145834cd9d1d834b71",
+      "transactionHash": "0x7e0e631dbf4ed91e53e52fe6509090847817a4a4fc23281dbd3e03dd8c869f0"
+    },
+    "policyRegistry": {
+      "address": "0x7c68c14225af9fe361115d3b479c4e91e4be0dceea713d5fa45715c0d5748d5",
+      "transactionHash": "0x2020054060c54166a66ca23a0950e1d8b07c93b95660971ae25e5f58d88e69d"
+    },
+    "obligationRegistry": {
+      "address": "0x6d5a158d899f74f7e78089dfa1da1f739645face72606bd67ef4ef15fcfb7ca",
+      "transactionHash": "0x7d9fbb139aae3fc603bb6689d469195f115b09c1f326c9838ba1554aec7feaf"
+    },
+    "payrollSeal": {
+      "address": "0x1cb287fe6cb475b072fafaa942172b2a9b6d669a37f45e030a4e30db528e810",
+      "transactionHash": "0x4b13b65fe2d9ab7bf706b5b3cfaf6eba988f760c893c5f894dcefe9b4b0a32a"
+    }
+  },
+  "scheduleTransactionHash": "0x33efb410fe151d05b0ffffd73fa56ebdd41fd7878895dbfe395f854b784f6d9",
+  "registryChecks": {
+    "allActiveAt": 1500,
+    "count": 7
+  },
+  "workflows": [
+    {
+      "profile": "advanced",
+      "mode": 0,
+      "proofVersion": 2,
+      "sealTransactionHash": "0xdc94c716c12e2af873261f6db528dafac1c2c8668067f7834f0847ae749754",
+      "shardTransactions": [
+        {
+          "transactionHash": "0x34fbdb535d2ce02d95e5391fe84a6c6b83e38647f7b1850eecc2e5424562175",
+          "blockNumber": 25
+        },
+        {
+          "transactionHash": "0xf4f5b270d281072501c4b3d38c30176c654f5dd084e6c1de0b4cf6fc7df566",
+          "blockNumber": 26
+        }
+      ],
+      "proofHashes": [
+        "0x42c8cf912995e52393e11ee21886e93c5e92cd2935de19ad21a0f317afeecfb",
+        "0x238fee4676f81e271467411684db8c9dbd74a2972c0740417ec9ab6a0c15084"
+      ],
+      "nullifier": [
+        "0x8c43d493dde16ceb80a2be21de81aebe",
+        "0x2248845c4ba40c0a4695b12796964cd2"
+      ],
+      "finalStatus": 2,
+      "tamperedProofRejected": true,
+      "replayRejected": true
+    },
+    {
+      "profile": "claim",
+      "mode": 2,
+      "proofVersion": 3,
+      "sealTransactionHash": "0x7f662a104525f3ca768430c6d1f577f6089b0769b4aa34be3a5215bba0aff71",
+      "shardTransactions": [
+        {
+          "transactionHash": "0x7c7c2256ded0683f898f270852535402876735dc7c5f414d4c8d25b9761884",
+          "blockNumber": 28
+        },
+        {
+          "transactionHash": "0x6c9b3dc62c46ec29ed607a728510f9d6d4f6d274597c17da2a8df4f28578135",
+          "blockNumber": 29
+        }
+      ],
+      "proofHashes": [
+        "0x7ef25fc8a117c7bf841100b771f658bb43658b265d8c91b781340e96d9408cc",
+        "0x6bb1ee5a4d4c42e61d2f94aac617613298b0c315f4be6e92d6c2fb1b5150474"
+      ],
+      "nullifier": [
+        "0x8f61f6f615d064d9173a244761d8e659",
+        "0x27f034ecf728aa325626e79ecddb5e78"
+      ],
+      "finalStatus": 4,
+      "tamperedProofRejected": true,
+      "replayRejected": true
+    },
+    {
+      "profile": "remediation",
+      "mode": 3,
+      "proofVersion": 4,
+      "sealTransactionHash": "0x6052f623b4b503678a49fc46c3aac9901ddeb8e8df98bcd2ded2ec914be4e9d",
+      "shardTransactions": [
+        {
+          "transactionHash": "0x30068919bd06163cb3a381e80afc6e261af732ab1c8c11be3b18520bc4602dd",
+          "blockNumber": 31
+        },
+        {
+          "transactionHash": "0x5276c73df21268e55ab118613873060df71e0c369d7638a7b3cc9ad4d38b301",
+          "blockNumber": 32
+        }
+      ],
+      "proofHashes": [
+        "0x86cacc263f1dc2628d2e22a1dc0f645ed6f7a25c5271ef52433a6351d02171",
+        "0x6d7fa9dd85ca991c3aef00e76db3c86e85e699ab32f6100535700a3e309aed3"
+      ],
+      "nullifier": [
+        "0x8f61f6f615d064d9173a244761d8e659",
+        "0x27f034ecf728aa325626e79ecddb5e78"
+      ],
+      "finalStatus": 5,
+      "tamperedProofRejected": true,
+      "replayRejected": true
+    }
+  ]
+}

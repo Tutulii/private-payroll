@@ -10,7 +10,7 @@ import {
   type PayrollRunState,
   type PrivatePayrollLine,
 } from "@/lib/domain/payroll";
-import type { FxSnapshot } from "@/lib/domain/fx";
+import type { FxSnapshot, PragmaProtectedFxSnapshot } from "@/lib/domain/fx";
 import { generateUuidV7, payrollLineRecordSchema } from "@/lib/domain/records";
 import type { EncryptedPayrollIntegrityBundleCreate } from "@/lib/domain/proof-bundle";
 import type {
@@ -21,6 +21,7 @@ import type { VaultRotationRequest } from "@/lib/domain/vault-lifecycle";
 import type { SignedCapability } from "@/lib/domain/capability";
 import { decodeRemoteProofResponse, type RemoteProofRequest } from "@/lib/proof/remote-prover";
 import type { ProofWorkerSuccess } from "@/lib/proof/protocol";
+import type { SerializedPayrollIntegrityBuildRequest } from "@/lib/proof/input-builder";
 
 type AccessTokenProvider = () => Promise<string | null>;
 
@@ -76,6 +77,9 @@ export function prepareEncryptedPayrollRun(input: {
     fxRoot: `0x${string}`;
     runNullifier: `0x${string}`;
   };
+  claimProofSource: {
+    buildInput: SerializedPayrollIntegrityBuildRequest;
+  };
   now?: Date;
 }): PreparedEncryptedRun {
   const manifest = calculatePayrollManifest(input.lines);
@@ -104,6 +108,7 @@ export function prepareEncryptedPayrollRun(input: {
       dueAt: input.dueAt,
       ...input.proofBinding,
       manifest,
+      claimProofSource: input.claimProofSource,
     },
     {
       schemaVersion: 1,
@@ -249,6 +254,22 @@ export class PayoClient {
     );
   }
 
+  async getPayrollRun(runId: string) {
+    return this.request<{
+      run: {
+        id: string;
+        organizationId: string;
+        state: PayrollRunState;
+        agreementRoot: string | null;
+        manifestRoot: string | null;
+        policyRoot: string | null;
+        fxRoot: string | null;
+        runNullifier: string | null;
+        envelope: EncryptedVaultRecord;
+      };
+    }>(`/api/v1/runs/${encodeURIComponent(runId)}`);
+  }
+
   async transitionPayrollRun(input: {
     runId: string;
     state: PayrollRunState;
@@ -280,6 +301,16 @@ export class PayoClient {
   async getFxSnapshots(tokens: readonly ("STRK" | "USDC")[]) {
     return this.request<{ blockNumber: number; snapshots: FxSnapshot[] }>(
       `/api/v1/fx-snapshots?tokens=${encodeURIComponent([...new Set(tokens)].join(","))}`,
+    );
+  }
+
+  async getProtectedFxSnapshots(tokens: readonly ("STRK" | "USDC")[]) {
+    return this.request<{
+      blockNumber: number;
+      blockTimestamp: number;
+      snapshots: PragmaProtectedFxSnapshot[];
+    }>(
+      `/api/v1/fx-snapshots?profile=phase3&tokens=${encodeURIComponent([...new Set(tokens)].join(","))}`,
     );
   }
 
@@ -472,6 +503,8 @@ export class PayoClient {
     id: string;
     organizationId: string;
     runId: string;
+    workflowType: "payroll" | "wage_claim" | "wage_remediation";
+    subjectRecordId: string;
     walletRequestId: string;
     idempotencyKey: string;
     tokenTotalsCommitment: string;
@@ -491,6 +524,8 @@ export class PayoClient {
       settlements: Array<{
         id: string;
         runId: string;
+        workflowType: "payroll" | "wage_claim" | "wage_remediation";
+        subjectRecordId: string;
         state: string;
         tokenTotalsCommitment: string;
         transactionHash: string | null;
@@ -556,6 +591,22 @@ export class PayoClient {
       method: "POST",
       body: JSON.stringify(input),
     });
+  }
+
+  async listDisclosureGrants(organizationId: string) {
+    const search = new URLSearchParams({ organizationId });
+    return this.request<{
+      grants: Array<{
+        id: string;
+        runId: string;
+        granteePrincipalId: string;
+        fieldScope: string[];
+        validAfter: string;
+        expiresAt: string;
+        revokedAt: string | null;
+        createdAt: string;
+      }>;
+    }>(`/api/v1/disclosures?${search}`);
   }
 
   async revokeDisclosureGrant(organizationId: string, grantId: string) {

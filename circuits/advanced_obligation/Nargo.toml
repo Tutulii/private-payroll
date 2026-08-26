@@ -1,0 +1,7 @@
+[package]
+name = "payo_advanced_obligation"
+type = "bin"
+authors = ["PAYO contributors"]
+compiler_version = ">=1.0.0"
+
+[dependencies]

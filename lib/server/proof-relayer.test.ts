@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { LeasedProofVerificationJob } from "@/lib/persistence/proof-verification-repository";
 import { hashProofCalldata } from "@/lib/proof/starknet-calldata";
 import {
+  PAYO_RUN_STATUS_CLAIMED,
   PAYO_RUN_STATUS_PROVEN,
+  PAYO_RUN_STATUS_REMEDIATED,
   PAYO_RUN_STATUS_SEALED,
   processProofVerificationBatch,
   readProofSealState,
@@ -19,6 +21,7 @@ function leasedJob(overrides: Partial<LeasedProofVerificationJob> = {}): LeasedP
     id: "job-1",
     settlementId: "settlement-1",
     proofBundleId: "bundle-1",
+    runId: "run-1",
     organizationId: "organization-1",
     attempts: 0,
     nextShard: 0,
@@ -30,6 +33,7 @@ function leasedJob(overrides: Partial<LeasedProofVerificationJob> = {}): LeasedP
     chainId: "0x1",
     sealAddress,
     validityExpiry: "2000000000",
+    proofVersion: "1",
     shardCalldataHashes: [hashProofCalldata(calldata), hashProofCalldata(calldata)],
     shards: [calldata, calldata],
     leaseOwner: "worker-1",
@@ -149,6 +153,34 @@ describe("PAYO proof relayer", () => {
       verificationTransactionHash: "0xdef",
     }, expect.any(Date));
     expect(recordSubmission).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["3", PAYO_RUN_STATUS_CLAIMED],
+    ["4", PAYO_RUN_STATUS_REMEDIATED],
+  ])("marks proof version %s complete only at its mode-specific terminal state", async (proofVersion, status) => {
+    const job = leasedJob({
+      proofVersion,
+      activeTransactionHash: "0xdef",
+      shard0TransactionHash: "0xabc",
+      shard1TransactionHash: "0xdef",
+    });
+    const { deps, recordProgress } = dependencies({
+      job,
+      states: [{ status, shardsVerified: [true, true] }],
+    });
+    await processProofVerificationBatch({
+      rpc: rpc(),
+      submitter: { submit: vi.fn() },
+      deployment,
+      workerId: "worker-1",
+      dependencies: deps,
+      now: new Date("2026-08-24T00:00:00.000Z"),
+    });
+    expect(recordProgress).toHaveBeenCalledWith(job, {
+      complete: true,
+      verificationTransactionHash: "0xdef",
+    }, expect.any(Date));
   });
 
   it("fails closed on deployment mismatch instead of submitting", async () => {

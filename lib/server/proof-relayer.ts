@@ -18,6 +18,8 @@ import type { PayoDeploymentConfig } from "./payo-deployment";
 export const PAYO_RUN_STATUS_NONE = 0;
 export const PAYO_RUN_STATUS_SEALED = 1;
 export const PAYO_RUN_STATUS_PROVEN = 2;
+export const PAYO_RUN_STATUS_CLAIMED = 4;
+export const PAYO_RUN_STATUS_REMEDIATED = 5;
 
 export type ProofRelayerRpc = ConfirmationRpc & {
   callContract: (call: Call, blockIdentifier?: number) => Promise<unknown>;
@@ -118,6 +120,18 @@ function desiredShard(state: ProofSealState): 0 | 1 | null {
   return null;
 }
 
+export function expectedProofTerminalStatus(proofVersion: string): number {
+  const version = BigInt(proofVersion);
+  if (version === 1n || version === 2n) return PAYO_RUN_STATUS_PROVEN;
+  if (version === 3n) return PAYO_RUN_STATUS_CLAIMED;
+  if (version === 4n) return PAYO_RUN_STATUS_REMEDIATED;
+  throw new Error(`Unsupported PAYO proof version ${proofVersion}.`);
+}
+
+function pendingPredecessorStatus(proofVersion: string): number {
+  return BigInt(proofVersion) === 4n ? PAYO_RUN_STATUS_CLAIMED : PAYO_RUN_STATUS_NONE;
+}
+
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "Proof relayer operation failed.";
 }
@@ -159,7 +173,19 @@ async function processLeasedJob(input: {
     return result.state;
   }
 
-  if (state.status === PAYO_RUN_STATUS_PROVEN) {
+  let terminalStatus: number;
+  try {
+    terminalStatus = expectedProofTerminalStatus(job.proofVersion);
+  } catch (error) {
+    const result = await dependencies.defer(job, {
+      errorCode: "PROOF_VERSION_UNSUPPORTED",
+      errorMessage: errorText(error),
+      permanent: true,
+    }, now);
+    return result.state;
+  }
+
+  if (state.status === terminalStatus) {
     const result = await dependencies.recordProgress(job, {
       complete: true,
       verificationTransactionHash: job.activeTransactionHash,
@@ -177,7 +203,7 @@ async function processLeasedJob(input: {
     return result.state;
   }
 
-  if (state.status === PAYO_RUN_STATUS_NONE) {
+  if (state.status === pendingPredecessorStatus(job.proofVersion)) {
     const result = await dependencies.defer(job, {
       errorCode: "PAYO_SEAL_NOT_OBSERVED",
       errorMessage: "The finalized settlement has not created its PAYO sealed proof state yet.",
@@ -239,7 +265,7 @@ async function processLeasedJob(input: {
       }, now);
       return result.state;
     }
-    if (refreshed.status === PAYO_RUN_STATUS_PROVEN) {
+    if (refreshed.status === terminalStatus) {
       const result = await dependencies.recordProgress(job, {
         complete: true,
         verificationTransactionHash: job.activeTransactionHash,

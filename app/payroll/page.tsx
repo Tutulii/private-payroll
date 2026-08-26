@@ -47,9 +47,13 @@ import {
   type PendingPayrollSubmission,
 } from "@/lib/client/payroll-execution";
 import { payrollRecoveryMode } from "@/lib/client/payroll-recovery-state";
+import {
+  reconcileProofProfileSelection,
+  toggleProofProfileSelection,
+} from "@/lib/client/payroll-selection";
 import { decryptVaultRecord, type EncryptedVaultRecord } from "@/lib/crypto/vault";
 import {
-  agreementScheduleCommitment,
+  recordProofScheduleCommitment,
   loadEncryptedPayAgreements,
   lockedPayrollScheduleCommitments,
   synchronizeConfirmedRecurringAgreements,
@@ -59,7 +63,7 @@ import {
   loadEncryptedPayees,
   type PayeeDirectoryRecord,
 } from "@/lib/client/payee-directory";
-import { isScheduleDue } from "@/lib/domain/obligations";
+import { isAgreementDue } from "@/lib/domain/obligations";
 
 type PayrollRunSummary = {
   id: string;
@@ -71,7 +75,7 @@ type PayrollRunSummary = {
   revision: number;
   recipientCount: number;
   totals: Record<PayrollTokenSymbol, bigint>;
-  lines: Array<{ agreementId: string; scheduleCommitment: string }>;
+  lines: Array<{ agreementId: string; scheduleCommitment: string; paidAtomic: string }>;
 };
 
 const filters = ["All", "Pending", "Confirmed", "Attention"] as const;
@@ -180,18 +184,21 @@ export default function PayrollPage() {
   );
   const dueObligations = useMemo(() => agreements.flatMap((agreement) => {
     const payee = payees.find(({ id }) => id === agreement.payeeId);
-    const scheduleKey = `${agreement.agreement.id}:${agreementScheduleCommitment(agreement.agreement)}`;
+    const scheduleKey = `${agreement.agreement.id}:${recordProofScheduleCommitment(agreement)}`;
     if (
       !payee
       || payee.status !== "active"
       || agreement.effectiveUntil
       || lockedScheduleKeys.has(scheduleKey)
-      || !isScheduleDue(agreement.agreement.schedule, new Date(dashboardLoadedAt))
+      || !isAgreementDue(agreement.agreement, new Date(dashboardLoadedAt))
     ) return [];
     return [{ agreement, payee }];
   }).slice(0, 50), [agreements, dashboardLoadedAt, lockedScheduleKeys, payees]);
   const selectedObligations = useMemo(() => dueObligations.filter(({ agreement }) =>
     selectedAgreementIds.includes(agreement.id)), [dueObligations, selectedAgreementIds]);
+  const selectedProofProfile = selectedObligations[0]?.agreement.agreement.agreementVersion === "payo-agreement-v2"
+    ? "Advanced obligations · proof v2"
+    : "Recurring payroll · proof v1";
   const payrollTotals = useMemo(() => selectedObligations.reduce<Record<PayrollTokenSymbol, bigint>>(
     (totals, { agreement }) => {
       totals[agreement.agreement.settlementToken] += agreement.agreement.earningsAtomic
@@ -249,7 +256,12 @@ export default function PayrollPage() {
         if (!response.record.envelope) throw new Error("An encrypted payroll manifest is missing.");
         const privateRun = decryptVaultRecord<{
           manifest?: {
-            lines?: Array<{ agreementId?: unknown; scheduleCommitment?: unknown }>;
+            lines?: Array<{
+              agreementId?: unknown;
+              scheduleCommitment?: unknown;
+              earningsAtomic?: unknown;
+              deductionsAtomic?: unknown;
+            }>;
             totals?: { STRK?: unknown; USDC?: unknown };
           };
         }>(response.record.envelope, vault.session!.principal);
@@ -266,8 +278,15 @@ export default function PayrollPage() {
             || typeof line.agreementId !== "string"
             || typeof line.scheduleCommitment !== "string"
             || !/^0x[0-9a-fA-F]{64}$/.test(line.scheduleCommitment)
+            || !Array.isArray(line.earningsAtomic)
+            || !Array.isArray(line.deductionsAtomic)
+            || line.earningsAtomic.some((amount) => typeof amount !== "string" || !/^\d+$/.test(amount))
+            || line.deductionsAtomic.some((amount) => typeof amount !== "string" || !/^\d+$/.test(amount))
           ) throw new Error("An encrypted payroll line is missing its schedule binding.");
-          return { agreementId: line.agreementId, scheduleCommitment: line.scheduleCommitment };
+          const paidAtomic = line.earningsAtomic.reduce((total, amount) => total + BigInt(amount as string), 0n)
+            - line.deductionsAtomic.reduce((total, amount) => total + BigInt(amount as string), 0n);
+          if (paidAtomic <= 0n) throw new Error("An encrypted payroll line has no positive settlement value.");
+          return { agreementId: line.agreementId, scheduleCommitment: line.scheduleCommitment, paidAtomic: paidAtomic.toString() };
         });
         return {
           id: run.id,
@@ -296,14 +315,16 @@ export default function PayrollPage() {
         const payee = loadedPayees.find(({ id }) => id === agreement.payeeId);
         return payee?.status === "active"
           && !agreement.effectiveUntil
-          && !locked.has(`${agreement.agreement.id}:${agreementScheduleCommitment(agreement.agreement)}`)
-          && isScheduleDue(agreement.agreement.schedule, new Date())
+          && !locked.has(`${agreement.agreement.id}:${recordProofScheduleCommitment(agreement)}`)
+          && isAgreementDue(agreement.agreement, new Date())
           ? [agreement.id]
           : [];
       }).slice(0, 50);
-      setSelectedAgreementIds((current) => current.length
-        ? current.filter((id) => dueIds.includes(id))
-        : dueIds);
+      setSelectedAgreementIds((current) => reconcileProofProfileSelection({
+        current,
+        dueIds,
+        agreements: synchronizedAgreements,
+      }));
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "Encrypted payroll history could not be loaded.");
     } finally {
@@ -495,9 +516,11 @@ export default function PayrollPage() {
 
   const toggleAgreement = (id: string) => {
     setObligationSchedule(null);
-    setSelectedAgreementIds((current) => current.includes(id)
-      ? current.filter((candidate) => candidate !== id)
-      : [...current, id]);
+    setSelectedAgreementIds((current) => toggleProofProfileSelection({
+      current,
+      selectedId: id,
+      dueAgreements: dueObligations.map(({ agreement }) => agreement),
+    }));
   };
 
   const scheduleSelectedObligationRoot = async () => {
@@ -1046,10 +1069,21 @@ export default function PayrollPage() {
               {dueObligations.map(({ agreement, payee }, index) => {
                 const selected = selectedAgreementIds.includes(agreement.id);
                 const total = agreement.agreement.earningsAtomic.reduce((sum, amount) => sum + BigInt(amount), 0n);
+                const planLabel = agreement.agreement.agreementVersion === "payo-agreement-v2"
+                  ? agreement.agreement.termination
+                    ? "Final pay"
+                    : agreement.agreement.paymentPlan.kind === "checkpoint_stream"
+                      ? "Checkpoint stream"
+                      : agreement.agreement.paymentPlan.kind === "private_vesting"
+                        ? "Private vesting"
+                        : agreement.agreement.paymentPlan.kind === "milestone"
+                          ? "Approved milestone"
+                          : "Advanced recurring"
+                  : "Recurring";
                 return (
                 <div className={`recipient-editor ${selected ? "recipient-editor--selected" : "recipient-editor--excluded"}`} key={agreement.id}>
                   <span className="recipient-index">{index + 1}</span>
-                  <label><span>Encrypted contributor</span><input value={payee.displayName} readOnly /></label>
+                  <label><span>{planLabel}</span><input value={payee.displayName} readOnly /></label>
                   <label className="recipient-address"><span>Registered Starknet address</span><input value={payee.recipientAddress} spellCheck={false} readOnly /></label>
                   <label className="recipient-amount"><span>Committed amount</span><input value={formatTokenAmount(total, agreement.agreement.settlementToken)} readOnly /><select value={agreement.agreement.settlementToken} aria-label={`Committed token for recipient ${index + 1}`} disabled><option value={agreement.agreement.settlementToken}>{agreement.agreement.settlementToken}</option></select></label>
                   <button type="button" className="recipient-remove" aria-label={`${selected ? "Exclude" : "Include"} ${payee.displayName}`} disabled={busy} onClick={() => toggleAgreement(agreement.id)}>{selected ? <CheckCircle2 size={15} /> : <X size={15} />}</button>
@@ -1083,7 +1117,7 @@ export default function PayrollPage() {
             </div>
 
             <div className="composer-summary">
-              <div><small>Selected obligations</small><strong>{selectedObligations.length}</strong></div><div><small>Private total</small><strong>{`${formatTokenAmount(payrollTotals.STRK, "STRK")} STRK · ${formatTokenAmount(payrollTotals.USDC, "USDC")} USDC`}</strong></div><div><small>Shielded treasury</small><strong>{formatTokenAmount(starknet.shieldedBalances.STRK, "STRK")} STRK · {formatTokenAmount(starknet.shieldedBalances.USDC, "USDC")} USDC</strong></div>
+              <div><small>{selectedProofProfile}</small><strong>{selectedObligations.length} selected</strong></div><div><small>Private total</small><strong>{`${formatTokenAmount(payrollTotals.STRK, "STRK")} STRK · ${formatTokenAmount(payrollTotals.USDC, "USDC")} USDC`}</strong></div><div><small>Shielded treasury</small><strong>{formatTokenAmount(starknet.shieldedBalances.STRK, "STRK")} STRK · {formatTokenAmount(starknet.shieldedBalances.USDC, "USDC")} USDC</strong></div>
               {dueObligations.length === 0 ? (
                 <Link className="button button--ink" href="/team#team-directory">Set up first payment <ArrowRight size={17} /></Link>
               ) : (

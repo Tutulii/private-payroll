@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   buildFxSnapshot,
+  buildPragmaProtectedFxSnapshot,
   fxCatalogPublicationWindow,
   fxSnapshotCommitment,
+  pragmaProtectedFxSnapshotCommitment,
+  protectedFxSnapshotToPayrollSnapshot,
   toCircuitFxSnapshot,
 } from "./fx";
 
@@ -78,5 +81,70 @@ describe("FX snapshots", () => {
       maximumAgeSeconds: 30,
       expiresAt: 1_787_479_220,
     });
+  });
+
+  it("commits a block-pinned lower-of-median-and-TWAP value", () => {
+    const snapshot = buildPragmaProtectedFxSnapshot({
+      baseToken: "STRK",
+      referenceCurrency: "USD",
+      pairId: "STRK/USD",
+      oracleAddress: "0x123",
+      summaryStatsAddress: "0x456",
+      blockNumber: "13800000",
+      blockTimestamp: "2026-08-26T00:00:00.000Z",
+      quoteDecimals: 6,
+      spotMedianPriceAtomic: "125000",
+      twapPriceAtomic: "120000",
+      twapWindowSeconds: 1800,
+      haircutBps: 100,
+      observedAt: "2026-08-25T23:59:30.000Z",
+      sourceCount: 5,
+      minimumSourceCount: 3,
+      maximumAgeSeconds: 300,
+    });
+    expect(snapshot.selectedPriceAtomic).toBe("120000");
+    expect(snapshot.conservativePriceAtomic).toBe("118800");
+    expect(pragmaProtectedFxSnapshotCommitment(snapshot)).toMatch(/^0x[0-9a-f]{64}$/);
+    const payrollSnapshot = protectedFxSnapshotToPayrollSnapshot(snapshot);
+    expect(payrollSnapshot.medianPriceAtomic).toBe("120000");
+    expect(payrollSnapshot.conservativePriceAtomic).toBe("118800");
+    expect(payrollSnapshot.feedId).toContain(pragmaProtectedFxSnapshotCommitment(snapshot));
+    expect(() => protectedFxSnapshotToPayrollSnapshot({
+      ...snapshot,
+      twapPriceAtomic: "130000",
+    })).toThrow(/lower of spot median and TWAP/);
+  });
+
+  it("rejects an optimistic selection, stale pinned observation, or weak source set", () => {
+    const valid = buildPragmaProtectedFxSnapshot({
+      baseToken: "USDC",
+      referenceCurrency: "USD",
+      pairId: "USDC/USD",
+      oracleAddress: "0x123",
+      summaryStatsAddress: "0x456",
+      blockNumber: "13800000",
+      blockTimestamp: "2026-08-26T00:00:00.000Z",
+      quoteDecimals: 6,
+      spotMedianPriceAtomic: "1001000",
+      twapPriceAtomic: "999000",
+      twapWindowSeconds: 1800,
+      haircutBps: 0,
+      observedAt: "2026-08-25T23:59:30.000Z",
+      sourceCount: 5,
+      minimumSourceCount: 3,
+      maximumAgeSeconds: 300,
+    });
+    expect(() => pragmaProtectedFxSnapshotCommitment({
+      ...valid,
+      selectedPriceAtomic: "1001000",
+    })).toThrow("lower of spot median and TWAP");
+    expect(() => pragmaProtectedFxSnapshotCommitment({
+      ...valid,
+      observedAt: "2026-08-25T23:00:00.000Z",
+    })).toThrow("stale");
+    expect(() => pragmaProtectedFxSnapshotCommitment({
+      ...valid,
+      sourceCount: 2,
+    })).toThrow("too few");
   });
 });

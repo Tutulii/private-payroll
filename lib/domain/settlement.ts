@@ -14,6 +14,13 @@ export const settlementStates = [
 export const settlementStateSchema = z.enum(settlementStates);
 export type SettlementState = z.infer<typeof settlementStateSchema>;
 
+export const settlementWorkflowSchema = z.enum([
+  "payroll",
+  "wage_claim",
+  "wage_remediation",
+]);
+export type SettlementWorkflow = z.infer<typeof settlementWorkflowSchema>;
+
 export const tokenTotalsSchema = z.object({
   STRK: atomicAmountSchema,
   USDC: atomicAmountSchema,
@@ -22,6 +29,12 @@ export const tokenTotalsSchema = z.object({
   "At least one settlement token total must be positive.",
 );
 export type TokenTotals = z.infer<typeof tokenTotalsSchema>;
+
+export const payoActionTokenTotalsSchema = z.object({
+  STRK: atomicAmountSchema,
+  USDC: atomicAmountSchema,
+}).strict();
+export type PayoActionTokenTotals = z.infer<typeof payoActionTokenTotalsSchema>;
 
 export function commitTokenTotals(input: {
   organizationId: string;
@@ -33,6 +46,38 @@ export function commitTokenTotals(input: {
     domain: "PAYO_SETTLEMENT_TOTALS_V1",
     organizationId: input.organizationId,
     runId: input.runId,
+    totals,
+  });
+}
+
+/**
+ * Commits the hidden settlement totals together with the exact exception
+ * workflow and encrypted subject. A claim is intentionally allowed to carry
+ * zero token totals because it seals evidence without transferring funds;
+ * payroll and remediation must still have a positive private transfer total.
+ */
+export function commitPayoActionTokenTotals(input: {
+  organizationId: string;
+  runId: string;
+  workflowType: SettlementWorkflow;
+  subjectRecordId: string;
+  totals: PayoActionTokenTotals;
+}): `0x${string}` {
+  const workflowType = settlementWorkflowSchema.parse(input.workflowType);
+  const totals = payoActionTokenTotalsSchema.parse(input.totals);
+  if (
+    workflowType !== "wage_claim"
+    && BigInt(totals.STRK) === 0n
+    && BigInt(totals.USDC) === 0n
+  ) {
+    throw new Error(`${workflowType} requires a positive private settlement total.`);
+  }
+  return hashCanonicalJson({
+    domain: "PAYO_ACTION_SETTLEMENT_TOTALS_V2",
+    organizationId: input.organizationId,
+    runId: input.runId,
+    workflowType,
+    subjectRecordId: input.subjectRecordId,
     totals,
   });
 }

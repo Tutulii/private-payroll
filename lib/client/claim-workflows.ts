@@ -1,4 +1,3 @@
-import { hashCanonicalJson } from "@/lib/crypto/digest";
 import type { VaultPrincipalKeyPair } from "@/lib/crypto/vault";
 import {
   generateUuidV7,
@@ -21,6 +20,8 @@ export async function createEncryptedWageClaimDraft(input: {
   agreementId: string;
   runId: string;
   claimKind: "missing_obligation" | "below_committed_floor" | "incomplete_final_pay";
+  disputedReferenceValueAtomic?: string;
+  disputedFinalIncludedMask?: number;
   principal: VaultPrincipalKeyPair;
   now?: Date;
 }): Promise<WageClaimRecord> {
@@ -28,14 +29,6 @@ export async function createEncryptedWageClaimDraft(input: {
   const timestamp = now.toISOString();
   const id = generateUuidV7(now.getTime());
   const claimSalt = randomCommitmentSalt();
-  const claimNullifier = hashCanonicalJson({
-    domain: "PAYO_WAGE_CLAIM_V1",
-    organizationId: input.organizationId,
-    agreementId: input.agreementId,
-    runId: input.runId,
-    claimKind: input.claimKind,
-    claimSalt,
-  });
   const record = wageClaimRecordSchema.parse({
     schemaVersion: 1,
     id,
@@ -45,9 +38,10 @@ export async function createEncryptedWageClaimDraft(input: {
     updatedAt: timestamp,
     agreementId: input.agreementId,
     runId: input.runId,
-    claimNullifier,
     claimSalt,
     claimKind: input.claimKind,
+    disputedReferenceValueAtomic: input.disputedReferenceValueAtomic,
+    disputedFinalIncludedMask: input.disputedFinalIncludedMask,
     state: "draft",
   });
   return storeCanonicalEncryptedRecord({
@@ -62,20 +56,29 @@ export async function createEncryptedWageClaimDraft(input: {
 export async function createEncryptedRemediationDraft(input: {
   client: Pick<PayoClient, "storeEncryptedRecord">;
   organizationId: string;
-  claimId: string;
+  claim: WageClaimRecord;
+  amountAtomic?: string;
   principal: VaultPrincipalKeyPair;
   now?: Date;
 }): Promise<RemediationRecord> {
+  const claim = wageClaimRecordSchema.parse(input.claim);
+  if (
+    claim.organizationId !== input.organizationId
+    || !claim.claimNullifier
+    || !claim.shortfallAtomic
+    || !claim.token
+    || !["submitted", "accepted"].includes(claim.state)
+  ) {
+    throw new Error("Remediation requires a proved, submitted claim from this organization.");
+  }
   const now = input.now ?? new Date();
   const timestamp = now.toISOString();
   const id = generateUuidV7(now.getTime());
   const remediationSalt = randomCommitmentSalt();
-  const remediationNullifier = hashCanonicalJson({
-    domain: "PAYO_REMEDIATION_V1",
-    organizationId: input.organizationId,
-    claimId: input.claimId,
-    remediationSalt,
-  });
+  const amountAtomic = input.amountAtomic ?? claim.shortfallAtomic;
+  if (BigInt(amountAtomic) < BigInt(claim.shortfallAtomic)) {
+    throw new Error("Remediation cannot be below the proved private shortfall.");
+  }
   const record = remediationRecordSchema.parse({
     schemaVersion: 1,
     id,
@@ -83,8 +86,12 @@ export async function createEncryptedRemediationDraft(input: {
     revision: 1,
     createdAt: timestamp,
     updatedAt: timestamp,
-    claimId: input.claimId,
-    remediationNullifier,
+    claimId: claim.id,
+    runId: claim.runId,
+    agreementId: claim.agreementId,
+    claimNullifier: claim.claimNullifier,
+    amountAtomic,
+    token: claim.token,
     remediationSalt,
     state: "draft",
   });

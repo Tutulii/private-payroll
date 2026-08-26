@@ -4,6 +4,9 @@ use payo_contracts::commitments::{
     build_fixed_merkle_root_v1, derive_run_nullifier_v1, hash_deductions_commitment,
     hash_payroll_leaf_v1, hash_recipient_commitment, hash_text_commitment,
 };
+use payo_contracts::advanced_bundle_verifier::{
+    IAdvancedBundleVerifierDispatcher, IAdvancedBundleVerifierDispatcherTrait,
+};
 use payo_contracts::integrity_bundle_verifier::{
     IIntegrityBundleVerifierDispatcher, IIntegrityBundleVerifierDispatcherTrait,
 };
@@ -110,6 +113,84 @@ fn deploy_bundle_verifier(underlying: ContractAddress) -> ContractAddress {
     underlying.serialize(ref calldata);
     let (contract_address, _) = contract.deploy(@calldata).unwrap();
     contract_address
+}
+
+fn deploy_advanced_bundle_verifier(
+    base: ContractAddress, advanced: ContractAddress,
+) -> ContractAddress {
+    let contract = declare("PayoAdvancedBundleVerifier").unwrap().contract_class();
+    let mut calldata = array![];
+    base.serialize(ref calldata);
+    advanced.serialize(ref calldata);
+    let (contract_address, _) = contract.deploy(@calldata).unwrap();
+    contract_address
+}
+
+fn profile_public_inputs(version: u32, shard: u8) -> Array<u256> {
+    array![
+        1_u256, 2_u256, version.into(), 1_u256, 4_u256, 5_u256, 6_u256, 7_u256,
+        8_u256, 9_u256, 10_u256, 11_u256, 12_u256, 13_u256, 14_u256, 15_u256,
+        shard.into(),
+    ]
+}
+
+fn mismatched_advanced_public_inputs(shard: u8) -> Array<u256> {
+    array![
+        1_u256, 2_u256, 2_u256, 1_u256, 4_u256, 5_u256, 999_u256, 7_u256,
+        8_u256, 9_u256, 10_u256, 11_u256, 12_u256, 13_u256, 14_u256, 15_u256,
+        shard.into(),
+    ]
+}
+
+#[test]
+fn advanced_bundle_requires_both_linked_verifiers() {
+    let base = address(2100);
+    let advanced = address(2200);
+    let bundle = deploy_advanced_bundle_verifier(base, advanced);
+    let base_inputs = profile_public_inputs(1, 0);
+    let advanced_inputs = profile_public_inputs(2, 0);
+    start_mock_call(
+        base,
+        selector!("verify_ultra_keccak_zk_honk_proof"),
+        Result::<Span<u256>, felt252>::Ok(base_inputs.span()),
+    );
+    start_mock_call(
+        advanced,
+        selector!("verify_ultra_keccak_zk_honk_proof"),
+        Result::<Span<u256>, felt252>::Ok(advanced_inputs.span()),
+    );
+    let dispatcher = IAdvancedBundleVerifierDispatcher { contract_address: bundle };
+    let packed: Array<felt252> = array![2, 101, 102, 201];
+    let result = dispatcher.verify_payroll_integrity_shard(packed.span()).unwrap();
+    assert(result.len() == 17, 'advanced input count');
+    assert(*result.at(2) == 2, 'advanced version not returned');
+    assert(dispatcher.get_base_verifier() == base, 'wrong base verifier');
+    assert(dispatcher.get_advanced_verifier() == advanced, 'wrong advanced verifier');
+}
+
+#[test]
+fn advanced_bundle_rejects_mismatched_roots() {
+    let base = address(2300);
+    let advanced = address(2400);
+    let bundle = deploy_advanced_bundle_verifier(base, advanced);
+    let base_inputs = profile_public_inputs(1, 0);
+    let advanced_inputs = mismatched_advanced_public_inputs(0);
+    start_mock_call(
+        base,
+        selector!("verify_ultra_keccak_zk_honk_proof"),
+        Result::<Span<u256>, felt252>::Ok(base_inputs.span()),
+    );
+    start_mock_call(
+        advanced,
+        selector!("verify_ultra_keccak_zk_honk_proof"),
+        Result::<Span<u256>, felt252>::Ok(advanced_inputs.span()),
+    );
+    let dispatcher = IAdvancedBundleVerifierDispatcher { contract_address: bundle };
+    let packed: Array<felt252> = array![1, 101, 201];
+    match dispatcher.verify_payroll_integrity_shard(packed.span()) {
+        Result::Err(error) => assert(error == 'PAYO_ADV_INPUTS', 'wrong advanced error'),
+        Result::Ok(_) => panic!("advanced verifier accepted mismatched roots"),
+    }
 }
 
 #[test]
@@ -488,6 +569,103 @@ fn all_proof_modes_enforce_ordered_state_transitions() {
         .privacy_invoke(
             3, 1, 1, 11, 12, 21, 22, 41, 42, 51, 52, 61, 62, 100, 200, 0, 0, proof.span(), proof.span(),
         );
+    assert(dispatcher.get_run_status(61, 62) == 5, 'claim not remediated');
+}
+
+#[test]
+fn remediation_resets_and_reverifies_claim_shards_for_shared_nullifier() {
+    let pool = address(1000);
+    let verifier = address(2000);
+    let chain_id = 'SN_MAIN';
+    let seal = deploy_seal(pool, verifier, chain_id);
+    let dispatcher = IPayoPayrollSealDispatcher { contract_address: seal };
+    let claim_shard_0: Array<felt252> = array![301, 302];
+    let claim_shard_1: Array<felt252> = array![303, 304];
+    let remediation_shard_0: Array<felt252> = array![401, 402];
+    let remediation_shard_1: Array<felt252> = array![403, 404];
+    let empty: Array<felt252> = array![];
+    start_cheat_caller_address(seal, pool);
+    start_cheat_block_timestamp(seal, 150);
+
+    dispatcher
+        .privacy_invoke(
+            2,
+            1,
+            1,
+            11,
+            12,
+            21,
+            22,
+            41,
+            42,
+            51,
+            52,
+            61,
+            62,
+            100,
+            200,
+            poseidon_hash_span(claim_shard_0.span()),
+            poseidon_hash_span(claim_shard_1.span()),
+            empty.span(),
+            empty.span(),
+        );
+    let claim_inputs_0 = valid_public_inputs_for(seal, chain_id, 0, 61, 62);
+    start_mock_call(
+        verifier,
+        selector!("verify_payroll_integrity_shard"),
+        Result::<Span<u256>, felt252>::Ok(claim_inputs_0.span()),
+    );
+    dispatcher.verify_sealed_shard(61, 62, 0, claim_shard_0.span());
+    let claim_inputs_1 = valid_public_inputs_for(seal, chain_id, 1, 61, 62);
+    start_mock_call(
+        verifier,
+        selector!("verify_payroll_integrity_shard"),
+        Result::<Span<u256>, felt252>::Ok(claim_inputs_1.span()),
+    );
+    dispatcher.verify_sealed_shard(61, 62, 1, claim_shard_1.span());
+    assert(dispatcher.get_run_status(61, 62) == 4, 'claim not accepted');
+
+    dispatcher
+        .privacy_invoke(
+            3,
+            1,
+            1,
+            11,
+            12,
+            21,
+            22,
+            41,
+            42,
+            51,
+            52,
+            61,
+            62,
+            100,
+            200,
+            poseidon_hash_span(remediation_shard_0.span()),
+            poseidon_hash_span(remediation_shard_1.span()),
+            empty.span(),
+            empty.span(),
+        );
+    assert(!dispatcher.is_sealed_shard_verified(61, 62, 0), 'old claim shard zero leaked');
+    assert(!dispatcher.is_sealed_shard_verified(61, 62, 1), 'old claim shard one leaked');
+    let remediation_inputs_0 = valid_public_inputs_for(seal, chain_id, 0, 61, 62);
+    start_mock_call(
+        verifier,
+        selector!("verify_payroll_integrity_shard"),
+        Result::<Span<u256>, felt252>::Ok(remediation_inputs_0.span()),
+    );
+    // The mocked input helper uses manifest 21/22; the seal remediation is
+    // deliberately bound to those same values for this state-transition test.
+    // Real differing manifests are exercised by the generated verifier suite.
+    dispatcher.verify_sealed_shard(61, 62, 0, remediation_shard_0.span());
+    let remediation_inputs_1 = valid_public_inputs_for(seal, chain_id, 1, 61, 62);
+    start_mock_call(
+        verifier,
+        selector!("verify_payroll_integrity_shard"),
+        Result::<Span<u256>, felt252>::Ok(remediation_inputs_1.span()),
+    );
+    dispatcher.verify_sealed_shard(61, 62, 1, remediation_shard_1.span());
     assert(dispatcher.get_run_status(61, 62) == 5, 'claim not remediated');
 }
 

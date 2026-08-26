@@ -186,6 +186,27 @@ export async function createDisclosureGrant(input: {
   });
 }
 
+export async function listDisclosureGrants(
+  organizationId: string,
+  principal: AuthenticatedPrincipal,
+) {
+  await requireOrganizationRole(organizationId, principal, ["admin", "operator", "reviewer"]);
+  return getDatabase()
+    .select({
+      id: disclosureGrants.id,
+      runId: disclosureGrants.runId,
+      granteePrincipalId: disclosureGrants.granteePrincipalId,
+      fieldScope: disclosureGrants.fieldScope,
+      validAfter: disclosureGrants.validAfter,
+      expiresAt: disclosureGrants.expiresAt,
+      revokedAt: disclosureGrants.revokedAt,
+      createdAt: disclosureGrants.createdAt,
+    })
+    .from(disclosureGrants)
+    .where(eq(disclosureGrants.organizationId, organizationId))
+    .orderBy(desc(disclosureGrants.createdAt));
+}
+
 export async function revokeDisclosureGrant(input: {
   organizationId: string;
   grantId: string;

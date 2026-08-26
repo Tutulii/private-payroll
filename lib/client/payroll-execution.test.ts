@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildFxSnapshot } from "@/lib/domain/fx";
+import { referenceClassificationAnswers } from "@/lib/domain/classification";
 import { decryptVaultRecord, encryptVaultRecord, generateVaultPrincipal } from "@/lib/crypto/vault";
 import { hashProofCalldata } from "@/lib/proof/starknet-calldata";
 import { buildPayrollIntegrityInputsFromSerialized } from "@/lib/proof/input-builder";
@@ -102,6 +103,7 @@ async function executionInput(mockClient: ReturnType<typeof client>) {
     amount: "1",
     token: "STRK",
     classification: "contractor",
+    classificationAnswers: referenceClassificationAnswers("contractor"),
     cadence: "monthly",
     nextDueAt: "2026-08-23T12:00:00.000Z",
     policyId: "payo-net-invoice-no-withholding-v1",
@@ -244,6 +246,7 @@ describe("proof-bound payroll browser orchestration", () => {
       amount: "2.123456",
       token: "USDC",
       classification: "agent_service",
+      classificationAnswers: referenceClassificationAnswers("agent_service"),
       cadence: "monthly",
       nextDueAt: "2026-08-23T12:00:00.000Z",
       policyId: "payo-net-invoice-no-withholding-v1",
@@ -266,6 +269,60 @@ describe("proof-bound payroll browser orchestration", () => {
     expect(settlement.tokenTotals).toEqual({
       STRK: "1000000000000000000",
       USDC: "2123456",
+    });
+  });
+
+  it("derives, proves, and settles a narrow employee statutory withholding policy", async () => {
+    const mockClient = client();
+    const payee = prepareEncryptedPayee({
+      organizationId,
+      displayName: "Maya",
+      principalKind: "human",
+      recipientAddress: "0x456",
+      tokenPreference: "USDC",
+      jurisdictionCode: "US-CA",
+      principal,
+      now,
+    }).record;
+    const agreement = await storeEncryptedRecurringAgreement({
+      client: { storeEncryptedRecord: vi.fn().mockResolvedValue({ record: {} }) } as never,
+      organizationId,
+      payee,
+      amount: "10",
+      token: "USDC",
+      classification: "employee",
+      classificationAnswers: referenceClassificationAnswers("employee"),
+      cadence: "monthly",
+      nextDueAt: "2026-08-23T12:00:00.000Z",
+      policyId: "us-irs-supplemental-flat-2026-v1",
+      policyVersion: 1,
+      principal,
+      now,
+    });
+    const submitPayroll = vi.fn().mockResolvedValue("0xeeee");
+    await executeProofBoundPayroll({
+      client: mockClient as unknown as PayoClient,
+      organizationId,
+      organizationSecret: `0x${"45".repeat(32)}`,
+      principal,
+      chainId,
+      sealAddress,
+      obligations: [{ agreement, payee }],
+      submitPayroll,
+      prove,
+      now: () => now,
+    });
+    expect(submitPayroll).toHaveBeenCalledWith(
+      [{ address: payee.recipientAddress, amount: "7.8", token: "USDC" }],
+      expect.any(Object),
+    );
+    const encryptedRun = mockClient.createPayrollRun.mock.calls[0][0];
+    const privateRun = decryptVaultRecord<{
+      manifest: { lines: Array<{ deductionsAtomic: string[]; committedPolicyId: string }> };
+    }>(encryptedRun.envelope, principal);
+    expect(privateRun.manifest.lines[0]).toMatchObject({
+      deductionsAtomic: ["2200000"],
+      committedPolicyId: "us-irs-supplemental-flat-2026-v1",
     });
   });
 

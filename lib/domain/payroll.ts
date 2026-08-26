@@ -168,7 +168,7 @@ export const proofPackageSchema = z.object({
   packageVersion: z.literal("payo-proof-package-v1"),
   runId: z.string().min(8).max(128),
   organizationId: z.string().min(8).max(128),
-  proofType: z.enum(["payroll_integrity", "settlement_match", "scoped_disclosure"]),
+  proofType: z.enum(["payroll_integrity", "wage_claim", "wage_remediation", "settlement_match", "scoped_disclosure"]),
   proofVersion: z.string().min(1).max(64),
   verifier: z.object({
     chainId: z.string().min(1),

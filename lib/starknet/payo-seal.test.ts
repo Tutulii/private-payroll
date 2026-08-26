@@ -3,9 +3,12 @@ import { describe, expect, it } from "vitest";
 import { mapPayrollPublicInputs, type PayrollIntegrityShardProof } from "@/lib/proof/protocol";
 import { hashProofCalldata } from "@/lib/proof/starknet-calldata";
 import {
+  buildPayoSealedAction,
   buildPayoSealedPayroll,
   buildVerifySealedShardCall,
   buildVerifySealedShardCalldataCall,
+  PAYO_PROOF_MODE_CLAIM,
+  PAYO_PROOF_MODE_REMEDIATE,
 } from "./payo-seal";
 
 const PUBLIC_INPUTS = [
@@ -128,5 +131,26 @@ describe("PAYO sealed payroll Starknet calls", () => {
       runNullifierLow: PUBLIC_INPUTS[13],
       shard: modified,
     })).toThrow("calldata hash does not match");
+  });
+
+  it("binds claim and remediation modes to their dedicated proof versions", () => {
+    const claimShards = [proof(0), proof(1)] as const;
+    for (const shard of claimShards) shard.publicInputs = { ...shard.publicInputs, proofVersion: "3" };
+    const claim = buildPayoSealedAction({
+      sealAddress: "0x12345",
+      chainId: "0x1",
+      mode: PAYO_PROOF_MODE_CLAIM,
+      shards: claimShards,
+      nowUnixSeconds: 1_500n,
+    });
+    expect(claim.invokeAction.calldata[0]).toBe("0x2");
+
+    expect(() => buildPayoSealedAction({
+      sealAddress: "0x12345",
+      chainId: "0x1",
+      mode: PAYO_PROOF_MODE_REMEDIATE,
+      shards: claimShards,
+      nowUnixSeconds: 1_500n,
+    })).toThrow("invalid for mode 3");
   });
 });

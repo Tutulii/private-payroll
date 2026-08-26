@@ -12,10 +12,18 @@ import { hashCanonicalJson } from "@/lib/crypto/digest";
 import { signCapability, type AgentCapability, type PaymentIntent } from "@/lib/domain/capability";
 import { generateUuidV7 } from "@/lib/domain/records";
 import { prepareEncryptedAgentCapability } from "@/lib/client/agent-capabilities";
-import { commitTokenTotals, type TokenTotals } from "@/lib/domain/settlement";
+import {
+  commitPayoActionTokenTotals,
+  commitTokenTotals,
+  type TokenTotals,
+} from "@/lib/domain/settlement";
 import {
   PAYROLL_INTEGRITY_CIRCUIT_SHA256,
   PAYROLL_INTEGRITY_VERIFICATION_KEY_SHA256,
+  WAGE_CLAIM_CIRCUIT_SHA256,
+  WAGE_CLAIM_VERIFICATION_KEY_SHA256,
+  WAGE_REMEDIATION_CIRCUIT_SHA256,
+  WAGE_REMEDIATION_VERIFICATION_KEY_SHA256,
 } from "@/lib/proof/protocol";
 import {
   hashProofCalldata,
@@ -58,6 +66,7 @@ import {
 import {
   createDisclosureGrant,
   createEncryptedReceipt,
+  listDisclosureGrants,
   revokeDisclosureGrant,
 } from "./receipt-repository";
 import {
@@ -163,6 +172,8 @@ function prepareSettlementIntent(input: {
       id,
       organizationId: input.organizationId,
       runId: input.runId,
+      workflowType: "payroll" as const,
+      subjectRecordId: input.runId,
       walletRequestId: generateUuidV7(),
       idempotencyKey: `settlement:${id}`,
       tokenTotalsCommitment,
@@ -171,6 +182,82 @@ function prepareSettlementIntent(input: {
     },
     totals,
     vaultPrincipal,
+  };
+}
+
+function preparePhase3ExceptionProof(input: {
+  profile: "claim" | "remediation";
+  organizationId: string;
+  runId: string;
+  subjectRecordId: string;
+  proofBundleId: string;
+}) {
+  const shards = ([0, 1] as const).map((shard) => readFileSync(
+    new URL(`../../evidence/phase3-devnet-fixtures/${input.profile}-shard-${shard}.txt`, import.meta.url),
+    "utf8",
+  ).trim().split(/\s+/)) as [string[], string[]];
+  const parsed = parsePayrollPublicInputsFromGaragaCalldata(shards[0]);
+  const commonInputs = {
+    chainId: `0x${BigInt(parsed.chainId).toString(16)}`,
+    sealAddress: `0x${BigInt(parsed.sealAddress).toString(16)}`,
+    proofVersion: BigInt(parsed.proofVersion).toString(),
+    schemaVersion: BigInt(parsed.schemaVersion).toString(),
+    agreementRootHigh: BigInt(parsed.agreementRootHigh).toString(),
+    agreementRootLow: BigInt(parsed.agreementRootLow).toString(),
+    manifestRootHigh: BigInt(parsed.manifestRootHigh).toString(),
+    manifestRootLow: BigInt(parsed.manifestRootLow).toString(),
+    policyRootHigh: BigInt(parsed.policyRootHigh).toString(),
+    policyRootLow: BigInt(parsed.policyRootLow).toString(),
+    fxRootHigh: BigInt(parsed.fxRootHigh).toString(),
+    fxRootLow: BigInt(parsed.fxRootLow).toString(),
+    runNullifierHigh: BigInt(parsed.runNullifierHigh).toString(),
+    runNullifierLow: BigInt(parsed.runNullifierLow).toString(),
+    validityStart: BigInt(parsed.validityStart).toString(),
+    validityExpiry: BigInt(parsed.validityExpiry).toString(),
+  };
+  const profile = input.profile === "claim" ? {
+    proofType: "wage_claim" as const,
+    proofVersion: "3",
+    circuitSha256: WAGE_CLAIM_CIRCUIT_SHA256,
+    verificationKeySha256: WAGE_CLAIM_VERIFICATION_KEY_SHA256,
+  } : {
+    proofType: "wage_remediation" as const,
+    proofVersion: "4",
+    circuitSha256: WAGE_REMEDIATION_CIRCUIT_SHA256,
+    verificationKeySha256: WAGE_REMEDIATION_VERIFICATION_KEY_SHA256,
+  };
+  const envelope = encryptVaultRecord(
+    { profile: input.profile, shards },
+    {
+      schemaVersion: 1,
+      organizationId: input.organizationId,
+      recordType: "proof-bundle",
+      recordId: input.proofBundleId,
+      revision: 1,
+    },
+    [generateVaultPrincipal(admin.principalId)],
+  );
+  return {
+    shards,
+    commonInputs,
+    bundle: {
+      id: input.proofBundleId,
+      organizationId: input.organizationId,
+      runId: input.runId,
+      revision: 1,
+      proofType: profile.proofType,
+      subjectRecordId: input.subjectRecordId,
+      proofVersion: profile.proofVersion,
+      circuitSha256: profile.circuitSha256,
+      verificationKeySha256: profile.verificationKeySha256,
+      publicInputsHash: hashCanonicalJson([
+        { ...commonInputs, shardIndex: "0" },
+        { ...commonInputs, shardIndex: "1" },
+      ]),
+      commonInputs,
+      shardCalldataHashes: [hashProofCalldata(shards[0]), hashProofCalldata(shards[1])] as [string, string],
+      envelope,
+    },
   };
 }
 
@@ -555,6 +642,87 @@ databaseSuite("PostgreSQL durability integration", () => {
     })).rejects.toThrow(/invalid settlement transition/i);
   });
 
+  it("keeps a confirmed payroll immutable while a wage-claim settlement confirms", async () => {
+    const organizationId = await seedOrganization();
+    const runId = generateUuidV7();
+    const claimId = generateUuidV7();
+    const proofBundleId = generateUuidV7();
+    await getDatabase().insert(payrollRuns).values({
+      id: runId,
+      organizationId,
+      cycleId: "wage-claim-exception",
+      revision: 1,
+      state: "confirmed",
+      dueAt: new Date("2026-08-31T00:00:00.000Z"),
+    });
+    await getDatabase().insert(vaultRecords).values({
+      id: claimId,
+      organizationId,
+      recordType: "wage-claim",
+      revision: 1,
+      ciphertext: "encrypted-claim",
+      envelope: { ciphertext: "encrypted-claim" },
+      envelopeHash: `0x${"51".repeat(32)}`,
+      createdBy: admin.principalId,
+    });
+    await getDatabase().insert(proofBundles).values({
+      id: proofBundleId,
+      runId,
+      organizationId,
+      proofType: "wage_claim",
+      proofVersion: "3",
+      subjectRecordId: claimId,
+      proofPackage: {},
+      proofHash: `0x${"52".repeat(32)}`,
+      verificationState: "locally_verified",
+    });
+    const settlementId = generateUuidV7();
+    const totals = { STRK: "0", USDC: "0" };
+    const tokenTotalsCommitment = commitPayoActionTokenTotals({
+      organizationId,
+      runId,
+      workflowType: "wage_claim",
+      subjectRecordId: claimId,
+      totals,
+    });
+    const vaultPrincipal = generateVaultPrincipal(admin.principalId);
+    const envelope = encryptVaultRecord(
+      { workflowType: "wage_claim", subjectRecordId: claimId, tokenTotals: totals, tokenTotalsCommitment },
+      {
+        schemaVersion: 1,
+        organizationId,
+        recordType: "settlement",
+        recordId: settlementId,
+        revision: 1,
+      },
+      [vaultPrincipal],
+    );
+    const settlement = await createSettlementIntent({
+      id: settlementId,
+      organizationId,
+      runId,
+      workflowType: "wage_claim",
+      subjectRecordId: claimId,
+      walletRequestId: generateUuidV7(),
+      idempotencyKey: `wage-claim:${settlementId}`,
+      tokenTotalsCommitment,
+      envelope,
+      principal: admin,
+    });
+    expect(settlement).toMatchObject({ workflowType: "wage_claim", subjectRecordId: claimId });
+    expect((await getDatabase().select().from(payrollRuns))[0].state).toBe("confirmed");
+
+    await recordSettlementSubmission({ settlementId, transactionHash: "0xc1a1", principal: admin });
+    const [leased] = await leaseConfirmationJobs("claim-confirmation", 10, new Date("2099-08-25T12:00:00Z"));
+    await applySettlementObservation(leased, {
+      state: "finalized",
+      confirmationDepth: 3,
+      blockNumber: 321n,
+      blockHash: "0x321",
+    }, new Date("2099-08-25T12:00:01Z"));
+    expect((await getDatabase().select().from(payrollRuns))[0].state).toBe("confirmed");
+  });
+
   it("finalizes a submitted settlement when the first receipt already has final depth", async () => {
     const organizationId = await seedOrganization();
     const runId = generateUuidV7();
@@ -616,6 +784,7 @@ databaseSuite("PostgreSQL durability integration", () => {
       organizationId,
       proofType: "payroll_integrity",
       proofVersion: "1",
+      subjectRecordId: runId,
       proofPackage: {},
       proofHash: `0x${"22".repeat(32)}`,
     });
@@ -687,6 +856,7 @@ databaseSuite("PostgreSQL durability integration", () => {
       id: settlementId,
       organizationId,
       runId,
+      subjectRecordId: runId,
       walletRequestId: generateUuidV7(),
       idempotencyKey: `receipt-settlement:${settlementId}`,
       state: "confirmed",
@@ -738,9 +908,20 @@ databaseSuite("PostgreSQL durability integration", () => {
       envelope: grantEnvelope,
       principal: admin,
     })).resolves.toMatchObject({ replayed: false });
+    await expect(listDisclosureGrants(organizationId, admin)).resolves.toEqual([
+      expect.objectContaining({
+        id: grantId,
+        runId,
+        fieldScope: ["settlement"],
+        revokedAt: null,
+      }),
+    ]);
     await expect(revokeDisclosureGrant({ organizationId, grantId, principal: admin }))
       .resolves.toMatchObject({ id: grantId });
     expect((await getDatabase().select().from(disclosureGrants))[0].revokedAt).not.toBeNull();
+    await expect(listDisclosureGrants(organizationId, admin)).resolves.toEqual([
+      expect.objectContaining({ id: grantId, revokedAt: expect.any(Date) }),
+    ]);
   });
 
   it("keeps an unresolved submitted hash durable instead of classifying timeout as failure", async () => {
@@ -760,6 +941,7 @@ databaseSuite("PostgreSQL durability integration", () => {
       id: settlementId,
       organizationId,
       runId,
+      subjectRecordId: runId,
       walletRequestId: generateUuidV7(),
       idempotencyKey: "confirmation-delay-idempotency",
       state: "submitted",
@@ -858,6 +1040,7 @@ databaseSuite("PostgreSQL durability integration", () => {
       runId,
       revision: 1,
       proofType: "payroll_integrity" as const,
+      subjectRecordId: runId,
       proofVersion: "1",
       circuitSha256: PAYROLL_INTEGRITY_CIRCUIT_SHA256,
       verificationKeySha256: PAYROLL_INTEGRITY_VERIFICATION_KEY_SHA256,
@@ -893,6 +1076,7 @@ databaseSuite("PostgreSQL durability integration", () => {
       id: settlementId,
       organizationId,
       runId,
+      subjectRecordId: runId,
       walletRequestId: "proof-relay-wallet-request",
       idempotencyKey: "proof-relay-idempotency-key",
       state: "submitted",
@@ -984,6 +1168,130 @@ databaseSuite("PostgreSQL durability integration", () => {
       verificationState: "onchain_verified",
       verificationTransactionHash: "0x1001",
     });
+  }, 30_000);
+
+  it("drives confirmed -> disputed -> reconciled only after v3/v4 proof jobs complete", async () => {
+    const organizationId = await seedOrganization();
+    const runId = generateUuidV7();
+    const claimId = generateUuidV7();
+    const claimProofBundleId = generateUuidV7();
+    const claimFixture = preparePhase3ExceptionProof({
+      profile: "claim",
+      organizationId,
+      runId,
+      subjectRecordId: claimId,
+      proofBundleId: claimProofBundleId,
+    });
+    const combinedRoot = (high: string, low: string) =>
+      `0x${BigInt(high).toString(16).padStart(32, "0")}${BigInt(low).toString(16).padStart(32, "0")}`;
+    await getDatabase().insert(payrollRuns).values({
+      id: runId,
+      organizationId,
+      cycleId: "phase3-claim-remediation",
+      revision: 1,
+      state: "confirmed",
+      dueAt: new Date("2026-08-31T00:00:00.000Z"),
+      agreementRoot: combinedRoot(claimFixture.commonInputs.agreementRootHigh, claimFixture.commonInputs.agreementRootLow),
+      policyRoot: combinedRoot(claimFixture.commonInputs.policyRootHigh, claimFixture.commonInputs.policyRootLow),
+      fxRoot: combinedRoot(claimFixture.commonInputs.fxRootHigh, claimFixture.commonInputs.fxRootLow),
+    });
+    await getDatabase().insert(vaultRecords).values({
+      id: claimId,
+      organizationId,
+      recordType: "wage-claim",
+      revision: 1,
+      ciphertext: "encrypted-claim-subject",
+      envelope: { ciphertext: "encrypted-claim-subject" },
+      envelopeHash: `0x${"61".repeat(32)}`,
+      createdBy: admin.principalId,
+    });
+    const deployment = {
+      chainId: claimFixture.commonInputs.chainId,
+      sealAddress: claimFixture.commonInputs.sealAddress,
+    };
+    await storeEncryptedPayrollIntegrityBundle({ bundle: claimFixture.bundle, deployment, principal: admin });
+    const claimSettlementId = generateUuidV7();
+    await getDatabase().insert(settlements).values({
+      id: claimSettlementId,
+      organizationId,
+      runId,
+      workflowType: "wage_claim",
+      subjectRecordId: claimId,
+      walletRequestId: generateUuidV7(),
+      idempotencyKey: `claim-proof-job:${claimSettlementId}`,
+      state: "finalized",
+      tokenTotalsCommitment: `0x${"62".repeat(32)}`,
+      transactionHash: "0xc100",
+    });
+    await enqueueProofVerification({
+      settlementId: claimSettlementId,
+      request: { proofBundleId: claimProofBundleId, shards: claimFixture.shards },
+      principal: admin,
+    });
+    expect((await getDatabase().select().from(payrollRuns))[0].state).toBe("confirmed");
+    const [claimJob] = await leaseProofVerificationJobs(
+      "phase3-claim-completer",
+      2,
+      new Date("2099-01-01T00:00:00.000Z"),
+    );
+    await recordProofVerificationProgress(
+      claimJob,
+      { complete: true, verificationTransactionHash: "0xc101" },
+      new Date("2099-01-01T00:00:01.000Z"),
+    );
+    expect((await getDatabase().select().from(payrollRuns))[0].state).toBe("disputed");
+
+    const remediationId = generateUuidV7();
+    const remediationProofBundleId = generateUuidV7();
+    const remediationFixture = preparePhase3ExceptionProof({
+      profile: "remediation",
+      organizationId,
+      runId,
+      subjectRecordId: remediationId,
+      proofBundleId: remediationProofBundleId,
+    });
+    await getDatabase().insert(vaultRecords).values({
+      id: remediationId,
+      organizationId,
+      recordType: "remediation",
+      revision: 1,
+      ciphertext: "encrypted-remediation-subject",
+      envelope: { ciphertext: "encrypted-remediation-subject" },
+      envelopeHash: `0x${"63".repeat(32)}`,
+      createdBy: admin.principalId,
+    });
+    await storeEncryptedPayrollIntegrityBundle({ bundle: remediationFixture.bundle, deployment, principal: admin });
+    const remediationSettlementId = generateUuidV7();
+    await getDatabase().insert(settlements).values({
+      id: remediationSettlementId,
+      organizationId,
+      runId,
+      workflowType: "wage_remediation",
+      subjectRecordId: remediationId,
+      walletRequestId: generateUuidV7(),
+      idempotencyKey: `remediation-proof-job:${remediationSettlementId}`,
+      state: "finalized",
+      tokenTotalsCommitment: `0x${"64".repeat(32)}`,
+      transactionHash: "0xc200",
+    });
+    await enqueueProofVerification({
+      settlementId: remediationSettlementId,
+      request: { proofBundleId: remediationProofBundleId, shards: remediationFixture.shards },
+      principal: admin,
+    });
+    const [remediationJob] = await leaseProofVerificationJobs(
+      "phase3-remediation-completer",
+      2,
+      new Date("2099-01-01T00:01:00.000Z"),
+    );
+    await recordProofVerificationProgress(
+      remediationJob,
+      { complete: true, verificationTransactionHash: "0xc201" },
+      new Date("2099-01-01T00:01:01.000Z"),
+    );
+    expect((await getDatabase().select().from(payrollRuns))[0].state).toBe("reconciled");
+    expect((await getDatabase().select().from(proofBundles)).map(({ verificationState }) => verificationState))
+      .toEqual(["onchain_verified", "onchain_verified"]);
   }, 30_000);
 
   it("serializes concurrent capability reservations so period limits cannot race", async () => {

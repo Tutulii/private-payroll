@@ -43,6 +43,20 @@
       "when": 1787581259299,
       "tag": "0005_nice_reptil",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787713973477,
+      "tag": "0006_crazy_thunderbolt",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787714530508,
+      "tag": "0007_cooing_zeigeist",
+      "breakpoints": true
     }
   ]
 }

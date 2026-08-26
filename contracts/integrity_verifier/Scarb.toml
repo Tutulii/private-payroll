@@ -24,6 +24,8 @@ build-external-contracts = [
     "payo_contracts::policy_registry::PayoPolicyRegistry",
 ]
 
+[lib]
+
 [[target.starknet-contract]]
 casm = true
 casm-add-pythonic-hints = true

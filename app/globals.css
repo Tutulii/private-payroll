@@ -2239,6 +2239,37 @@ button:focus-visible {
 .team-add-form input:focus, .team-add-form select:focus { border-color: var(--ink); box-shadow: 0 0 0 2px rgba(255,255,255,.8); }
 .team-add-form__address input { font-family: ui-monospace, monospace; font-size: 7.5px; }
 .team-add-form .button { min-height: 38px; white-space: nowrap; }
+.team-add-form--advanced { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
+.team-add-form--advanced .team-add-form__address,
+.team-add-form--advanced .team-add-form__subhead,
+.team-add-form--advanced .team-add-form__requirements,
+.team-add-form__classification { grid-column: 1 / -1; }
+.team-add-form__subhead { padding-top: 7px; border-top: 1px dashed #c7b66e; }
+.team-add-form__subhead small,
+.team-add-form__subhead strong { display: block; }
+.team-add-form__subhead small { color: #776b42; font-size: 6.5px; font-weight: 900; letter-spacing: .08em; }
+.team-add-form__subhead strong { margin-top: 3px; font-family: Georgia, serif; font-size: 12px; }
+.team-add-form__requirements { margin: 0; padding: 10px 11px; display: flex; flex-wrap: wrap; gap: 8px 16px; border: 1px dashed #c7b66e; border-radius: 10px; }
+.team-add-form__requirements legend { padding: 0 5px; color: #776b42; font-size: 7px; font-weight: 850; }
+.team-add-form__requirements label { display: flex; align-items: center; gap: 6px; color: #665b38; font-size: 8px; font-weight: 750; }
+.team-add-form__requirements input { width: 14px; height: 14px; }
+.team-add-form__classification {
+  margin: 0;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  background: rgba(255,255,255,.38);
+  border: 1px dashed #c7b66e;
+  border-radius: 12px;
+}
+.team-add-form__classification legend { padding: 0 6px; color: #665b38; font-size: 7px; font-weight: 900; letter-spacing: .04em; }
+.team-add-form__classification > p { grid-column: 1 / -1; margin: 0; color: #776b42; font-size: 7px; line-height: 1.45; }
+.team-add-form__classification label { padding: 8px; background: rgba(255,255,255,.52); border: 1px solid rgba(199,182,110,.55); border-radius: 9px; }
+.team-add-form__classification label > span { min-height: 22px; line-height: 1.35; }
+.team-add-form__classification select { height: 32px; }
+.classification-score { grid-column: 1 / -1; color: #4f6f50; font-size: 7px; font-weight: 800; }
+.classification-score--mismatch { color: #a14b3e; }
 .team-directory-error { margin: 0 0 14px; padding: 10px 12px; display: flex; align-items: center; gap: 7px; color: #91483b; background: var(--coral-soft); border: 1px solid #e4ada0; border-radius: 10px; font-size: 8.5px; }
 
 .member-grid {
@@ -2496,6 +2527,15 @@ button:focus-visible {
 .receipt-disclosure-form label { display: grid; gap: 4px; color: #765a54; font-size: 8px; font-weight: 850; }
 .receipt-disclosure-form input, .receipt-disclosure-form select { width: 100%; min-width: 0; padding: 9px 10px; color: var(--ink); background: var(--white); border: 1px solid #b98376; border-radius: 9px; font: inherit; }
 .receipt-disclosure-form p { margin: 0; color: #765a54; font-size: 7.5px; line-height: 1.45; }
+.disclosure-grant-list { margin-top: 12px; padding-top: 11px; display: grid; gap: 7px; border-top: 1px dashed #b98376; }
+.disclosure-grant-list > small { color: #765a54; font-size: 6.5px; font-weight: 900; letter-spacing: .08em; }
+.disclosure-grant-row { padding: 8px 9px; display: flex; align-items: center; justify-content: space-between; gap: 9px; background: rgba(255,255,255,.56); border: 1px solid rgba(185,131,118,.6); border-radius: 9px; }
+.disclosure-grant-row span { min-width: 0; }
+.disclosure-grant-row strong,
+.disclosure-grant-row span small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.disclosure-grant-row strong { font-size: 7.5px; }
+.disclosure-grant-row span small { margin-top: 3px; color: #765a54; font-size: 6.5px; }
+.disclosure-grant-row button { padding: 5px 7px; color: #8a4236; background: var(--coral-soft); border: 1px solid #b98376; border-radius: 7px; cursor: pointer; font-size: 7px; font-weight: 850; }
 
 .private-exceptions-card { background: var(--yellow-soft); box-shadow: 3px 3px 0 #cfbd76; }
 .private-exceptions-card > p,
@@ -2509,6 +2549,12 @@ button:focus-visible {
 .private-exception-counts { margin: 0 0 13px; display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .private-exception-counts span { padding: 8px; display: grid; gap: 2px; background: rgba(255, 253, 248, .68); border: 1px solid #cbb866; border-radius: 9px; color: #6d622f; font-size: 7px; }
 .private-exception-counts strong { color: var(--ink); font-family: Georgia, serif; font-size: 16px; }
+.private-exception-list { margin: 10px 0 12px; display: grid; gap: 7px; }
+.private-exception-row { padding: 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; background: rgba(255, 253, 248, .72); border: 1px solid #cbb866; border-radius: 9px; }
+.private-exception-row > span { min-width: 0; display: grid; gap: 2px; }
+.private-exception-row small { color: #6d622f; font-size: 7px; font-weight: 850; letter-spacing: .06em; text-transform: uppercase; }
+.private-exception-row strong { overflow: hidden; color: var(--ink); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.private-exception-row .button { flex: 0 0 auto; min-height: 31px; padding: 6px 9px; font-size: 7px; }
 
 .pool-status-card { min-height: 64px; padding: 13px 15px; display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; background: var(--ink); color: var(--white); border-radius: 15px; }
 .pool-pulse { width: 25px; height: 25px; display: grid; place-items: center; background: #344634; border-radius: 50%; }
@@ -2571,6 +2617,7 @@ button:focus-visible {
   .run-status { opacity: 0; }
 
   .member-grid { grid-template-columns: repeat(2, 1fr); }
+  .team-add-form__classification { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .activity-layout { grid-template-columns: 1fr; }
   .activity-side { grid-template-columns: 1fr 1fr; }
   .pool-status-card { grid-column: 1 / -1; }
@@ -2602,6 +2649,7 @@ button:focus-visible {
   .member-grid { grid-template-columns: 1fr; }
   .team-add-form { grid-template-columns: 1fr; }
   .team-add-form .button { grid-column: 1; }
+  .team-add-form__classification { grid-template-columns: 1fr; }
   .member-card { min-height: 205px; }
   .agent-access-card { grid-template-columns: 1fr; }
   .scope-list { grid-template-columns: 1fr 1fr; }

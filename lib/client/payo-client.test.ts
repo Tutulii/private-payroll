@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { decryptVaultRecord, generateVaultPrincipal } from "@/lib/crypto/vault";
 import { deriveRunNullifier } from "@/lib/crypto/commitments";
+import type { SerializedPayrollIntegrityBuildRequest } from "@/lib/proof/input-builder";
 import { prepareEncryptedPayrollRun } from "./payo-client";
 
 describe("client-encrypted payroll preparation", () => {
@@ -27,6 +28,7 @@ describe("client-encrypted payroll preparation", () => {
         fxRoot: `0x${"dd".repeat(32)}`,
         runNullifier,
       },
+      claimProofSource: { buildInput: {} as SerializedPayrollIntegrityBuildRequest },
       lineRecordMetadata: [{
         agreementId,
         payeeId,

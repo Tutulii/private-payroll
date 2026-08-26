@@ -1,0 +1,292 @@
+{
+  "schemaVersion": "payo.phase3.exception-ui-origin.v1",
+  "generatedAt": "2026-08-26T11:03:24.987Z",
+  "organizationId": "018f1000-0000-7000-8000-000000000004",
+  "runId": "018f1000-0000-7000-8000-000000000005",
+  "recipientAddress": "0x078662e7352d062084b0010068b99288486c2d8b914f6e2a55ce945f8792c8b1",
+  "formInputCommitments": {
+    "agreement": "0x088b58d3977204d217a5c26fd8da64670c1d8f9639e8c8732e5aaab30e20b5d4",
+    "claim": "0x54266b1940cee8f9902d5383d670c0e14595d68729f905a63f9b883325ad8d92",
+    "remediation": "0x46d2efbff7d858e1a296bfd3ed809075b395f0275821de6c8b2bb0e9904e394c"
+  },
+  "payee": {
+    "schemaVersion": 1,
+    "id": "01a03dba-1380-74e7-880f-407122e27339",
+    "organizationId": "018f1000-0000-7000-8000-000000000004",
+    "revision": 1,
+    "createdAt": "2026-08-26T11:00:00.000Z",
+    "updatedAt": "2026-08-26T11:00:00.000Z",
+    "principalId": "01a03dba-1381-7063-9784-4f843e547837",
+    "principalKind": "human",
+    "displayName": "Synthetic claimant",
+    "recipientAddress": "0x078662e7352d062084b0010068b99288486c2d8b914f6e2a55ce945f8792c8b1",
+    "tokenPreference": "STRK",
+    "jurisdictionCode": "US",
+    "status": "active"
+  },
+  "agreementRecord": {
+    "schemaVersion": 1,
+    "id": "01a03dba-1380-73f4-b451-c70ca6340c9f",
+    "organizationId": "018f1000-0000-7000-8000-000000000004",
+    "revision": 1,
+    "createdAt": "2026-08-26T11:00:00.000Z",
+    "updatedAt": "2026-08-26T11:00:00.000Z",
+    "payeeId": "01a03dba-1380-74e7-880f-407122e27339",
+    "agreement": {
+      "id": "01a03dba-1381-7cda-9c91-872d5add691a",
+      "organizationId": "018f1000-0000-7000-8000-000000000004",
+      "principalKind": "human",
+      "classification": "contractor",
+      "classificationFactsCommitment": "0x1f59b834f5dd6285e67c347a64ffc82c0be0e217fbed4e1b5b823078aa1cde75",
+      "classificationAssessment": {
+        "assessmentVersion": "payo-classification-assessment-v1",
+        "rubricVersion": "payo-classification-facts-v1",
+        "answers": {
+          "companyControlsSchedule": false,
+          "companyControlsMethod": false,
+          "companyProvidesPrimaryTools": false,
+          "relationshipIsOngoing": false,
+          "workerIsEconomicallyDependent": false,
+          "workIsCoreToBusiness": false
+        },
+        "score": 0,
+        "employeeThreshold": 4,
+        "treatment": "contractor",
+        "reviewedAt": "2026-08-26T11:00:00.000Z",
+        "assessorCommitment": "0xd4409585b7bb9c03ac5f3a2607cf82f5437cf9270ea276aafed3747517195c63",
+        "salt": "0x95e996123b2c020e5af8ec866d3ba8d297bc67dcf5258baa34cf23ec2ad0e3a6"
+      },
+      "jurisdictionCode": "US",
+      "settlementToken": "STRK",
+      "earningsAtomic": [
+        "3"
+      ],
+      "schedule": {
+        "kind": "recurring",
+        "cadence": "monthly",
+        "nextDueAt": "1970-01-01T00:16:40.000Z"
+      },
+      "statutoryPolicy": {
+        "catalogRoot": "0x16575a4f2517b43a894ae1d8ad892448892830da2cb8162b50354f396e3d6073",
+        "policyId": "payo-net-invoice-no-withholding-v1",
+        "policyVersion": 1
+      },
+      "agreementVersion": "payo-agreement-v2",
+      "paymentPlan": {
+        "planVersion": "payo-payment-plan-v1",
+        "kind": "recurring",
+        "cadence": "monthly",
+        "anchorAt": "1970-01-01T00:16:40.000Z",
+        "nextDueAt": "1970-01-01T00:16:40.000Z",
+        "occurrence": 0
+      },
+      "planSalt": "0xfbff75662c17869c80205ed7f679dd4bbbd4bd53f84a008894a09efe1adf3b42"
+    },
+    "recipientCommitment": "0xcbdecec7a240bfccc41b762b0658a380eb80d044359b82d08d6b1f2668bc1e3c",
+    "recipientSalt": "0x2dfdc7265ec9fe3524d1e9255133c10c2352f827b778ab765d56353a1cc122a2",
+    "agreementSalt": "0x1f59b834f5dd6285e67c347a64ffc82c0be0e217fbed4e1b5b823078aa1cde75",
+    "agreementCommitment": "0xb0a77dbe931b79c92927caca55b58fdc3e6f76fc55df452695c9437a336e8c66",
+    "proofScheduleCommitment": "0x208e6ce05c09e71fe77bcb49d75c6682d4677c5ffc0c4acbdbbbef867683ff9c",
+    "effectiveFrom": "2026-08-26T11:00:00.000Z"
+  },
+  "agreementEnvelope": {
+    "version": 1,
+    "algorithm": "XCHACHA20-POLY1305+X25519-HKDF-SHA256",
+    "aad": {
+      "schemaVersion": 1,
+      "organizationId": "018f1000-0000-7000-8000-000000000004",
+      "recordType": "pay-agreement",
+      "recordId": "01a03dba-1380-73f4-b451-c70ca6340c9f",
+      "revision": 1
+    },
+    "nonce": "tYNiDAEMoFCPzxMbzJW4gooZaSvQiCS7",
+    "ciphertext": "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",
+    "wrappedKeys": [
+      {
+        "principalId": "phase3-exception-ui-evidence",
+        "ephemeralPublicKey": "ru6ylby0sncuen6uZLrk0Dmk+GrB8Rk2Gk16mxCW0To=",
+        "nonce": "hlp7yfln/r5956Ol7rnznO1f7RQspDK7",
+        "ciphertext": "L6p33RTcZnnfUOfTny/slFbhbWheFVBNBZr9Q4fqz463V8VhGSlfbsT3n02ZF8Jo"
+      }
+    ]
+  },
+  "claimDraft": {
+    "schemaVersion": 1,
+    "id": "01a03dba-138a-72ee-9fa0-e084c21f7951",
+    "organizationId": "018f1000-0000-7000-8000-000000000004",
+    "revision": 1,
+    "createdAt": "2026-08-26T11:00:00.010Z",
+    "updatedAt": "2026-08-26T11:00:00.010Z",
+    "agreementId": "01a03dba-1381-7cda-9c91-872d5add691a",
+    "runId": "018f1000-0000-7000-8000-000000000005",
+    "claimSalt": "0x714a651eea9e3a1f1137165732e35c925a5e417a1de4f7b17d16a1cb96233411",
+    "claimKind": "missing_obligation",
+    "state": "draft"
+  },
+  "claimEnvelope": {
+    "version": 1,
+    "algorithm": "XCHACHA20-POLY1305+X25519-HKDF-SHA256",
+    "aad": {
+      "schemaVersion": 1,
+      "organizationId": "018f1000-0000-7000-8000-000000000004",
+      "recordType": "wage-claim",
+      "recordId": "01a03dba-138a-72ee-9fa0-e084c21f7951",
+      "revision": 1
+    },
+    "nonce": "UiebNQ+xHqJfLaVv4pDYfLoud/2ub4/k",
+    "ciphertext": "4nYRpltM/lNL6FJygU6SFXshQHH+iFPdEK48dfN4gY7Cm5AIKNx5w1gQi6+3lzSYpOUECwLCMQCZnr+5T0ziy3d6nVbE8Ya7o6e8tlaZsCeUjKyt1tIA9xU0EeEaANGvro0s5NFGr5pPeaw9AAWsvHBYaMZV0KdC/HWmWpnUhbaSBJGBT6rSfOmatGDWsDOBZmsBZi9OHL47nbWrthMJA3kRrieFwQGv5LrFPf58+ijEy4wB1FtlEb4FO0Q+8JNPPTRQymu0pP4aXrL8jw1GKbbrm4MPvayIhsoefqJmI/DxTyUTQ89tKPHqFvJo066AwSG2ogoLckdmO5/TN2WCKoZUF6BjFUge6z+2sd2RRvmKzVZn/RllM3jJZfqLJKZMbmp/S/UNdFSpt7UIN5j64zO9eF6/Im7XFPfM7GAzBARjzFhLBWBYHfWL8OGkfLpAm5shjHbtv6Q23PoTuxF5qh0d/6icyiSE0cFdQaFe2lyg+CtIjv67Iyu9d+hXj0qCpMnELuiRg9pWOgt8IGRcrXqUrlSJb2kzMyl6mM3eNq4SewVd+RvJscOCXHq9uGI2HO64zU4vjtT8fPUq1ec9iZ2uW+pE0Ji2",
+    "wrappedKeys": [
+      {
+        "principalId": "phase3-exception-ui-evidence",
+        "ephemeralPublicKey": "6iPeB0c7irM9i8Ri/tbpkUZcMMYqEWFemac5atLrSWw=",
+        "nonce": "njKWtzxQBfzc+6TEcyFsq6+2bMUHTpfQ",
+        "ciphertext": "o8sVf9TKfmKBqi7p1P3agIPZRBw7hus4HyLYSbdKYkXDzRmMqmsRbEvFazwJgRHG"
+      }
+    ]
+  },
+  "submittedClaim": {
+    "schemaVersion": 1,
+    "id": "01a03dba-138a-72ee-9fa0-e084c21f7951",
+    "organizationId": "018f1000-0000-7000-8000-000000000004",
+    "revision": 2,
+    "createdAt": "2026-08-26T11:00:00.010Z",
+    "updatedAt": "2026-08-26T11:00:00.020Z",
+    "agreementId": "01a03dba-1381-7cda-9c91-872d5add691a",
+    "runId": "018f1000-0000-7000-8000-000000000005",
+    "claimNullifier": "0x9fe1eabba7fa71f877babfe7896cee252a91c7af4509b894286372597fe6c816",
+    "claimSalt": "0x714a651eea9e3a1f1137165732e35c925a5e417a1de4f7b17d16a1cb96233411",
+    "claimKind": "missing_obligation",
+    "shortfallAtomic": "3",
+    "token": "STRK",
+    "proofBundleId": "018f1000-0000-7000-8000-000000000006",
+    "settlementId": "018f1000-0000-7000-8000-000000000007",
+    "state": "submitted"
+  },
+  "remediationDraft": {
+    "schemaVersion": 1,
+    "id": "01a03dba-139e-775b-bfca-63d4701d4e50",
+    "organizationId": "018f1000-0000-7000-8000-000000000004",
+    "revision": 1,
+    "createdAt": "2026-08-26T11:00:00.030Z",
+    "updatedAt": "2026-08-26T11:00:00.030Z",
+    "claimId": "01a03dba-138a-72ee-9fa0-e084c21f7951",
+    "runId": "018f1000-0000-7000-8000-000000000005",
+    "agreementId": "01a03dba-1381-7cda-9c91-872d5add691a",
+    "claimNullifier": "0x9fe1eabba7fa71f877babfe7896cee252a91c7af4509b894286372597fe6c816",
+    "amountAtomic": "3",
+    "token": "STRK",
+    "remediationSalt": "0x8cb5faff0a4b2ed2cd4aec859d6f98d51cc62beb4390ad218a35614f752249a7",
+    "state": "draft"
+  },
+  "remediationEnvelope": {
+    "version": 1,
+    "algorithm": "XCHACHA20-POLY1305+X25519-HKDF-SHA256",
+    "aad": {
+      "schemaVersion": 1,
+      "organizationId": "018f1000-0000-7000-8000-000000000004",
+      "recordType": "remediation",
+      "recordId": "01a03dba-139e-775b-bfca-63d4701d4e50",
+      "revision": 1
+    },
+    "nonce": "iN7jpn1L9ziVkYUD0QHIjrf3MqYjevRm",
+    "ciphertext": "D7kJYk9CUYT6iWgaGSiLngEsa9IKjR9OdX3RA+IjrSR5lxfNIRh0YxT54p4pLlR0vZ+Q8t9tFvETU9YNQHmNCWvXuBQwj9Z/N8n3+7k7WhRo9mOVbT5i1Xe99qXJ1feBcuLkqXF532R8qUttyrvYegj+XjyKFR8V/4VIlKQKhw9utJhZOTzGJKtWccp6C2p17k274Rfqm+wpag5A9DSMRrfAVQKMLswdJKcj6mC/k2oPp1CKlTEsJlm5w+ZJbVrwPLrXCaNjO4jyHHnzauWi9YIBuodUMlWdwL4jCzCbH+l+GcNPZ2QZN5nj6PUgcVv34YPHAuOv/RYztTwj2fw/QzD/bex+QaN+P07JRwrb7aphT3jw1cGbc3S3xS9/pdtfK3VrYy1yvB+9/8hU/2YFmDqe/zce+trApU+AsjmR5Rz573PwPpJ2OjkEKD5jqAxvWLiZ/49Kb+iTEzdW/tCk89iA+7L1wP2FUcqiMPMZ0/PuyGpHezhIq1lTkHPwiIJvF65XCTTGtmXa0gFvc3AlcD3bele9GtuQ7vKr6Xmu2kXqtWVbGlr5tVtdUQI5SZ0CanoQVN7hjvb2BzMB8AEfiVSFAfCV6DapKKUzifUxfV3btuOUQsuvTc6MzicNvjnw5JwDDl6ovrF4UojT5hKa9OdAZG2+QkbJvFA9yvF3IDhskfDlcWcq2UN3kMVR5g9crH26jqMqmfVhchriY/qe8rtPs5lUwJi3BrpMU4G5hgu42o8fKvq6nRSGUaueKWWRI/3JdUO2ip1xFxkyVmvj/L7r/vk5AQ==",
+    "wrappedKeys": [
+      {
+        "principalId": "phase3-exception-ui-evidence",
+        "ephemeralPublicKey": "tzMdueqihNUlJBbY8eRWcEZDQYJbk9mMa9Wv8N6jBGU=",
+        "nonce": "QMT3qylKQLaTqRZqeifj0AzDwEtIjzjS",
+        "ciphertext": "Vd4LRCt4yeaFd3cw76s5E+M7fu36Ygq8ogKvPYNIz0FUiYPkFBzJrBnNaYSP6YEo"
+      }
+    ]
+  },
+  "payrollRequest": {
+    "chainId": "0x534e5f5345504f4c4941",
+    "sealAddress": "0x1baedaf40fc4798951c681b63f2b31954709e1f4caf07c13d69036e57995c1f",
+    "organizationSecret": "0x1515151515151515151515151515151515151515151515151515151515151515",
+    "cycleId": "phase3-wage-claim-proof",
+    "revision": 2,
+    "validityStart": "1000",
+    "validityExpiry": "2000",
+    "policies": [
+      {
+        "packVersion": "payo-policy-pack-v1",
+        "id": "payo-net-invoice-no-withholding-v1",
+        "revision": 1,
+        "jurisdictionCode": "US",
+        "appliesTo": [
+          "contractor",
+          "agent_service"
+        ],
+        "effectiveFrom": "2026-01-01",
+        "effectiveUntil": "2027-12-31",
+        "sourceUri": "https://github.com/Tutulii/private-payroll/blob/main/docs/policies/net-invoice-v1.md",
+        "legalReviewRequired": true,
+        "instructions": [
+          {
+            "op": "CONST",
+            "out": "no_withholding",
+            "value": "0"
+          }
+        ],
+        "outputs": {
+          "statutoryWithholding": "no_withholding"
+        }
+      }
+    ],
+    "fxSnapshots": [
+      {
+        "snapshotVersion": "payo-fx-snapshot-v1",
+        "baseToken": "STRK",
+        "referenceCurrency": "USD",
+        "feedId": "STRK/USD",
+        "quoteDecimals": 6,
+        "medianPriceAtomic": "250000",
+        "conservativePriceAtomic": "250000",
+        "haircutBps": 0,
+        "observedAt": "1970-01-01T00:16:30.000Z",
+        "minimumSourceCount": 3,
+        "maximumAgeSeconds": 300,
+        "sources": [
+          {
+            "source": "pragma-strk",
+            "priceAtomic": "250000",
+            "observedAt": "1970-01-01T00:16:30.000Z"
+          }
+        ],
+        "aggregatedSourceCount": 5
+      }
+    ],
+    "lines": [
+      {
+        "agreementId": "01a03dba-1381-7cda-9c91-872d5add691a",
+        "recipientAddress": "0x078662e7352d062084b0010068b99288486c2d8b914f6e2a55ce945f8792c8b1",
+        "recipientSalt": "0x2dfdc7265ec9fe3524d1e9255133c10c2352f827b778ab765d56353a1cc122a2",
+        "agreementSalt": "0x1f59b834f5dd6285e67c347a64ffc82c0be0e217fbed4e1b5b823078aa1cde75",
+        "lineSalt": "0x1818181818181818181818181818181818181818181818181818181818181818",
+        "token": "STRK",
+        "earningsAtomic": [
+          "3"
+        ],
+        "deductionsAtomic": [],
+        "policyId": "payo-net-invoice-no-withholding-v1",
+        "scheduleCommitment": "0x208e6ce05c09e71fe77bcb49d75c6682d4677c5ffc0c4acbdbbbef867683ff9c",
+        "dueAt": "1000",
+        "validUntil": "2000",
+        "classification": {
+          "declared": 2,
+          "score": 2,
+          "employeeThreshold": 5
+        },
+        "fxFloorAtomic": "0",
+        "referenceCurrency": "USD"
+      }
+    ]
+  },
+  "checks": {
+    "teamProductionCommand": "storeEncryptedAgreementFromForm",
+    "claimProductionCommand": "createEncryptedWageClaimDraft",
+    "remediationProductionCommand": "createEncryptedRemediationDraft",
+    "encryptedRoundTrips": true,
+    "plaintextAbsentFromEnvelopes": true
+  }
+}

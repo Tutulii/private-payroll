@@ -1,0 +1,368 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-26T10:59:14.820Z",
+  "passed": true,
+  "sourceMatrixEvidence": "evidence/phase3-private-settlement-devnet.json",
+  "manifestRoot": "0x0394189476bcd6a4ce59243479585a2358ace8782364bf9cd31e7b5c924eebaa",
+  "workerLineIndex": 4,
+  "workflowWorkerPackageCount": 7,
+  "packages": [
+    {
+      "scope": "worker",
+      "workflow": "checkpoint",
+      "agreementId": "01a03b5b-fb59-7712-93e8-8980a0ccd9ab",
+      "lineIndex": 0,
+      "grantId": "phase3-matrix-worker-checkpoint-grant-v1",
+      "recipientPrincipalId": "phase3-matrix-worker-checkpoint-recipient",
+      "recipientPublicKey": "60HdQDqMGI1ETJJG30Uxgswx4E8P4lxoR7xoLVAGNgc=",
+      "recipientPrivateKeyPersisted": false,
+      "packageCommitment": "0x95610c21fe1e24a46341cc83e46a4683002bf4d58283e1bd8f9b475cf6f271e5",
+      "verified": {
+        "scope": "worker",
+        "fieldScope": [
+          "identity",
+          "gross",
+          "deductions",
+          "net",
+          "token",
+          "schedule",
+          "classification",
+          "settlement"
+        ],
+        "fileNames": [
+          "disclosure.json",
+          "journal.csv",
+          "line-opening.json",
+          "manifest.json",
+          "proof.json",
+          "starknet-receipt.json",
+          "verification.json"
+        ]
+      },
+      "wrongRecipientRejected": true,
+      "expiredGrantRejected": true,
+      "revokedGrantRejected": true,
+      "encryptedPackagePath": "evidence/phase3-devnet-fixtures/advanced-matrix-worker-checkpoint-package.json"
+    },
+    {
+      "scope": "worker",
+      "workflow": "final-pay",
+      "agreementId": "01a03b5b-efa1-7dbd-a05f-788ddc4c34a9",
+      "lineIndex": 1,
+      "grantId": "phase3-matrix-worker-final-pay-grant-v1",
+      "recipientPrincipalId": "phase3-matrix-worker-final-pay-recipient",
+      "recipientPublicKey": "ijApg/fj2WdZ86VEvY4oJWbZDE4Op23qH9v1lqgHux0=",
+      "recipientPrivateKeyPersisted": false,
+      "packageCommitment": "0x240dbcb06df3253018bc93533b20d227b13b4b575729b4ab3895dba9a7e5a4e6",
+      "verified": {
+        "scope": "worker",
+        "fieldScope": [
+          "identity",
+          "gross",
+          "deductions",
+          "net",
+          "token",
+          "schedule",
+          "classification",
+          "settlement"
+        ],
+        "fileNames": [
+          "disclosure.json",
+          "journal.csv",
+          "line-opening.json",
+          "manifest.json",
+          "proof.json",
+          "starknet-receipt.json",
+          "verification.json"
+        ]
+      },
+      "wrongRecipientRejected": true,
+      "expiredGrantRejected": true,
+      "revokedGrantRejected": true,
+      "encryptedPackagePath": "evidence/phase3-devnet-fixtures/advanced-matrix-worker-final-pay-package.json"
+    },
+    {
+      "scope": "worker",
+      "workflow": "milestone",
+      "agreementId": "01a03b5b-f771-74a7-979b-c684019c5b3d",
+      "lineIndex": 2,
+      "grantId": "phase3-matrix-worker-milestone-grant-v1",
+      "recipientPrincipalId": "phase3-matrix-worker-milestone-recipient",
+      "recipientPublicKey": "BcgWv901E2Oj7KL4+UZycFU3/QGr02XR5zWT66GXWXM=",
+      "recipientPrivateKeyPersisted": false,
+      "packageCommitment": "0x244de71acc2d60b9cd78a91a823f565a00ce33782ca2bfe9c367c0e8a59d6923",
+      "verified": {
+        "scope": "worker",
+        "fieldScope": [
+          "identity",
+          "gross",
+          "deductions",
+          "net",
+          "token",
+          "schedule",
+          "classification",
+          "settlement"
+        ],
+        "fileNames": [
+          "disclosure.json",
+          "journal.csv",
+          "line-opening.json",
+          "manifest.json",
+          "proof.json",
+          "starknet-receipt.json",
+          "verification.json"
+        ]
+      },
+      "wrongRecipientRejected": true,
+      "expiredGrantRejected": true,
+      "revokedGrantRejected": true,
+      "encryptedPackagePath": "evidence/phase3-devnet-fixtures/advanced-matrix-worker-milestone-package.json"
+    },
+    {
+      "scope": "worker",
+      "workflow": "approved-adjustment",
+      "agreementId": "01a03b5b-ebb9-7d21-89ee-6a9152795f5b",
+      "lineIndex": 3,
+      "grantId": "phase3-matrix-worker-approved-adjustment-grant-v1",
+      "recipientPrincipalId": "phase3-matrix-worker-approved-adjustment-recipient",
+      "recipientPublicKey": "y2RBQnb9srXk5+U/FMz4v6MVN4N029v0hjo8QtU2cTg=",
+      "recipientPrivateKeyPersisted": false,
+      "packageCommitment": "0x810145714faf8fbcf91c68878873b4e06cb83f728dbb9ccdff62a86e663c8d1c",
+      "verified": {
+        "scope": "worker",
+        "fieldScope": [
+          "identity",
+          "gross",
+          "deductions",
+          "net",
+          "token",
+          "schedule",
+          "classification",
+          "settlement"
+        ],
+        "fileNames": [
+          "disclosure.json",
+          "journal.csv",
+          "line-opening.json",
+          "manifest.json",
+          "proof.json",
+          "starknet-receipt.json",
+          "verification.json"
+        ]
+      },
+      "wrongRecipientRejected": true,
+      "expiredGrantRejected": true,
+      "revokedGrantRejected": true,
+      "encryptedPackagePath": "evidence/phase3-devnet-fixtures/advanced-matrix-worker-approved-adjustment-package.json"
+    },
+    {
+      "scope": "worker",
+      "workflow": "statutory-fx-classification",
+      "agreementId": "01a03b5b-e7d1-76f0-bd0b-e7d16af3122b",
+      "lineIndex": 4,
+      "grantId": "phase3-matrix-worker-statutory-fx-classification-grant-v1",
+      "recipientPrincipalId": "phase3-matrix-worker-statutory-fx-classification-recipient",
+      "recipientPublicKey": "PWV6yMCXkgXoHMqL9bQfe981yHf6GwUjct6cRmHYQHs=",
+      "recipientPrivateKeyPersisted": false,
+      "packageCommitment": "0xac1c0e32711c5fd49cc0b6de55fdd40021be857d8193602a7acafb6065f51bfd",
+      "verified": {
+        "scope": "worker",
+        "fieldScope": [
+          "identity",
+          "gross",
+          "deductions",
+          "net",
+          "token",
+          "schedule",
+          "classification",
+          "settlement"
+        ],
+        "fileNames": [
+          "disclosure.json",
+          "journal.csv",
+          "line-opening.json",
+          "manifest.json",
+          "proof.json",
+          "starknet-receipt.json",
+          "verification.json"
+        ]
+      },
+      "wrongRecipientRejected": true,
+      "expiredGrantRejected": true,
+      "revokedGrantRejected": true,
+      "encryptedPackagePath": "evidence/phase3-devnet-fixtures/advanced-matrix-worker-package.json"
+    },
+    {
+      "scope": "worker",
+      "workflow": "vesting",
+      "agreementId": "01a03b5b-f389-771a-a735-44a8385741c9",
+      "lineIndex": 5,
+      "grantId": "phase3-matrix-worker-vesting-grant-v1",
+      "recipientPrincipalId": "phase3-matrix-worker-vesting-recipient",
+      "recipientPublicKey": "xK9Nnwc2OOz5I0v8f9PH8sZObwN04p+9mOhAmYwveW0=",
+      "recipientPrivateKeyPersisted": false,
+      "packageCommitment": "0x1df9bdb115c5d8dd9b9c1c84d94fdcd41c673b4504e3717eed74d03ca151879c",
+      "verified": {
+        "scope": "worker",
+        "fieldScope": [
+          "identity",
+          "gross",
+          "deductions",
+          "net",
+          "token",
+          "schedule",
+          "classification",
+          "settlement"
+        ],
+        "fileNames": [
+          "disclosure.json",
+          "journal.csv",
+          "line-opening.json",
+          "manifest.json",
+          "proof.json",
+          "starknet-receipt.json",
+          "verification.json"
+        ]
+      },
+      "wrongRecipientRejected": true,
+      "expiredGrantRejected": true,
+      "revokedGrantRejected": true,
+      "encryptedPackagePath": "evidence/phase3-devnet-fixtures/advanced-matrix-worker-vesting-package.json"
+    },
+    {
+      "scope": "worker",
+      "workflow": "recurring",
+      "agreementId": "01a03b5b-ff41-7314-9c6a-d43ca7657023",
+      "lineIndex": 6,
+      "grantId": "phase3-matrix-worker-recurring-grant-v1",
+      "recipientPrincipalId": "phase3-matrix-worker-recurring-recipient",
+      "recipientPublicKey": "+Fnjz3Bygl4JcizyIXtXQpq5pXb2V3r7gKG3u0aokBU=",
+      "recipientPrivateKeyPersisted": false,
+      "packageCommitment": "0x37d1b97c364f8f9f1da3a8b3ce1cb36a2c7ca26a4bb9f1717674fe69cbcbe6e2",
+      "verified": {
+        "scope": "worker",
+        "fieldScope": [
+          "identity",
+          "gross",
+          "deductions",
+          "net",
+          "token",
+          "schedule",
+          "classification",
+          "settlement"
+        ],
+        "fileNames": [
+          "disclosure.json",
+          "journal.csv",
+          "line-opening.json",
+          "manifest.json",
+          "proof.json",
+          "starknet-receipt.json",
+          "verification.json"
+        ]
+      },
+      "wrongRecipientRejected": true,
+      "expiredGrantRejected": true,
+      "revokedGrantRejected": true,
+      "encryptedPackagePath": "evidence/phase3-devnet-fixtures/advanced-matrix-worker-recurring-package.json"
+    },
+    {
+      "scope": "employer",
+      "grantId": "phase3-matrix-employer-grant-v1",
+      "recipientPrincipalId": "phase3-matrix-employer-recipient",
+      "recipientPublicKey": "Ic/t0F76qocA1H/4HIvNHizkK0ZZHmq2/qB4wbHSBEM=",
+      "recipientPrivateKeyPersisted": false,
+      "packageCommitment": "0x6c2e4000fb30881d697f561389e24457c96cb818db754615c688dd5896571074",
+      "verified": {
+        "scope": "employer",
+        "fieldScope": [
+          "identity",
+          "gross",
+          "deductions",
+          "net",
+          "token",
+          "schedule",
+          "classification",
+          "aggregate",
+          "settlement"
+        ],
+        "fileNames": [
+          "disclosure.json",
+          "journal.csv",
+          "manifest.json",
+          "proof.json",
+          "starknet-receipt.json",
+          "verification.json"
+        ]
+      },
+      "wrongRecipientRejected": true,
+      "expiredGrantRejected": true,
+      "revokedGrantRejected": true,
+      "encryptedPackagePath": "evidence/phase3-devnet-fixtures/advanced-matrix-employer-package.json"
+    },
+    {
+      "scope": "auditor",
+      "grantId": "phase3-matrix-auditor-grant-v1",
+      "recipientPrincipalId": "phase3-matrix-auditor-recipient",
+      "recipientPublicKey": "11QIfW91ns3Cgzc80D1DduVedIB4cNYho0+XXt1XjQ4=",
+      "recipientPrivateKeyPersisted": false,
+      "packageCommitment": "0x5fa4d251a13203bfea2d2abb8b6e39ec6ecde034b1b4a00758cb0718d8ccba2c",
+      "verified": {
+        "scope": "auditor",
+        "fieldScope": [
+          "gross",
+          "deductions",
+          "net",
+          "token",
+          "schedule",
+          "classification",
+          "aggregate",
+          "settlement"
+        ],
+        "fileNames": [
+          "disclosure.json",
+          "journal.csv",
+          "manifest.json",
+          "proof.json",
+          "starknet-receipt.json",
+          "verification.json"
+        ]
+      },
+      "wrongRecipientRejected": true,
+      "expiredGrantRejected": true,
+      "revokedGrantRejected": true,
+      "encryptedPackagePath": "evidence/phase3-devnet-fixtures/advanced-matrix-auditor-package.json"
+    },
+    {
+      "scope": "tax",
+      "grantId": "phase3-matrix-tax-grant-v1",
+      "recipientPrincipalId": "phase3-matrix-tax-recipient",
+      "recipientPublicKey": "ArqkzQ1DcYZTxPl2YqkC5qTqipQyQYboHBANtl7YqQ4=",
+      "recipientPrivateKeyPersisted": false,
+      "packageCommitment": "0x495b0ebe94d5f7db30b9f79df3630b0cb36e9283792634bedeca32edfd2cf537",
+      "verified": {
+        "scope": "tax",
+        "fieldScope": [
+          "gross",
+          "deductions",
+          "net",
+          "token",
+          "aggregate",
+          "settlement"
+        ],
+        "fileNames": [
+          "disclosure.json",
+          "journal.csv",
+          "manifest.json",
+          "proof.json",
+          "starknet-receipt.json",
+          "verification.json"
+        ]
+      },
+      "wrongRecipientRejected": true,
+      "expiredGrantRejected": true,
+      "revokedGrantRejected": true,
+      "encryptedPackagePath": "evidence/phase3-devnet-fixtures/advanced-matrix-tax-package.json"
+    }
+  ]
+}

@@ -27,6 +27,104 @@ export const fxSnapshotSchema = z.object({
 }).strict();
 export type FxSnapshot = z.infer<typeof fxSnapshotSchema>;
 
+export const pragmaProtectedFxSnapshotSchema = z.object({
+  snapshotVersion: z.literal("payo-pragma-fx-snapshot-v2"),
+  baseToken: payrollTokenSchema,
+  referenceCurrency: z.literal("USD"),
+  pairId: z.string().regex(/^(STRK|USDC)\/USD$/),
+  oracleAddress: z.string().regex(/^0x[0-9a-fA-F]+$/),
+  summaryStatsAddress: z.string().regex(/^0x[0-9a-fA-F]+$/),
+  blockNumber: atomicAmountSchema,
+  blockTimestamp: z.string().datetime(),
+  quoteDecimals: z.literal(6),
+  spotMedianPriceAtomic: atomicAmountSchema,
+  twapPriceAtomic: atomicAmountSchema,
+  selectedPriceAtomic: atomicAmountSchema,
+  conservativePriceAtomic: atomicAmountSchema,
+  selectionRule: z.literal("min_spot_median_twap"),
+  twapWindowSeconds: z.number().int().min(300).max(86_400),
+  haircutBps: z.number().int().min(0).max(5_000),
+  observedAt: z.string().datetime(),
+  sourceCount: z.number().int().min(1).max(255),
+  minimumSourceCount: z.number().int().min(1).max(255),
+  maximumAgeSeconds: z.number().int().positive().max(3_600),
+}).strict().superRefine((snapshot, context) => {
+  const selected = BigInt(snapshot.selectedPriceAtomic);
+  const expectedSelected = BigInt(snapshot.spotMedianPriceAtomic) < BigInt(snapshot.twapPriceAtomic)
+    ? BigInt(snapshot.spotMedianPriceAtomic)
+    : BigInt(snapshot.twapPriceAtomic);
+  if (selected !== expectedSelected) {
+    context.addIssue({ code: "custom", path: ["selectedPriceAtomic"], message: "Selected FX value must be the lower of spot median and TWAP." });
+  }
+  const expectedConservative = selected * BigInt(10_000 - snapshot.haircutBps) / 10_000n;
+  if (BigInt(snapshot.conservativePriceAtomic) !== expectedConservative) {
+    context.addIssue({ code: "custom", path: ["conservativePriceAtomic"], message: "Conservative FX value does not match the committed haircut." });
+  }
+  if (snapshot.sourceCount < snapshot.minimumSourceCount) {
+    context.addIssue({ code: "custom", path: ["sourceCount"], message: "Pragma FX snapshot has too few aggregated sources." });
+  }
+  const blockTime = new Date(snapshot.blockTimestamp).getTime();
+  const observationTime = new Date(snapshot.observedAt).getTime();
+  const ageSeconds = (blockTime - observationTime) / 1_000;
+  if (ageSeconds < 0 || ageSeconds > snapshot.maximumAgeSeconds) {
+    context.addIssue({ code: "custom", path: ["observedAt"], message: "Pragma FX snapshot is stale or future-dated at its pinned block." });
+  }
+});
+export type PragmaProtectedFxSnapshot = z.infer<typeof pragmaProtectedFxSnapshotSchema>;
+
+export function buildPragmaProtectedFxSnapshot(input: Omit<
+  PragmaProtectedFxSnapshot,
+  "snapshotVersion" | "selectionRule" | "selectedPriceAtomic" | "conservativePriceAtomic"
+>): PragmaProtectedFxSnapshot {
+  const spot = BigInt(atomicAmountSchema.parse(input.spotMedianPriceAtomic));
+  const twap = BigInt(atomicAmountSchema.parse(input.twapPriceAtomic));
+  if (spot === 0n || twap === 0n) throw new Error("Pragma returned a zero FX value.");
+  const selected = spot < twap ? spot : twap;
+  return pragmaProtectedFxSnapshotSchema.parse({
+    ...input,
+    snapshotVersion: "payo-pragma-fx-snapshot-v2",
+    selectionRule: "min_spot_median_twap",
+    selectedPriceAtomic: selected.toString(),
+    conservativePriceAtomic: (selected * BigInt(10_000 - input.haircutBps) / 10_000n).toString(),
+  });
+}
+
+export function pragmaProtectedFxSnapshotCommitment(
+  snapshotInput: PragmaProtectedFxSnapshot,
+): `0x${string}` {
+  const snapshot = pragmaProtectedFxSnapshotSchema.parse(snapshotInput);
+  return toHex(keccak_256(utf8(stableJson(snapshot))));
+}
+
+/**
+ * Adapts the fully validated Phase 3 observation into PayrollIntegrity's fixed
+ * v1 witness without dropping its provenance. The feed identifier commits the
+ * entire protected snapshot (oracle addresses, pinned block, median, TWAP,
+ * selection rule, freshness, source count, and haircut).
+ */
+export function protectedFxSnapshotToPayrollSnapshot(
+  snapshotInput: PragmaProtectedFxSnapshot,
+): FxSnapshot {
+  const snapshot = pragmaProtectedFxSnapshotSchema.parse(snapshotInput);
+  const protectedCommitment = pragmaProtectedFxSnapshotCommitment(snapshot);
+  return buildFxSnapshot({
+    baseToken: snapshot.baseToken,
+    referenceCurrency: snapshot.referenceCurrency,
+    quoteDecimals: snapshot.quoteDecimals,
+    haircutBps: snapshot.haircutBps,
+    maximumAgeSeconds: snapshot.maximumAgeSeconds,
+    minimumSources: snapshot.minimumSourceCount,
+    aggregatedSourceCount: snapshot.sourceCount,
+    feedId: `pragma-protected-v2:${snapshot.pairId}:${protectedCommitment}`,
+    quotes: [{
+      source: `pragma-protected-v2:${snapshot.pairId.toLowerCase()}`,
+      priceAtomic: snapshot.selectedPriceAtomic,
+      observedAt: snapshot.observedAt,
+    }],
+    now: new Date(snapshot.blockTimestamp),
+  });
+}
+
 export function buildFxSnapshot(input: {
   baseToken: "STRK" | "USDC";
   referenceCurrency: string;
