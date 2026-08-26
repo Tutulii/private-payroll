@@ -41,11 +41,11 @@ const STRK_ADDRESS =
 const action = process.argv[2];
 const actionArgument = process.argv[3];
 
-if (!["plan", "status", "estimate", "declare", "reconcile-declaration", "deploy-verifiers", "verify-verifiers"].includes(action)) {
+if (!["plan", "status", "estimate", "declare", "reconcile-declaration", "deploy-profile", "deploy-verifiers", "verify-verifiers"].includes(action)) {
   throw new Error(
     "Usage: node scripts/payo-phase3-mainnet.mjs "
       + "<plan|status|estimate|declare <name>|reconcile-declaration <name> <tx-hash>"
-      + "|deploy-verifiers|verify-verifiers>",
+      + "|deploy-profile <advanced|claim|remediation>|deploy-verifiers|verify-verifiers>",
   );
 }
 
@@ -407,6 +407,87 @@ if (action === "reconcile-declaration") {
   }
   const recorded = await recordDeclarationEvidence(plan, name, transactionHash, simulatedFeeFri);
   process.stdout.write(`${JSON.stringify({ name, ...recorded }, null, 2)}\n`);
+  process.exit(0);
+}
+
+if (action === "deploy-profile") {
+  const profile = actionArgument;
+  const profileContracts = {
+    advanced: ["advancedVerifier", "advancedBundle"],
+    claim: ["claimVerifier", "claimBundle"],
+    remediation: ["remediationVerifier", "remediationBundle"],
+  };
+  const names = profileContracts[profile];
+  if (!names) throw new Error("Deployment profile must be advanced, claim, or remediation.");
+  const expectedConfirmation = `DEPLOY_PAYO_PHASE3_${profile.toUpperCase()}_MAINNET`;
+  if (process.env.PAYO_PHASE3_MAINNET_CONFIRM !== expectedConfirmation) {
+    throw new Error(
+      `Refusing Mainnet deployment. Set PAYO_PHASE3_MAINNET_CONFIRM=${expectedConfirmation} `
+        + "only after the profile classes and fee are reviewed.",
+    );
+  }
+  const requiredDeclarations = profile === "advanced"
+    ? ["advancedVerifier", "advancedBundle"]
+    : [`${profile}Verifier`];
+  for (const name of requiredDeclarations) {
+    if (!(await classDeclared(plan.declarations[name].classHash))) {
+      throw new Error(`Refusing ${profile} deployment: ${name} is not declared.`);
+    }
+  }
+  const all = deploymentPayloads(plan, "verifiers");
+  const pending = [];
+  for (const item of all.filter((candidate) => names.includes(candidate.name))) {
+    const actual = await deployedClassHash(item.address);
+    if (actual) {
+      if (BigInt(actual) !== BigInt(plan.contracts[item.name].classHash)) {
+        throw new Error(`${item.name} address contains the wrong class.`);
+      }
+    } else {
+      pending.push(item);
+    }
+  }
+  if (pending.length === 0) {
+    process.stdout.write(`The ${profile} verifier profile is already deployed.\n`);
+    process.exit(0);
+  }
+  const fee = await account.estimateDeployFee(pending.map((item) => item.payload));
+  const balanceFri = await readRelayerBalance(plan.deployerAddress);
+  if (balanceFri < BigInt(fee.overall_fee)) {
+    throw new Error(`${profile} deployment requires ${fee.overall_fee} FRI; relayer has ${balanceFri} FRI.`);
+  }
+  const submitted = await account.deployContract(pending.map((item) => item.payload));
+  process.stdout.write(`${profile} deployment submitted transaction: ${submitted.transaction_hash}\n`);
+  try {
+    await waitFor(submitted.transaction_hash);
+  } catch (error) {
+    const readable = await Promise.all(pending.map((item) => deployedClassHash(item.address)));
+    if (readable.some((value, index) => !value
+      || BigInt(value) !== BigInt(plan.contracts[pending[index].name].classHash))) throw error;
+    process.stderr.write(
+      `${profile} waiter reported ${normalizeError(error)}, but every class read-back succeeded; reconciling receipt.\n`,
+    );
+  }
+  for (const item of pending) {
+    const actual = await deployedClassHash(item.address);
+    if (!actual || BigInt(actual) !== BigInt(plan.contracts[item.name].classHash)) {
+      throw new Error(`${item.name} failed post-deployment class-hash verification.`);
+    }
+  }
+  const receipt = await provider.getTransactionReceipt(submitted.transaction_hash);
+  const entry = {
+    names: pending.map((item) => item.name),
+    transactionHash: submitted.transaction_hash,
+    simulatedFeeFri: fee.overall_fee.toString(),
+    actualFeeFri: BigInt(receipt.actual_fee?.amount ?? 0).toString(),
+    blockNumber: receipt.block_number,
+    finalityStatus: receipt.finality_status,
+    executionStatus: receipt.execution_status,
+  };
+  await updateEvidence(plan, async (evidence) => ({
+    ...evidence,
+    deployments: { ...evidence.deployments, [profile]: entry },
+  }));
+  process.stdout.write(`${JSON.stringify({ profile, ...entry }, null, 2)}\n`);
   process.exit(0);
 }
 
