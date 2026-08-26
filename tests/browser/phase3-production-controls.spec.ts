@@ -135,9 +135,11 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
       "checkpoint_stream",
       "milestone",
       "private_vesting",
-      "approved_adjustment",
-      "final_pay",
     ]));
+  expect(agreements.some(({ plaintext }) =>
+    Boolean((plaintext.agreement as { adjustment?: unknown }).adjustment))).toBe(true);
+  expect(agreements.some(({ plaintext }) =>
+    Boolean((plaintext.agreement as { termination?: unknown }).termination))).toBe(true);
   const statutory = agreements.find(({ plaintext }) =>
     (plaintext.agreement as { classification: string }).classification === "employee");
   expect(statutory).toBeTruthy();
