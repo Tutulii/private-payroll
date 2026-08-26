@@ -31,4 +31,4 @@ primary_region = "sin"
 
 [[vm]]
   size = "performance-4x"
-  memory = "8gb"
+  memory = "32gb"
