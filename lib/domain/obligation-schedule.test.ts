@@ -20,6 +20,7 @@ describe("opaque obligation scheduling", () => {
     const safe = {
       organizationId: "0198e148-2420-7ae0-8000-000000000001",
       schedules: [{
+        vaultRecordId: "0198e148-2420-7ae0-8000-000000000003",
         agreementId: "0198e148-2420-7ae0-8000-000000000002",
         agreementRevision: 1,
         scheduleCommitment: `0x${"ab".repeat(32)}`,

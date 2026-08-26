@@ -3,8 +3,8 @@ import "server-only";
 import { and, asc, eq, isNull, lte, sql } from "drizzle-orm";
 import { assertOperationalMetadataSafe } from "@/lib/domain/privacy";
 import {
-  obligationScheduleItemSchema,
-  type ObligationScheduleItem,
+  obligationScheduleRegistrationSchema,
+  type ObligationScheduleRegistration,
 } from "@/lib/domain/obligation-schedule";
 import { generateUuidV7 } from "@/lib/domain/records";
 import type { AuthenticatedPrincipal } from "@/lib/server/auth";
@@ -13,7 +13,7 @@ import { getDatabase } from "./db";
 import { requireOrganizationRole, requireOrganizationRoleWith } from "./repository";
 import { auditEvents, obligationSchedules, vaultRecords } from "./schema";
 
-function scheduleIdentity(schedule: ObligationScheduleItem): string {
+function scheduleIdentity(schedule: ObligationScheduleRegistration): string {
   return `${schedule.agreementId}:${schedule.agreementRevision}`;
 }
 
@@ -23,14 +23,14 @@ function sameInstant(left: Date, right: string): boolean {
 
 export async function registerObligationSchedules(input: {
   organizationId: string;
-  schedules: readonly ObligationScheduleItem[];
+  schedules: readonly ObligationScheduleRegistration[];
   principal: AuthenticatedPrincipal;
   now?: Date;
 }) {
   if (input.schedules.length < 1 || input.schedules.length > 100) {
     throw new ApiError(400, "An obligation schedule batch must contain 1–100 entries.", "SCHEDULE_BATCH_SIZE_INVALID");
   }
-  const schedules = input.schedules.map((schedule) => obligationScheduleItemSchema.parse(schedule));
+  const schedules = input.schedules.map((schedule) => obligationScheduleRegistrationSchema.parse(schedule));
   const identities = schedules.map(scheduleIdentity);
   if (new Set(identities).size !== identities.length) {
     throw new ApiError(400, "An obligation schedule batch contains duplicate revisions.", "SCHEDULE_BATCH_DUPLICATE");
@@ -50,7 +50,7 @@ export async function registerObligationSchedules(input: {
         .from(vaultRecords)
         .where(and(
           eq(vaultRecords.organizationId, input.organizationId),
-          eq(vaultRecords.id, schedule.agreementId),
+          eq(vaultRecords.id, schedule.vaultRecordId),
           eq(vaultRecords.revision, schedule.agreementRevision),
           eq(vaultRecords.recordType, "pay-agreement"),
           isNull(vaultRecords.supersededAt),

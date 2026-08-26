@@ -11,7 +11,7 @@ import {
   type PrivatePayrollLine,
 } from "@/lib/domain/payroll";
 import type { FxSnapshot, PragmaProtectedFxSnapshot } from "@/lib/domain/fx";
-import type { DueObligationSignal, ObligationScheduleItem } from "@/lib/domain/obligation-schedule";
+import type { DueObligationSignal, ObligationScheduleItem, ObligationScheduleRegistration } from "@/lib/domain/obligation-schedule";
 import { generateUuidV7, payrollLineRecordSchema } from "@/lib/domain/records";
 import type { EncryptedPayrollIntegrityBundleCreate } from "@/lib/domain/proof-bundle";
 import type {
@@ -478,7 +478,7 @@ export class PayoClient {
 
   async registerObligationSchedules(input: {
     organizationId: string;
-    schedules: ObligationScheduleItem[];
+    schedules: ObligationScheduleRegistration[];
   }) {
     return this.request<{
       schedules: Array<ObligationScheduleItem & { materializedAt: string | null; replayed: boolean }>;

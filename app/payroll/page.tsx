@@ -139,6 +139,7 @@ export default function PayrollPage() {
   const [obligationRootChecking, setObligationRootChecking] = useState(false);
   const [runsLoading, setRunsLoading] = useState(false);
   const [dueScheduleKeys, setDueScheduleKeys] = useState<Set<string>>(() => new Set());
+  const [scheduleSyncError, setScheduleSyncError] = useState("");
   const [dashboardNow, setDashboardNow] = useState(() => Date.now());
   const refreshInFlight = useRef(false);
 
@@ -185,7 +186,7 @@ export default function PayrollPage() {
     () => lockedPayrollScheduleCommitments(payrollRuns),
     [payrollRuns],
   );
-  const dueObligations = useMemo(() => agreements.flatMap((agreement) => {
+  const locallyDueObligations = useMemo(() => agreements.flatMap((agreement) => {
     const payee = payees.find(({ id }) => id === agreement.payeeId);
     const scheduleKey = `${agreement.agreement.id}:${recordProofScheduleCommitment(agreement).toLowerCase()}`;
     if (
@@ -193,11 +194,13 @@ export default function PayrollPage() {
       || payee.status !== "active"
       || agreement.effectiveUntil
       || lockedScheduleKeys.has(scheduleKey)
-      || !dueScheduleKeys.has(scheduleKey)
       || !isAgreementDue(agreement.agreement, new Date(dashboardNow))
     ) return [];
     return [{ agreement, payee }];
-  }).slice(0, 50), [agreements, dashboardNow, dueScheduleKeys, lockedScheduleKeys, payees]);
+  }).slice(0, 50), [agreements, dashboardNow, lockedScheduleKeys, payees]);
+  const dueObligations = useMemo(() => locallyDueObligations.filter(({ agreement }) =>
+    dueScheduleKeys.has(`${agreement.agreement.id}:${recordProofScheduleCommitment(agreement).toLowerCase()}`)),
+  [dueScheduleKeys, locallyDueObligations]);
   const selectedObligations = useMemo(() => dueObligations.filter(({ agreement }) =>
     selectedAgreementIds.includes(agreement.id)), [dueObligations, selectedAgreementIds]);
   const selectedProofProfile = selectedObligations[0]?.agreement.agreement.agreementVersion === "payo-agreement-v2"
@@ -219,6 +222,7 @@ export default function PayrollPage() {
       setAgreements([]);
       setSelectedAgreementIds([]);
       setDueScheduleKeys(new Set());
+      setScheduleSyncError("");
       return;
     }
     if (refreshInFlight.current) return;
@@ -314,42 +318,54 @@ export default function PayrollPage() {
         runs: decrypted,
         principal: vault.session.principal,
       });
-      const activeSchedules = synchronizedAgreements
-        .filter(({ effectiveUntil }) => !effectiveUntil)
-        .map(obligationScheduleForRecord);
-      if (activeSchedules.length > 0) {
-        await vault.client.registerObligationSchedules({
-          organizationId: vault.session.organizationId,
-          schedules: activeSchedules,
-        });
-      }
-      const dueScheduleListing = await vault.client.listDueObligationSchedules(
-        vault.session.organizationId,
-        100,
-      );
-      const schedulerKeys = new Set(dueScheduleListing.schedules.map(({ agreementId, scheduleCommitment }) =>
-        `${agreementId}:${scheduleCommitment.toLowerCase()}`));
+      // Directory data remains usable even if the operational scheduler is
+      // temporarily unavailable. Never misreport existing encrypted records
+      // as missing merely because schedule synchronization failed.
       setPayrollRuns(decrypted);
       setPayees(loadedPayees);
       setAgreements(synchronizedAgreements);
-      setDueScheduleKeys(schedulerKeys);
       setDashboardNow(Date.now());
-      const locked = lockedPayrollScheduleCommitments(decrypted);
-      const dueIds = synchronizedAgreements.flatMap((agreement) => {
-        const payee = loadedPayees.find(({ id }) => id === agreement.payeeId);
-        return payee?.status === "active"
-          && !agreement.effectiveUntil
-          && !locked.has(`${agreement.agreement.id}:${recordProofScheduleCommitment(agreement)}`)
-          && schedulerKeys.has(`${agreement.agreement.id}:${recordProofScheduleCommitment(agreement).toLowerCase()}`)
-          && isAgreementDue(agreement.agreement, new Date())
-          ? [agreement.id]
-          : [];
-      }).slice(0, 50);
-      setSelectedAgreementIds((current) => reconcileProofProfileSelection({
-        current,
-        dueIds,
-        agreements: synchronizedAgreements,
-      }));
+      const activeSchedules = synchronizedAgreements
+        .filter(({ effectiveUntil }) => !effectiveUntil)
+        .map(obligationScheduleForRecord);
+      try {
+        if (activeSchedules.length > 0) {
+          await vault.client.registerObligationSchedules({
+            organizationId: vault.session.organizationId,
+            schedules: activeSchedules,
+          });
+        }
+        const dueScheduleListing = await vault.client.listDueObligationSchedules(
+          vault.session.organizationId,
+          100,
+        );
+        const schedulerKeys = new Set(dueScheduleListing.schedules.map(({ agreementId, scheduleCommitment }) =>
+          `${agreementId}:${scheduleCommitment.toLowerCase()}`));
+        setDueScheduleKeys(schedulerKeys);
+        setScheduleSyncError("");
+        const locked = lockedPayrollScheduleCommitments(decrypted);
+        const dueIds = synchronizedAgreements.flatMap((agreement) => {
+          const payee = loadedPayees.find(({ id }) => id === agreement.payeeId);
+          return payee?.status === "active"
+            && !agreement.effectiveUntil
+            && !locked.has(`${agreement.agreement.id}:${recordProofScheduleCommitment(agreement)}`)
+            && schedulerKeys.has(`${agreement.agreement.id}:${recordProofScheduleCommitment(agreement).toLowerCase()}`)
+            && isAgreementDue(agreement.agreement, new Date())
+            ? [agreement.id]
+            : [];
+        }).slice(0, 50);
+        setSelectedAgreementIds((current) => reconcileProofProfileSelection({
+          current,
+          dueIds,
+          agreements: synchronizedAgreements,
+        }));
+      } catch (scheduleError) {
+        setDueScheduleKeys(new Set());
+        setSelectedAgreementIds([]);
+        setScheduleSyncError(scheduleError instanceof Error
+          ? scheduleError.message
+          : "The durable payroll schedule could not be synchronized.");
+      }
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "Encrypted payroll history could not be loaded.");
     } finally {
@@ -1121,20 +1137,26 @@ export default function PayrollPage() {
               {!runsLoading && vault.session && dueObligations.length === 0 && (
                 <div className="directory-empty payroll-empty-guide">
                   <CalendarDays size={24} />
-                  <strong>{!hasActivePayee ? "Add a payroll recipient" : !hasActiveAgreement ? "Add their private pay agreement" : "No agreement is due yet"}</strong>
+                  <strong>{!hasActivePayee ? "Add a payroll recipient" : !hasActiveAgreement ? "Add their private pay agreement" : scheduleSyncError ? "Payroll schedule unavailable" : locallyDueObligations.length > 0 ? "Preparing due agreements" : "No agreement is due yet"}</strong>
                   <p>{!hasActivePayee
                     ? "PAYO sends from proof-bound agreements, so the first payment starts with a registered recipient."
                     : !hasActiveAgreement
                       ? "The recipient exists. Commit their amount, token, classification, cadence, and first due time."
-                      : "The agreement exists, but its committed next-due time is still in the future."}</p>
+                      : scheduleSyncError
+                        ? `Your encrypted recipients and agreements are safe, but the durable scheduler could not synchronize them: ${scheduleSyncError}`
+                        : locallyDueObligations.length > 0
+                          ? "The agreements are due and waiting for the durable scheduler. Retry synchronization instead of creating duplicate recipients."
+                          : "The agreements exist, but their committed next-due times are still in the future."}</p>
                   <ol aria-label="Private payroll setup progress">
                     <li className={hasActivePayee ? "payroll-empty-guide__done" : "payroll-empty-guide__current"}><b>1</b> Add recipient</li>
                     <li className={hasActiveAgreement ? "payroll-empty-guide__done" : hasActivePayee ? "payroll-empty-guide__current" : ""}><b>2</b> Add pay agreement</li>
                     <li className={hasActiveAgreement ? "payroll-empty-guide__current" : ""}><b>3</b> Authorize &amp; send</li>
                   </ol>
-                  <Link className="button button--ink" href="/team#team-directory">
-                    {!hasActivePayee ? "Add first recipient" : !hasActiveAgreement ? "Add pay agreement" : "Review due time"} <ArrowRight size={15} />
-                  </Link>
+                  {scheduleSyncError && hasActiveAgreement
+                    ? <button className="button button--ink" type="button" onClick={() => void refreshPayrollRuns()} disabled={runsLoading}>{runsLoading ? <LoaderCircle className="spin" size={15} /> : null} Retry schedule sync <ArrowRight size={15} /></button>
+                    : <Link className="button button--ink" href="/team#team-directory">
+                        {!hasActivePayee ? "Add first recipient" : !hasActiveAgreement ? "Add pay agreement" : "Review due time"} <ArrowRight size={15} />
+                      </Link>}
                 </div>
               )}
             </div>
@@ -1148,7 +1170,9 @@ export default function PayrollPage() {
             <div className="composer-summary">
               <div><small>{selectedProofProfile}</small><strong>{selectedObligations.length} selected</strong></div><div><small>Private total</small><strong>{`${formatTokenAmount(payrollTotals.STRK, "STRK")} STRK · ${formatTokenAmount(payrollTotals.USDC, "USDC")} USDC`}</strong></div><div><small>Shielded treasury</small><strong>{formatTokenAmount(starknet.shieldedBalances.STRK, "STRK")} STRK · {formatTokenAmount(starknet.shieldedBalances.USDC, "USDC")} USDC</strong></div>
               {dueObligations.length === 0 ? (
-                <Link className="button button--ink" href="/team#team-directory">Set up first payment <ArrowRight size={17} /></Link>
+                scheduleSyncError && hasActiveAgreement
+                  ? <button className="button button--ink" type="button" onClick={() => void refreshPayrollRuns()} disabled={runsLoading}>Retry schedule sync <ArrowRight size={17} /></button>
+                  : <Link className="button button--ink" href="/team#team-directory">{hasActiveAgreement ? "Review due time" : "Set up first payment"} <ArrowRight size={17} /></Link>
               ) : (
                 <button
                   type="button"

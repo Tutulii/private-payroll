@@ -9,12 +9,17 @@ export const obligationScheduleItemSchema = z.object({
   dueAt: z.string().datetime(),
 }).strict();
 
+export const obligationScheduleRegistrationSchema = obligationScheduleItemSchema.extend({
+  vaultRecordId: uuidV7Schema,
+}).strict();
+
 export const obligationScheduleBatchSchema = z.object({
   organizationId: uuidV7Schema,
-  schedules: z.array(obligationScheduleItemSchema).min(1).max(100),
+  schedules: z.array(obligationScheduleRegistrationSchema).min(1).max(100),
 }).strict();
 
 export type ObligationScheduleItem = z.infer<typeof obligationScheduleItemSchema>;
+export type ObligationScheduleRegistration = z.infer<typeof obligationScheduleRegistrationSchema>;
 
 export type DueObligationSignal = ObligationScheduleItem & {
   materializedAt: string;

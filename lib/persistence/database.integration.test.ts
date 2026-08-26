@@ -1498,11 +1498,12 @@ databaseSuite("PostgreSQL durability integration", () => {
 
   it("materializes encrypted obligation schedules idempotently and supersedes stale revisions", async () => {
     const organizationId = await seedOrganization();
+    const vaultRecordId = generateUuidV7();
     const agreementId = generateUuidV7();
     const dueAt = new Date(Date.now() - 60_000).toISOString();
     const firstCommitment = `0x${"11".repeat(32)}`;
     await getDatabase().insert(vaultRecords).values({
-      id: agreementId,
+      id: vaultRecordId,
       organizationId,
       recordType: "pay-agreement",
       revision: 1,
@@ -1515,6 +1516,7 @@ databaseSuite("PostgreSQL durability integration", () => {
     const request = {
       organizationId,
       schedules: [{
+        vaultRecordId,
         agreementId,
         agreementRevision: 1,
         scheduleCommitment: firstCommitment,
@@ -1522,6 +1524,10 @@ databaseSuite("PostgreSQL durability integration", () => {
       }],
       principal: admin,
     };
+    await expect(registerObligationSchedules({
+      ...request,
+      schedules: [{ ...request.schedules[0], vaultRecordId: generateUuidV7() }],
+    })).rejects.toMatchObject({ code: "SCHEDULE_AGREEMENT_REVISION_STALE" });
     await expect(Promise.all([
       registerObligationSchedules(request),
       registerObligationSchedules(request),
@@ -1540,9 +1546,9 @@ databaseSuite("PostgreSQL durability integration", () => {
     const revisionTime = new Date();
     await getDatabase().update(vaultRecords)
       .set({ supersededAt: revisionTime })
-      .where(sql`${vaultRecords.organizationId} = ${organizationId} and ${vaultRecords.id} = ${agreementId}`);
+      .where(sql`${vaultRecords.organizationId} = ${organizationId} and ${vaultRecords.id} = ${vaultRecordId}`);
     await getDatabase().insert(vaultRecords).values({
-      id: agreementId,
+      id: vaultRecordId,
       organizationId,
       recordType: "pay-agreement",
       revision: 2,
@@ -1556,6 +1562,7 @@ databaseSuite("PostgreSQL durability integration", () => {
     await expect(registerObligationSchedules({
       organizationId,
       schedules: [{
+        vaultRecordId,
         agreementId,
         agreementRevision: 2,
         scheduleCommitment: secondCommitment,

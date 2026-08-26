@@ -11,7 +11,7 @@ import {
 import { generateUuidV7, payAgreementRecordSchema } from "@/lib/domain/records";
 import {
   agreementOperationalDueAt,
-  type ObligationScheduleItem,
+  type ObligationScheduleRegistration,
 } from "@/lib/domain/obligation-schedule";
 import {
   advanceRecurringSchedule,
@@ -62,8 +62,9 @@ export function recordProofScheduleCommitment(record: PayAgreementDirectoryRecor
   return (record.proofScheduleCommitment ?? agreementScheduleCommitment(record.agreement)) as `0x${string}`;
 }
 
-export function obligationScheduleForRecord(record: PayAgreementDirectoryRecord): ObligationScheduleItem {
+export function obligationScheduleForRecord(record: PayAgreementDirectoryRecord): ObligationScheduleRegistration {
   return {
+    vaultRecordId: record.id,
     agreementId: record.agreement.id,
     agreementRevision: record.revision,
     scheduleCommitment: recordProofScheduleCommitment(record),
