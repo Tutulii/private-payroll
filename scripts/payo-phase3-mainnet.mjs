@@ -41,10 +41,11 @@ const STRK_ADDRESS =
 const action = process.argv[2];
 const actionArgument = process.argv[3];
 
-if (!["plan", "status", "estimate", "declare", "deploy-verifiers", "verify-verifiers"].includes(action)) {
+if (!["plan", "status", "estimate", "declare", "reconcile-declaration", "deploy-verifiers", "verify-verifiers"].includes(action)) {
   throw new Error(
     "Usage: node scripts/payo-phase3-mainnet.mjs "
-      + "<plan|status|estimate|declare <name>|deploy-verifiers|verify-verifiers>",
+      + "<plan|status|estimate|declare <name>|reconcile-declaration <name> <tx-hash>"
+      + "|deploy-verifiers|verify-verifiers>",
   );
 }
 
@@ -230,6 +231,40 @@ async function updateEvidence(plan, change) {
   await saveJson(evidencePath, { ...next, updatedAt: new Date().toISOString() });
 }
 
+async function recordDeclarationEvidence(plan, name, transactionHash, simulatedFeeFri = null) {
+  const declaration = plan.declarations[name];
+  const [transaction, receipt] = await Promise.all([
+    provider.getTransactionByHash(transactionHash),
+    provider.getTransactionReceipt(transactionHash),
+  ]);
+  if (transaction.type !== "DECLARE"
+    || BigInt(transaction.sender_address) !== BigInt(plan.deployerAddress)
+    || BigInt(transaction.class_hash) !== BigInt(declaration.classHash)) {
+    throw new Error(`${transactionHash} is not the reviewed ${name} declaration.`);
+  }
+  if (receipt.execution_status !== "SUCCEEDED"
+    || !["ACCEPTED_ON_L2", "ACCEPTED_ON_L1"].includes(receipt.finality_status)) {
+    throw new Error(`${name} declaration is not accepted and successful.`);
+  }
+  if (!(await classDeclared(declaration.classHash))) {
+    throw new Error(`${name} receipt exists but the class is unavailable at latest.`);
+  }
+  const entry = {
+    classHash: declaration.classHash,
+    transactionHash,
+    simulatedFeeFri,
+    actualFeeFri: BigInt(receipt.actual_fee?.amount ?? 0).toString(),
+    blockNumber: receipt.block_number,
+    finalityStatus: receipt.finality_status,
+    executionStatus: receipt.execution_status,
+  };
+  await updateEvidence(plan, async (evidence) => ({
+    ...evidence,
+    declarations: { ...evidence.declarations, [name]: entry },
+  }));
+  return entry;
+}
+
 await assertFreshPayoPhase3DeployArtifacts();
 await requireMainnet();
 
@@ -327,33 +362,51 @@ if (action === "declare") {
     );
   }
   const submitted = await account.declare({ contract: artifact.sierra, casm: artifact.casm });
-  await waitFor(submitted.transaction_hash);
+  process.stdout.write(`${name} submitted transaction: ${submitted.transaction_hash}\n`);
+  try {
+    await waitFor(submitted.transaction_hash);
+  } catch (error) {
+    if (!(await classDeclared(declaration.classHash))) throw error;
+    process.stderr.write(
+      `${name} waiter reported ${normalizeError(error)}, but class read-back succeeded; reconciling receipt.\n`,
+    );
+  }
   if (BigInt(submitted.class_hash) !== BigInt(declaration.classHash)
     || !(await classDeclared(declaration.classHash))) {
     throw new Error(`${name} declaration did not produce the reviewed class hash.`);
   }
-  const receipt = await provider.getTransactionReceipt(submitted.transaction_hash);
-  await updateEvidence(plan, async (evidence) => ({
-    ...evidence,
-    declarations: {
-      ...evidence.declarations,
-      [name]: {
-        classHash: declaration.classHash,
-        transactionHash: submitted.transaction_hash,
-        simulatedFeeFri: fee.overall_fee.toString(),
-        actualFeeFri: BigInt(receipt.actual_fee?.amount ?? 0).toString(),
-        blockNumber: receipt.block_number,
-      },
-    },
-  }));
+  const recorded = await recordDeclarationEvidence(
+    plan,
+    name,
+    submitted.transaction_hash,
+    fee.overall_fee.toString(),
+  );
   process.stdout.write(`${JSON.stringify({
     name,
     classHash: declaration.classHash,
     transactionHash: submitted.transaction_hash,
     simulatedFeeFri: fee.overall_fee.toString(),
-    actualFeeFri: BigInt(receipt.actual_fee?.amount ?? 0).toString(),
+    actualFeeFri: recorded.actualFeeFri,
     remainingBalanceFri: (await readRelayerBalance(plan.deployerAddress)).toString(),
   }, null, 2)}\n`);
+  process.exit(0);
+}
+
+if (action === "reconcile-declaration") {
+  const name = actionArgument;
+  const transactionHash = process.argv[4];
+  const simulatedFeeFri = process.argv[5] ?? null;
+  if (!phase3DeclarationOrder.includes(name)) {
+    throw new Error(`Declaration name must be one of: ${phase3DeclarationOrder.join(", ")}.`);
+  }
+  if (!/^0x[0-9a-fA-F]+$/.test(transactionHash ?? "")) {
+    throw new Error("A Starknet declaration transaction hash is required.");
+  }
+  if (simulatedFeeFri !== null && !/^[0-9]+$/.test(simulatedFeeFri)) {
+    throw new Error("The optional simulated fee must be an unsigned FRI integer.");
+  }
+  const recorded = await recordDeclarationEvidence(plan, name, transactionHash, simulatedFeeFri);
+  process.stdout.write(`${JSON.stringify({ name, ...recorded }, null, 2)}\n`);
   process.exit(0);
 }
 

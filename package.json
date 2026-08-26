@@ -44,6 +44,7 @@
     "phase3:mainnet:status": "node --env-file-if-exists=.env.local scripts/payo-phase3-mainnet.mjs status",
     "phase3:mainnet:estimate": "node --env-file-if-exists=.env.local scripts/payo-phase3-mainnet.mjs estimate",
     "phase3:mainnet:declare": "node --env-file-if-exists=.env.local scripts/payo-phase3-mainnet.mjs declare",
+    "phase3:mainnet:reconcile-declaration": "node --env-file-if-exists=.env.local scripts/payo-phase3-mainnet.mjs reconcile-declaration",
     "phase3:mainnet:deploy-verifiers": "node --env-file-if-exists=.env.local scripts/payo-phase3-mainnet.mjs deploy-verifiers",
     "phase3:mainnet:verify-verifiers": "node --env-file-if-exists=.env.local scripts/payo-phase3-mainnet.mjs verify-verifiers",
     "phase2:devnet:check-artifacts": "node scripts/test-phase2-devnet.mjs check-artifacts",
