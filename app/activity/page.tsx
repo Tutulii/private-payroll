@@ -89,6 +89,7 @@ type PayrollRunSummary = {
   cycleId: string;
   state: string;
   dueAt: string;
+  updatedAt: string;
 };
 
 type DisclosureGrantSummary = {
@@ -289,12 +290,14 @@ export default function ActivityPage() {
           || typeof run.cycleId !== "string"
           || typeof run.state !== "string"
           || !(typeof run.dueAt === "string" || run.dueAt instanceof Date)
+          || !(typeof run.updatedAt === "string" || run.updatedAt instanceof Date)
         ) return [];
         return [{
           id: run.id,
           cycleId: run.cycleId,
           state: run.state,
           dueAt: run.dueAt instanceof Date ? run.dueAt.toISOString() : run.dueAt,
+          updatedAt: run.updatedAt instanceof Date ? run.updatedAt.toISOString() : run.updatedAt,
         }];
       }));
       setClaims(claimResult);
@@ -325,6 +328,27 @@ export default function ActivityPage() {
         if (run.organizationId !== session.organizationId || run.state !== "confirmed") {
           throw new Error("Private claims require a confirmed payday from this workspace.");
         }
+        if (!run.agreementRoot || !run.policyRoot || !run.fxRoot) {
+          throw new Error("This payday is missing its public proof-root bindings.");
+        }
+        const sealAddress = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
+        if (!sealAddress) throw new Error("The proof-bound PAYO seal is not configured.");
+        const { readiness } = await client.checkDeploymentReadiness({
+          chainId: starknet.chainId,
+          sealAddress,
+          mode: 2,
+          proofVersion: 3,
+          agreementRoot: run.agreementRoot,
+          policyRoot: run.policyRoot,
+          fxRoot: run.fxRoot,
+        });
+        const expiredFx = readiness.checks.find(({ code, ready }) => code === "fx_root" && !ready);
+        if (expiredFx) {
+          throw new Error("This payday's FX authorization has expired. Choose the newest payday; PAYO blocked proof generation before it could waste prover time.");
+        }
+        if (!readiness.ready) {
+          throw new Error(`This payday is not claim-ready: ${readiness.checks.filter(({ ready }) => !ready).map(({ message }) => message).join(" ")}`);
+        }
         const payload = decryptVaultRecord<{
           claimProofSource?: { buildInput?: SerializedPayrollIntegrityBuildRequest };
         }>(run.envelope, session.principal);
@@ -346,7 +370,7 @@ export default function ActivityPage() {
       }
     })();
     return () => { active = false; };
-  }, [claimRunId, vault.client, vault.session]);
+  }, [claimRunId, starknet.chainId, vault.client, vault.session]);
 
   const events = useMemo(() => [
     ...settlements.map(settlementEvent),
@@ -364,10 +388,13 @@ export default function ActivityPage() {
     }));
   }, [agreements, payees]);
 
-  const runOptions = useMemo(() => runs.filter(({ state }) => state === "confirmed").map((run, index) => ({
-    run,
-    label: activityRunOptionLabel(run, index),
-  })), [runs]);
+  const runOptions = useMemo(() => runs
+    .filter(({ state }) => state === "confirmed")
+    .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())
+    .map((run, index) => ({
+      run,
+      label: activityRunOptionLabel(run, index),
+    })), [runs]);
 
   const claimAgreementOptions = useMemo(() => claimRunAgreementIds
     ? agreementOptions.filter(({ agreement }) => claimRunAgreementIds.includes(agreement.agreement.id))

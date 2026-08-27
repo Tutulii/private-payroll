@@ -437,7 +437,11 @@ export async function recoverSealedProvenPayroll(input: {
 }): Promise<PayrollExecutionResult> {
   input.onStage?.("recording");
   const { recovery } = await input.client.getSealedPayrollRecovery(input.runId);
-  if (recovery.runId !== input.runId || !/^0x[0-9a-fA-F]{1,64}$/.test(recovery.transactionHash)) {
+  if (
+    recovery.recoveryKind !== "submission"
+    || recovery.runId !== input.runId
+    || !/^0x[0-9a-fA-F]{1,64}$/.test(recovery.transactionHash)
+  ) {
     throw new Error("PAYO returned invalid canonical seal recovery evidence.");
   }
   const response = await input.client.getEncryptedRecord({
@@ -535,6 +539,59 @@ export async function recoverSealedProvenPayroll(input: {
   input.persistPendingSubmission?.(null);
   input.onStage?.("queued");
   return { ...pending, verificationQueued: true };
+}
+
+/**
+ * Restores the proof-verification job for a payroll whose private STRK20
+ * transfer already finalized. Proof calldata is decrypted only in the
+ * authorized browser; the server returns public settlement bindings alone.
+ */
+export async function recoverConfirmedPayrollVerification(input: {
+  client: PayoClient;
+  organizationId: string;
+  runId: string;
+  principal: VaultPrincipalKeyPair;
+  onStage?: (stage: PayrollExecutionStage) => void;
+}): Promise<{
+  runId: string;
+  settlementId: string;
+  proofBundleId: string;
+  transactionHash: string;
+  verificationQueued: true;
+}> {
+  input.onStage?.("recording");
+  const { recovery } = await input.client.getSealedPayrollRecovery(input.runId);
+  if (
+    recovery.recoveryKind !== "verification"
+    || recovery.runId !== input.runId
+    || typeof recovery.settlementId !== "string"
+    || !/^0x[0-9a-fA-F]{1,64}$/.test(recovery.transactionHash)
+  ) {
+    throw new Error("PAYO returned invalid confirmed-payroll recovery evidence.");
+  }
+  const response = await input.client.getEncryptedRecord({
+    organizationId: input.organizationId,
+    recordId: recovery.proofBundleId,
+  }) as { record?: { envelope?: EncryptedVaultRecord } };
+  if (!response.record?.envelope) {
+    throw new Error("The encrypted proof bundle is unavailable for confirmed-payroll recovery.");
+  }
+  const proof = sealedRecoveryProofSchema.parse(
+    decryptVaultRecord(response.record.envelope, input.principal),
+  );
+  await retryDurableWrite(() => input.client.enqueueProofVerification({
+    settlementId: recovery.settlementId!,
+    proofBundleId: recovery.proofBundleId,
+    shards: [proof.shards[0].proofCalldata, proof.shards[1].proofCalldata],
+  }));
+  input.onStage?.("queued");
+  return {
+    runId: recovery.runId,
+    settlementId: recovery.settlementId,
+    proofBundleId: recovery.proofBundleId,
+    transactionHash: recovery.transactionHash,
+    verificationQueued: true,
+  };
 }
 
 /**

@@ -356,8 +356,10 @@ export class PayoClient {
   async getSealedPayrollRecovery(runId: string) {
     return this.request<{
       recovery: {
+        recoveryKind: "submission" | "verification";
         runId: string;
         proofBundleId: string;
+        settlementId?: string;
         transactionHash: string;
         blockNumber: string;
       };

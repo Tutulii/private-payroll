@@ -18,8 +18,13 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useStarknetWallet } from "../starknet/starknet-wallet";
+import { usePayoVault } from "../vault/payo-vault";
+import {
+  parsePendingPayrollSubmission,
+  recoverConfirmedPayrollVerification,
+} from "@/lib/client/payroll-execution";
 
 const navItems = [
   { label: "Overview", icon: LayoutDashboard, href: "/" },
@@ -64,8 +69,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const starknet = useStarknetWallet();
+  const { reconcilePayrollTransaction } = starknet;
+  const vault = usePayoVault();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [toast, setToast] = useState("");
+  const proofRecoveryRunsRef = useRef(new Set<string>());
+  const proofRecoveryOrganizationRef = useRef("");
 
   const title = pageTitles[pathname] ?? pageTitles["/"];
   const openPayroll = useCallback(() => {
@@ -86,6 +95,76 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     const timeout = window.setTimeout(() => setToast(""), 2600);
     return () => window.clearTimeout(timeout);
   }, [toast]);
+
+  useEffect(() => {
+    const client = vault.client;
+    const session = vault.session;
+    if (!client || !session) {
+      proofRecoveryRunsRef.current.clear();
+      proofRecoveryOrganizationRef.current = "";
+      return;
+    }
+    if (proofRecoveryOrganizationRef.current !== session.organizationId) {
+      proofRecoveryRunsRef.current.clear();
+      proofRecoveryOrganizationRef.current = session.organizationId;
+    }
+
+    let cancelled = false;
+    let polling = false;
+    const recoverMissingProofJobs = async () => {
+      if (polling || cancelled) return;
+      polling = true;
+      try {
+        const { runs } = await client.listPayrollRuns(session.organizationId);
+        const candidates = runs.flatMap((run) => {
+          if (
+            typeof run.id !== "string"
+            || run.state !== "confirmed"
+            || proofRecoveryRunsRef.current.has(run.id)
+          ) return [];
+          return [run.id];
+        });
+        for (const runId of candidates) {
+          if (cancelled) return;
+          proofRecoveryRunsRef.current.add(runId);
+          try {
+            const recovered = await recoverConfirmedPayrollVerification({
+              client,
+              organizationId: session.organizationId,
+              runId,
+              principal: session.principal,
+            });
+            const storageKey = `payo:pending-settlement:v1:${session.organizationId}`;
+            const serialized = window.localStorage.getItem(storageKey);
+            if (serialized) {
+              try {
+                const pending = parsePendingPayrollSubmission(JSON.parse(serialized));
+                if (pending.runId === runId) window.localStorage.removeItem(storageKey);
+              } catch {
+                // A corrupt recovery payload is left untouched for explicit support recovery.
+              }
+            }
+            window.dispatchEvent(new CustomEvent("payo:payroll-proof-recovered", {
+              detail: { runId, transactionHash: recovered.transactionHash },
+            }));
+            await reconcilePayrollTransaction(recovered.transactionHash);
+            if (!cancelled) setToast("Confirmed payroll proof verification queued automatically");
+          } catch {
+            window.setTimeout(() => proofRecoveryRunsRef.current.delete(runId), 15_000);
+          }
+        }
+      } finally {
+        polling = false;
+      }
+    };
+    const initial = window.setTimeout(() => void recoverMissingProofJobs(), 0);
+    const interval = window.setInterval(() => void recoverMissingProofJobs(), 5_000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(initial);
+      window.clearInterval(interval);
+    };
+  }, [reconcilePayrollTransaction, vault.client, vault.session]);
 
   return (
     <AppShellContext.Provider value={contextValue}>

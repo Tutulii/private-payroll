@@ -5,6 +5,7 @@ type ActivityAgreementLabelInput = {
 
 type ActivityRunLabelInput = {
   state: string;
+  updatedAt?: string;
 };
 
 function titleCase(value: string): string {
@@ -22,5 +23,17 @@ export function activityAgreementOptionLabel(
 }
 
 export function activityRunOptionLabel(input: ActivityRunLabelInput, index: number): string {
+  if (input.updatedAt) {
+    const date = new Date(input.updatedAt);
+    if (!Number.isNaN(date.getTime())) {
+      const timestamp = new Intl.DateTimeFormat(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(date);
+      return `Payday ${index + 1} · ${timestamp}`;
+    }
+  }
   return `Payday ${index + 1} · ${titleCase(input.state)}`;
 }

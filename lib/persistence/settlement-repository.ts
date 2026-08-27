@@ -476,8 +476,59 @@ export async function getSealedRunRecoveryEvidence(input: {
     .limit(1);
   if (!run) throw new ApiError(404, "Payroll run not found.", "RUN_NOT_FOUND");
   await requireOrganizationRole(run.organizationId, input.principal, ["admin", "operator"]);
+  const [bundle] = await database
+    .select({ id: proofBundles.id })
+    .from(proofBundles)
+    .where(and(
+      eq(proofBundles.runId, run.id),
+      eq(proofBundles.organizationId, run.organizationId),
+      eq(proofBundles.proofType, "payroll_integrity"),
+      eq(proofBundles.subjectRecordId, run.id),
+    ))
+    .orderBy(desc(proofBundles.createdAt))
+    .limit(1);
+  if (!bundle) throw new ApiError(409, "The encrypted proof bundle is missing.", "PROOF_BUNDLE_MISSING");
+
+  // A finalized private transfer can outlive the browser request that was
+  // supposed to enqueue its on-chain proof verification. The proof calldata
+  // remains encrypted in the organization's vault, so return only the public
+  // settlement binding and let an authorized browser decrypt and enqueue it.
+  if (run.transactionHash && ["submitted", "confirmed", "reconciled"].includes(run.state)) {
+    const [settlement] = await database
+      .select({
+        id: settlements.id,
+        transactionHash: settlements.transactionHash,
+        blockNumber: settlements.blockNumber,
+      })
+      .from(settlements)
+      .where(and(
+        eq(settlements.runId, run.id),
+        eq(settlements.workflowType, "payroll"),
+      ))
+      .orderBy(desc(settlements.createdAt))
+      .limit(1);
+    if (
+      !settlement?.transactionHash
+      || BigInt(settlement.transactionHash) !== BigInt(run.transactionHash)
+    ) {
+      throw new ApiError(
+        409,
+        "The confirmed payroll has no matching durable settlement.",
+        "PAYROLL_SETTLEMENT_MISMATCH",
+      );
+    }
+    return {
+      recoveryKind: "verification" as const,
+      runId: run.id,
+      proofBundleId: bundle.id,
+      settlementId: settlement.id,
+      transactionHash: run.transactionHash,
+      blockNumber: settlement.blockNumber?.toString() ?? "0",
+    };
+  }
+
   if (run.state !== "proven" || run.transactionHash || !run.runNullifier) {
-    throw new ApiError(409, "Only a proven run with no recorded hash can use seal recovery.", "RUN_NOT_RECOVERABLE");
+    throw new ApiError(409, "This payroll has no recoverable sealed submission.", "RUN_NOT_RECOVERABLE");
   }
   let normalizedSeal: string;
   try {
@@ -485,16 +536,6 @@ export async function getSealedRunRecoveryEvidence(input: {
   } catch {
     throw new Error("A valid PAYO seal address is required for run recovery.");
   }
-  const [bundle] = await database
-    .select({ id: proofBundles.id })
-    .from(proofBundles)
-    .where(and(
-      eq(proofBundles.runId, run.id),
-      eq(proofBundles.organizationId, run.organizationId),
-    ))
-    .orderBy(desc(proofBundles.createdAt))
-    .limit(1);
-  if (!bundle) throw new ApiError(409, "The encrypted proof bundle is missing.", "PROOF_BUNDLE_MISSING");
   const events = await database
     .select({
       transactionHash: indexedChainEvents.transactionHash,
@@ -515,6 +556,7 @@ export async function getSealedRunRecoveryEvidence(input: {
     throw new ApiError(404, "No canonical PayrollSealed event matches this run.", "SEALED_SUBMISSION_NOT_FOUND");
   }
   return {
+    recoveryKind: "submission" as const,
     runId: run.id,
     proofBundleId: bundle.id,
     transactionHash: evidence.transactionHash,

@@ -122,6 +122,26 @@ export async function executeProofBoundWageClaim(input: {
   assertSameRoot(payroll.fxRoot, run.fxRoot, "FX root");
   assertSameRoot(payroll.runNullifier, run.runNullifier, "run nullifier");
 
+  // Historical payroll roots are known before claim proving. Fail before
+  // spending prover CPU when an hourly FX authorization has already expired;
+  // repeat the same check after proving to close the expiry race.
+  input.onStage?.("preflight");
+  const initialReadiness = await input.client.checkDeploymentReadiness({
+    chainId: input.chainId,
+    sealAddress: input.sealAddress,
+    mode: PAYO_PROOF_MODE_CLAIM,
+    proofVersion: 3,
+    agreementRoot: payroll.agreementRoot,
+    policyRoot: payroll.policyRoot,
+    fxRoot: payroll.fxRoot,
+  });
+  if (!initialReadiness.readiness.ready) {
+    const fxExpired = initialReadiness.readiness.checks.some(({ code, ready }) => code === "fx_root" && !ready);
+    throw new Error(fxExpired
+      ? "This claim uses an expired payday FX authorization. Create the claim from the newest confirmed payday."
+      : `PAYO claim deployment is not ready: ${initialReadiness.readiness.checks.filter(({ ready }) => !ready).map(({ message }) => message).join(" ")}`);
+  }
+
   const now = input.now?.() ?? new Date();
   const nowUnix = BigInt(Math.floor(now.getTime() / 1_000));
   const validityStart = nowUnix - 30n;
@@ -173,7 +193,10 @@ export async function executeProofBoundWageClaim(input: {
     fxRoot,
   });
   if (!readiness.ready) {
-    throw new Error(`PAYO claim deployment is not ready: ${readiness.checks.filter(({ ready }) => !ready).map(({ message }) => message).join(" ")}`);
+    const fxExpired = readiness.checks.some(({ code, ready }) => code === "fx_root" && !ready);
+    throw new Error(fxExpired
+      ? "This claim uses an expired payday FX authorization. Create the claim from the newest confirmed payday."
+      : `PAYO claim deployment is not ready: ${readiness.checks.filter(({ ready }) => !ready).map(({ message }) => message).join(" ")}`);
   }
 
   input.onStage?.("persisting");

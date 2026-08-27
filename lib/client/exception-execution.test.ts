@@ -65,6 +65,70 @@ function sourceRequest() {
 }
 
 describe("proof-bound wage-claim execution", () => {
+  it("rejects an expired payday FX root before invoking the prover", async () => {
+    const principal = generateVaultPrincipal("worker:expired-claim-test");
+    const buildInput = sourceRequest();
+    const payroll = await buildPayrollIntegrityInputsFromSerialized(buildInput);
+    const runEnvelope = encryptVaultRecord(
+      { claimProofSource: { buildInput } },
+      {
+        schemaVersion: 1,
+        organizationId,
+        recordType: "payroll-run",
+        recordId: runId,
+        revision: 1,
+      },
+      [principal],
+    );
+    const prove = vi.fn();
+    const client = {
+      getPayrollRun: vi.fn().mockResolvedValue({
+        run: {
+          id: runId,
+          organizationId,
+          state: "confirmed",
+          agreementRoot: payroll.agreementRoot,
+          manifestRoot: payroll.manifestRoot,
+          policyRoot: payroll.policyRoot,
+          fxRoot: payroll.fxRoot,
+          runNullifier: payroll.runNullifier,
+          envelope: runEnvelope,
+        },
+      }),
+      checkDeploymentReadiness: vi.fn().mockResolvedValue({
+        readiness: {
+          ready: false,
+          checks: [{ code: "fx_root", ready: false, message: "FX root is inactive." }],
+        },
+      }),
+    } as unknown as PayoClient;
+
+    await expect(executeProofBoundWageClaim({
+      client,
+      organizationId,
+      principal,
+      chainId: "0x1",
+      sealAddress: "0x12345",
+      claim: {
+        schemaVersion: 1,
+        id: claimId,
+        organizationId,
+        revision: 1,
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+        agreementId,
+        runId,
+        claimSalt: `0x${"36".repeat(32)}`,
+        claimKind: "missing_obligation",
+        state: "draft",
+      },
+      submitException: vi.fn(),
+      prove,
+      now: () => now,
+    })).rejects.toThrow("expired payday FX authorization");
+    expect(prove).not.toHaveBeenCalled();
+  });
+
   it("proves, encrypts, seals, records, and queues an invoke-only claim", async () => {
     const principal = generateVaultPrincipal("worker:claim-test");
     const buildInput = sourceRequest();

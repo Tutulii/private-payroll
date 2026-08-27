@@ -237,9 +237,13 @@ export async function listPayrollRuns(organizationId: string, principal: Authent
       revision: payrollRuns.revision,
       state: payrollRuns.state,
       dueAt: payrollRuns.dueAt,
+      agreementRoot: payrollRuns.agreementRoot,
+      policyRoot: payrollRuns.policyRoot,
+      fxRoot: payrollRuns.fxRoot,
       manifestRoot: payrollRuns.manifestRoot,
       runNullifier: payrollRuns.runNullifier,
       transactionHash: payrollRuns.transactionHash,
+      createdAt: payrollRuns.createdAt,
       updatedAt: payrollRuns.updatedAt,
     })
     .from(payrollRuns)

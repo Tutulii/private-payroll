@@ -533,6 +533,20 @@ export default function PayrollPage() {
     return () => window.clearTimeout(timer);
   }, [vault.session]);
 
+  useEffect(() => {
+    const recovered = (event: Event) => {
+      const detail = (event as CustomEvent<{ runId?: string }>).detail;
+      if (!detail?.runId || recoverableSubmission?.runId !== detail.runId) return;
+      setRecoverableSubmission(null);
+      setPayrollStage("queued");
+      setFormError("");
+      setShowManualHashRecovery(false);
+      void refreshPayrollRuns();
+    };
+    window.addEventListener("payo:payroll-proof-recovered", recovered);
+    return () => window.removeEventListener("payo:payroll-proof-recovered", recovered);
+  }, [recoverableSubmission?.runId, refreshPayrollRuns]);
+
   const persistPendingSubmission = useCallback((submission: PendingPayrollSubmission | null) => {
     if (!vault.session) throw new Error("The PAYO workspace locked during settlement recording.");
     const storageKey = `payo:pending-settlement:v1:${vault.session.organizationId}`;
@@ -647,6 +661,9 @@ export default function PayrollPage() {
     try {
       if (!vault.session || !vault.client) {
         throw new Error("Unlock the encrypted PAYO workspace before preparing payroll.");
+      }
+      if (recoverableSubmission) {
+        throw new Error("Finish recording the previous private payroll before creating another one.");
       }
       if (!starknet.isConnected || !starknet.isMainnet) {
         throw new Error("Connect Ready on Starknet Mainnet before preparing payroll.");
@@ -1289,7 +1306,7 @@ export default function PayrollPage() {
                 <button
                   type="button"
                   className="button button--ink"
-                  disabled={!vault.session || !vault.recoveryReady || !starknet.isConnected || !starknet.isMainnet || busy || selectedObligations.length === 0 || (obligationSchedule?.state === "active" && !canRunPayroll)}
+                  disabled={!vault.session || !vault.recoveryReady || !starknet.isConnected || !starknet.isMainnet || busy || Boolean(recoverableSubmission) || selectedObligations.length === 0 || (obligationSchedule?.state === "active" && !canRunPayroll)}
                   onClick={obligationSchedule?.state === "active" ? submitPayroll : scheduleSelectedObligationRoot}
                 >
                   {payrollStage && payrollStage !== "queued"
@@ -1298,6 +1315,8 @@ export default function PayrollPage() {
                       ? <><LoaderCircle className="spin" size={17} /> {starknet.transaction?.stage === "wallet" ? "Approve authorization in Ready" : "Confirming authorization"}</>
                       : obligationAuthorizationActionPending
                         ? <><LoaderCircle className="spin" size={17} /> Preparing Ready authorization</>
+                      : recoverableSubmission
+                        ? <>Finishing previous payroll <Clock3 size={17} /></>
                       : starknet.transaction?.kind === "payroll" && walletTransactionBusy
                         ? <><LoaderCircle className="spin" size={17} /> {starknet.transaction.stage === "wallet" ? "Approve in Ready" : "Confirming on Mainnet"}</>
                         : !vault.session

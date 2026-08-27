@@ -857,6 +857,71 @@ databaseSuite("PostgreSQL durability integration", () => {
     })).resolves.toEqual({ recovered: 0 });
   });
 
+  it("returns encrypted-proof recovery bindings for a confirmed payroll missing its verification job", async () => {
+    const organizationId = await seedOrganization();
+    const runId = generateUuidV7();
+    const transactionHash = "0xc0ffee";
+    await getDatabase().insert(payrollRuns).values({
+      id: runId,
+      organizationId,
+      cycleId: "confirmed-proof-recovery",
+      revision: 1,
+      state: "confirmed",
+      dueAt: new Date("2026-08-31T00:00:00.000Z"),
+      runNullifier: `0x${"33".repeat(32)}`,
+      transactionHash,
+    });
+    const proofBundleId = generateUuidV7();
+    await getDatabase().insert(proofBundles).values({
+      id: proofBundleId,
+      runId,
+      organizationId,
+      proofType: "payroll_integrity",
+      proofVersion: "2",
+      subjectRecordId: runId,
+      proofPackage: {},
+      proofHash: `0x${"44".repeat(32)}`,
+    });
+    await getDatabase().insert(proofBundles).values({
+      id: generateUuidV7(),
+      runId,
+      organizationId,
+      proofType: "wage_claim",
+      proofVersion: "3",
+      subjectRecordId: generateUuidV7(),
+      proofPackage: {},
+      proofHash: `0x${"45".repeat(32)}`,
+      createdAt: new Date(Date.now() + 1_000),
+    });
+    const settlementId = generateUuidV7();
+    await getDatabase().insert(settlements).values({
+      id: settlementId,
+      organizationId,
+      runId,
+      workflowType: "payroll",
+      subjectRecordId: runId,
+      walletRequestId: generateUuidV7(),
+      idempotencyKey: `confirmed-proof-recovery:${settlementId}`,
+      state: "finalized",
+      tokenTotalsCommitment: `0x${"55".repeat(32)}`,
+      transactionHash,
+      blockNumber: 123n,
+    });
+
+    await expect(getSealedRunRecoveryEvidence({
+      runId,
+      chainId: "SN_MAIN",
+      sealAddress: "0x123",
+      principal: admin,
+    })).resolves.toMatchObject({
+      recoveryKind: "verification",
+      proofBundleId,
+      settlementId,
+      transactionHash,
+      blockNumber: "123",
+    });
+  });
+
   it("stores receipts and revocable disclosure grants atomically with encrypted envelopes", async () => {
     const organizationId = await seedOrganization();
     const runId = generateUuidV7();

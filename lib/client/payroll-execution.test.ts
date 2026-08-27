@@ -18,6 +18,7 @@ import { prepareEncryptedPayee } from "./payee-directory";
 import {
   executeProofBoundPayroll,
   preparePayrollObligationRoot,
+  recoverConfirmedPayrollVerification,
   recoverSealedProvenPayroll,
   resumePendingPayrollSubmission,
 } from "./payroll-execution";
@@ -462,6 +463,7 @@ describe("proof-bound payroll browser orchestration", () => {
     const proofBundleId = "0198ddf0-9c00-7000-8000-000000000099";
     mockClient.getSealedPayrollRecovery.mockResolvedValue({
       recovery: {
+        recoveryKind: "submission",
         runId: "0198ddf0-9c00-7000-8000-000000000088",
         proofBundleId,
         transactionHash: "0xfeed",
@@ -508,5 +510,56 @@ describe("proof-bound payroll browser orchestration", () => {
     }));
     expect(persistence).toHaveBeenLastCalledWith(null);
     expect(result).toMatchObject({ transactionHash: "0xfeed", verificationQueued: true });
+  });
+
+  it("queues missing proof verification for an already confirmed private payroll", async () => {
+    const mockClient = client();
+    const proofBundleId = "0198ddf0-9c00-7000-8000-000000000099";
+    const runId = "0198ddf0-9c00-7000-8000-000000000088";
+    const settlementId = "0198ddf0-9c00-7000-8000-000000000077";
+    mockClient.getSealedPayrollRecovery.mockResolvedValue({
+      recovery: {
+        recoveryKind: "verification",
+        runId,
+        proofBundleId,
+        settlementId,
+        transactionHash: "0xfeed",
+        blockNumber: "123",
+      },
+    });
+    mockClient.getEncryptedRecord.mockResolvedValue({
+      record: {
+        envelope: encryptVaultRecord(
+          {
+            shards: [
+              { shardIndex: 0, proofCalldata: ["0x1", "0x2"] },
+              { shardIndex: 1, proofCalldata: ["0x3", "0x4"] },
+            ],
+          },
+          {
+            schemaVersion: 1,
+            organizationId,
+            recordType: "proof-bundle",
+            recordId: proofBundleId,
+            revision: 1,
+          },
+          [principal],
+        ),
+      },
+    });
+
+    await expect(recoverConfirmedPayrollVerification({
+      client: mockClient as unknown as PayoClient,
+      organizationId,
+      runId,
+      principal,
+    })).resolves.toMatchObject({ settlementId, transactionHash: "0xfeed", verificationQueued: true });
+    expect(mockClient.createSettlementIntent).not.toHaveBeenCalled();
+    expect(mockClient.recordSettlementSubmission).not.toHaveBeenCalled();
+    expect(mockClient.enqueueProofVerification).toHaveBeenCalledWith({
+      settlementId,
+      proofBundleId,
+      shards: [["0x1", "0x2"], ["0x3", "0x4"]],
+    });
   });
 });
