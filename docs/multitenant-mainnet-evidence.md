@@ -1,8 +1,8 @@
 # Multi-tenant PAYO Mainnet evidence
 
-Observed on Starknet Mainnet on 2026-08-27. The source deployment is commit
-`1329e06c9c7177656f31e650c901fefcbb0de30c` plus the restart-safe verification
-fix recorded immediately after deployment.
+Observed on Starknet Mainnet on 2026-08-27. The source deployment implementation
+is commit `1329e06c9c7177656f31e650c901fefcbb0de30c`; cutover configuration and the
+restart-safe verification fix are recorded in the subsequent deployment commit.
 
 ## Contracts
 

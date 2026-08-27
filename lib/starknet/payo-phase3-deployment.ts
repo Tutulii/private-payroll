@@ -1,9 +1,9 @@
 export const PAYO_PHASE3_MAINNET_DEPLOYMENT = Object.freeze({
-  adminAddress: "0x038c1d4e372a3cdf605a0c06d944b046c7f4d7923922001f9366b5d000aa3871",
-  sealAddress: "0x2930f94183c60d86b9e35486c46c0f73bec8cd532e3fadc8c661cf9ec0ebd99",
+  adminAddress: "0x0126a7a572cf8935d069af937e9f7b27a24949e271e1fbccfe4de0c0d8dc8ea9",
+  sealAddress: "0x603c607bf001e279365fd141901ba09b95f72f5a72506742b30f6db32c36ac7",
   sealClassHash: "0x1500b1e66ef8c1528f5ea301cbb0420b28a19742d927c5d595ce567b0266148",
-  policyRegistryAddress: "0x4e5309dc9662bf8e136c1d626c1410ea07f74e743a0972c1e253b08ece46aad",
-  obligationRegistryAddress: "0x21a91368561d32c91a861412ec6823a21cc2b64ab10110f575bf57709b7880c",
+  policyRegistryAddress: "0x34701f573096b7bab0e5678e1ed2f17a87c8d56eb5f4d70bcf2197bab8e4477",
+  obligationRegistryAddress: "0x44b22f1a17d2710c2f51ed0b37b8b0ff8435262d3c8c0f2f17be07c84ac23b5",
   profiles: Object.freeze([
     Object.freeze({
       name: "Advanced payroll",
