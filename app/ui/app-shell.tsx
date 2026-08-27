@@ -178,6 +178,67 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     };
   }, [pathname, reconcilePayrollTransaction, vault.client, vault.session]);
 
+  useEffect(() => {
+    const transaction = starknet.transaction;
+    const client = vault.client;
+    const session = vault.session;
+    if (
+      !client
+      || !session
+      || transaction?.kind !== "payroll"
+      || (transaction.stage !== "wallet" && transaction.stage !== "confirming")
+      || !transaction.startedAt
+    ) return;
+
+    let cancelled = false;
+    let polling = false;
+    const reconcileIndexedPayroll = async () => {
+      if (cancelled || polling) return;
+      polling = true;
+      try {
+        const storageKey = `payo:pending-settlement:v1:${session.organizationId}`;
+        const serialized = window.localStorage.getItem(storageKey);
+        let pendingRunId = "";
+        if (serialized) {
+          try {
+            pendingRunId = parsePendingPayrollSubmission(JSON.parse(serialized)).runId;
+          } catch {
+            // The server timestamp fallback below remains bounded to this wallet request.
+          }
+        }
+        const { settlements } = await client.listSettlements(session.organizationId);
+        const recovered = settlements.find((settlement) => {
+          if (
+            settlement.workflowType !== "payroll"
+            || !["confirmed", "finalized", "reconciled"].includes(settlement.state)
+            || typeof settlement.transactionHash !== "string"
+          ) return false;
+          if (transaction.hash) return BigInt(settlement.transactionHash) === BigInt(transaction.hash);
+          if (pendingRunId) return settlement.runId === pendingRunId;
+          const createdAt = new Date(settlement.createdAt).getTime();
+          return Number.isFinite(createdAt)
+            && createdAt >= transaction.startedAt! - 60_000
+            && createdAt <= transaction.startedAt! + 60_000;
+        });
+        const recoveredHash = recovered?.transactionHash;
+        if (typeof recoveredHash === "string" && !cancelled) {
+          await reconcilePayrollTransaction(recoveredHash);
+        }
+      } catch {
+        // A temporary API failure must not replace the existing recovery UI.
+      } finally {
+        polling = false;
+      }
+    };
+    const initial = window.setTimeout(() => void reconcileIndexedPayroll(), 0);
+    const interval = window.setInterval(() => void reconcileIndexedPayroll(), 5_000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(initial);
+      window.clearInterval(interval);
+    };
+  }, [reconcilePayrollTransaction, starknet.transaction, vault.client, vault.session]);
+
   return (
     <AppShellContext.Provider value={contextValue}>
       <main className="app-shell">

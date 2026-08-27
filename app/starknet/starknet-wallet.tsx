@@ -112,6 +112,7 @@ export type PrivateTransaction = {
   feeReserves?: Partial<Record<PayrollTokenSymbol, bigint>>;
   feeQuoteExact?: boolean;
   shieldedBalanceBefore?: bigint;
+  startedAt?: number;
 };
 
 export type ObligationRootScheduleResult = {
@@ -228,6 +229,7 @@ type StarknetWalletContextValue = {
     recipients: PayrollRecipient[],
     payoAction: STRK20_INVOKE_ACTION,
   ) => Promise<string>;
+  assertPrivateActionAvailable: () => void;
   reconcilePayrollTransaction: (transactionHash: string) => Promise<void>;
   scheduleObligationRoot: (agreementRoot: string) => Promise<ObligationRootScheduleResult>;
   isObligationRootActive: (agreementRoot: string) => Promise<boolean>;
@@ -304,6 +306,15 @@ function isUnsupportedWalletApiError(error: unknown) {
     errorIncludes(error, "METHOD_NOT_FOUND") ||
     errorIncludes(error, "METHOD NOT FOUND") ||
     errorIncludes(error, "UNSUPPORTED METHOD")
+  );
+}
+
+function isReadyRequestBusyError(error: unknown) {
+  const message = describeError(error);
+  return (
+    walletErrorCode(error) === "163"
+    || /\b163\b/.test(message)
+    || /reserved for preauthorized calls or extension/i.test(message)
   );
 }
 
@@ -396,6 +407,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState("");
   const unsubscribeWalletRef = useRef<(() => void) | null>(null);
   const privateActionLockRef = useRef<symbol | null>(null);
+  const privateActionKindRef = useRef<PrivateTransaction["kind"] | null>(null);
 
   useEffect(() => {
     const store: Store = createStore({ eip1193Adapters: [] });
@@ -454,6 +466,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     setPrivacyMessage("");
     setTransaction(null);
     privateActionLockRef.current = null;
+    privateActionKindRef.current = null;
   }, []);
 
   const refreshPublicBalance = useCallback(async () => {
@@ -523,6 +536,12 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
           `Ready rejected the STRK20 balance method. Update Ready and reconnect. Wallet response: ${message}`,
         );
         throw new Error("This Ready version does not support the STRK20 balance API.");
+      }
+      if (isReadyRequestBusyError(balanceError)) {
+        const busyMessage = "Ready is still handling a private request. Finish or cancel it in Ready, then try again.";
+        setPrivacyCapability("error");
+        setPrivacyMessage(busyMessage);
+        throw new Error(busyMessage);
       }
       setPrivacyCapability("error");
       setPrivacyMessage(`Ready could not read the private STRK balance: ${message}`);
@@ -718,6 +737,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
         });
         if (privateActionLockRef.current === requestToken) {
           privateActionLockRef.current = null;
+          privateActionKindRef.current = null;
         }
         if (walletAccount) {
           try {
@@ -769,6 +789,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
       } finally {
         if (privateActionLockRef.current === requestToken) {
           privateActionLockRef.current = null;
+          privateActionKindRef.current = null;
         }
       }
     },
@@ -811,7 +832,8 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
 
       const requestToken = Symbol(kind);
       privateActionLockRef.current = requestToken;
-      const pending: PrivateTransaction = { kind, stage: "wallet", label, ...details };
+      privateActionKindRef.current = kind;
+      const pending: PrivateTransaction = { kind, stage: "wallet", label, startedAt: Date.now(), ...details };
       setError("");
       setTransaction(pending);
       try {
@@ -827,6 +849,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
       } catch (transactionError) {
         if (privateActionLockRef.current === requestToken) {
           privateActionLockRef.current = null;
+          privateActionKindRef.current = null;
         }
         const notRegistered = isNotRegisteredError(transactionError);
         const message = notRegistered
@@ -847,6 +870,19 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     },
     [address, chainId, confirmTransaction, privacyCapability, selectedWallet?.name, walletAccount],
   );
+
+  const assertPrivateActionAvailable = useCallback(() => {
+    if (!privateActionLockRef.current) return;
+    const activeKind = privateActionKindRef.current;
+    const label = activeKind === "payroll"
+      ? "payroll"
+      : activeKind === "wage_claim"
+        ? "wage claim"
+        : activeKind === "wage_remediation"
+          ? "wage remediation"
+          : "private wallet request";
+    throw new Error(`A ${label} is already awaiting Ready or Mainnet confirmation. Do not generate or approve a duplicate.`);
+  }, []);
 
   const requestPrivateFeeQuote = useCallback(
     async (tokenSymbol: PayrollTokenSymbol): Promise<PrivateFeeQuote> => {
@@ -959,6 +995,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
 
   const runProofBoundPayroll = useCallback(
     async (recipients: PayrollRecipient[], payoAction: STRK20_INVOKE_ACTION) => {
+      assertPrivateActionAvailable();
       const configuredSeal = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
       const { actions, totals } = buildPrivatePayrollActions(
         recipients,
@@ -1001,7 +1038,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
         },
       );
     },
-    [refreshBalanceForAccount, requestPrivateFeeQuote, submitPrivateActions, walletAccount],
+    [assertPrivateActionAvailable, refreshBalanceForAccount, requestPrivateFeeQuote, submitPrivateActions, walletAccount],
   );
 
   const runProofBoundException = useCallback(
@@ -1010,6 +1047,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
       recipients: PayrollRecipient[],
       payoAction: STRK20_INVOKE_ACTION,
     ) => {
+      assertPrivateActionAvailable();
       const configuredSeal = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
       const { actions, totals } = buildPrivateExceptionActions(
         workflow,
@@ -1051,7 +1089,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
         },
       );
     },
-    [refreshBalanceForAccount, requestPrivateFeeQuote, submitPrivateActions, walletAccount],
+    [assertPrivateActionAvailable, refreshBalanceForAccount, requestPrivateFeeQuote, submitPrivateActions, walletAccount],
   );
 
   const reconcilePayrollTransaction = useCallback(async (transactionHash: string) => {
@@ -1062,17 +1100,22 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     // unresolved. Once PAYO's canonical seal indexer recovers that hash, release
     // the browser lock and reconcile the visible wallet state without issuing a
     // second request.
-    privateActionLockRef.current = null;
+    if (privateActionKindRef.current === "payroll") {
+      privateActionLockRef.current = null;
+      privateActionKindRef.current = null;
+    }
     setError("");
-    setTransaction((current) => ({
-      ...(current?.kind === "payroll"
-        ? current
-        : { kind: "payroll" as const, label: "Private payroll recovered on-chain" }),
-      stage: "confirmed",
-      hash: transactionHash,
-      balanceRefreshed: false,
-      balanceRefreshError: undefined,
-    }));
+    setTransaction((current) => current?.kind && current.kind !== "payroll"
+      ? current
+      : ({
+          ...(current?.kind === "payroll"
+            ? current
+            : { kind: "payroll" as const, label: "Private payroll recovered on-chain" }),
+          stage: "confirmed",
+          hash: transactionHash,
+          balanceRefreshed: false,
+          balanceRefreshError: undefined,
+        }));
     if (walletAccount) {
       void refreshBalanceForAccount(walletAccount).then(() => {
         setTransaction((current) => current?.kind === "payroll" && current.hash === transactionHash
@@ -1757,6 +1800,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     shieldStrk,
     runProofBoundPayroll,
     runProofBoundException,
+    assertPrivateActionAvailable,
     reconcilePayrollTransaction,
     scheduleObligationRoot,
     isObligationRootActive,

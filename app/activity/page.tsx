@@ -53,6 +53,9 @@ import { reportActivityOperationFailure } from "@/lib/client/activity-operation-
 import {
   executeProofBoundWageClaim,
   executeProofBoundWageRemediation,
+  parsePendingExceptionSubmission,
+  resumeProofBoundWageClaim,
+  type PendingExceptionSubmission,
 } from "@/lib/client/exception-execution";
 import type { PayrollExecutionStage } from "@/lib/client/payroll-execution";
 import type { SerializedPayrollIntegrityBuildRequest } from "@/lib/proof/input-builder";
@@ -238,7 +241,17 @@ export default function ActivityPage() {
   const [provingClaimId, setProvingClaimId] = useState("");
   const [exceptionStage, setExceptionStage] = useState<PayrollExecutionStage | null>(null);
   const [exceptionFeedback, setExceptionFeedback] = useState<ExceptionFeedback | null>(null);
+  const [pendingException, setPendingException] = useState<PendingExceptionSubmission | null>(null);
   const activityRefreshGeneration = useRef(0);
+
+  const persistPendingException = useCallback((submission: PendingExceptionSubmission | null) => {
+    const organizationId = vault.session?.organizationId;
+    if (!organizationId) return;
+    const key = `payo:pending-exception:${organizationId}`;
+    if (submission) window.localStorage.setItem(key, JSON.stringify(submission));
+    else window.localStorage.removeItem(key);
+    setPendingException(submission);
+  }, [vault.session?.organizationId]);
 
   const refreshActivity = useCallback(async () => {
     const generation = activityRefreshGeneration.current + 1;
@@ -334,6 +347,28 @@ export default function ActivityPage() {
     const timer = window.setTimeout(() => void refreshActivity(), 0);
     return () => window.clearTimeout(timer);
   }, [refreshActivity]);
+
+  useEffect(() => {
+    const organizationId = vault.session?.organizationId;
+    const timer = window.setTimeout(() => {
+      if (!organizationId) {
+        setPendingException(null);
+        return;
+      }
+      const serialized = window.localStorage.getItem(`payo:pending-exception:${organizationId}`);
+      if (!serialized) {
+        setPendingException(null);
+        return;
+      }
+      try {
+        const pending = parsePendingExceptionSubmission(JSON.parse(serialized));
+        setPendingException(pending.organizationId === organizationId ? pending : null);
+      } catch {
+        setPendingException(null);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [vault.session?.organizationId]);
 
   useEffect(() => {
     let active = true;
@@ -617,6 +652,7 @@ export default function ActivityPage() {
       if (!starknet.isConnected || !starknet.isMainnet) {
         throw new Error("Connect Ready on Starknet Mainnet before proving a private claim.");
       }
+      starknet.assertPrivateActionAvailable();
       const sealAddress = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
       if (!sealAddress) throw new Error("The proof-bound PAYO seal is not configured.");
       const proverBaseUrl = process.env.NEXT_PUBLIC_PAYO_PROVER_URL?.trim();
@@ -629,11 +665,7 @@ export default function ActivityPage() {
         claim,
         submitException: starknet.runProofBoundException,
         onStage: setExceptionStage,
-        persistPendingSubmission: (submission) => {
-          const key = `payo:pending-exception:${vault.session!.organizationId}`;
-          if (submission) window.localStorage.setItem(key, JSON.stringify(submission));
-          else window.localStorage.removeItem(key);
-        },
+        persistPendingSubmission: persistPendingException,
         prove: proverBaseUrl
           ? async ({ encryptedWitness, principal, onProgress }) => {
               onProgress?.("loading");
@@ -667,6 +699,53 @@ export default function ActivityPage() {
     }
   };
 
+  const resumeClaimApproval = async (claim: WageClaimRecord) => {
+    if (!vault.client || !vault.session || !pendingException) return;
+    setCreatingException(true);
+    setProvingClaimId(claim.id);
+    setExceptionStage(null);
+    setActivityError("");
+    setExceptionFeedback(null);
+    try {
+      if (!starknet.isConnected || !starknet.isMainnet) {
+        throw new Error("Connect Ready on Starknet Mainnet before resuming the private claim.");
+      }
+      starknet.assertPrivateActionAvailable();
+      const sealAddress = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
+      if (!sealAddress) throw new Error("The proof-bound PAYO seal is not configured.");
+      const result = await resumeProofBoundWageClaim({
+        client: vault.client,
+        organizationId: vault.session.organizationId,
+        principal: vault.session.principal,
+        chainId: starknet.chainId,
+        sealAddress,
+        claim,
+        pendingSubmission: pendingException,
+        submitException: starknet.runProofBoundException,
+        onStage: setExceptionStage,
+        persistPendingSubmission: persistPendingException,
+      });
+      await refreshActivity();
+      const message = `Private wage claim submitted · ${result.transactionHash.slice(0, 10)}…`;
+      setExceptionFeedback({ tone: "success", message });
+      notify(message);
+    } catch (error) {
+      await reportActivityOperationFailure({
+        error,
+        fallback: "The saved wage-claim approval could not be resumed.",
+        refresh: refreshActivity,
+        report: (message) => {
+          setActivityError(message);
+          setExceptionFeedback({ tone: "error", message });
+        },
+      });
+    } finally {
+      setCreatingException(false);
+      setProvingClaimId("");
+      setExceptionStage(null);
+    }
+  };
+
   const settleRemediation = async (remediation: RemediationRecord) => {
     if (!vault.client || !vault.session) return;
     const claim = claims.find(({ id }) => id === remediation.claimId);
@@ -685,6 +764,7 @@ export default function ActivityPage() {
       if (!starknet.isConnected || !starknet.isMainnet) {
         throw new Error("Connect Ready on Starknet Mainnet before settling private remediation.");
       }
+      starknet.assertPrivateActionAvailable();
       const sealAddress = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
       if (!sealAddress) throw new Error("The proof-bound PAYO seal is not configured.");
       const proverBaseUrl = process.env.NEXT_PUBLIC_PAYO_PROVER_URL?.trim();
@@ -698,11 +778,7 @@ export default function ActivityPage() {
         remediation,
         submitException: starknet.runProofBoundException,
         onStage: setExceptionStage,
-        persistPendingSubmission: (submission) => {
-          const key = `payo:pending-exception:${vault.session!.organizationId}`;
-          if (submission) window.localStorage.setItem(key, JSON.stringify(submission));
-          else window.localStorage.removeItem(key);
-        },
+        persistPendingSubmission: persistPendingException,
         prove: proverBaseUrl
           ? async ({ encryptedWitness, principal, onProgress }) => {
               onProgress?.("loading");
@@ -892,6 +968,7 @@ export default function ActivityPage() {
               {claims.map((claim) => <div key={claim.id} className="private-exception-row">
                 <span><small>{claim.claimKind.replaceAll("_", " ")}</small><strong>{shortId(claim.id)} · {claim.state}</strong></span>
                 {claim.state === "draft" && <button type="button" className="button button--soft" onClick={() => void proveClaim(claim)} disabled={creatingException || !starknet.isConnected}>{provingClaimId === claim.id ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />} Prove &amp; submit</button>}
+                {claim.state === "proven" && pendingException?.workflowType === "wage_claim" && pendingException.subjectRecordId === claim.id && <button type="button" className="button button--soft" onClick={() => void resumeClaimApproval(claim)} disabled={creatingException || !starknet.isConnected}>{provingClaimId === claim.id ? <LoaderCircle className="spin" size={15} /> : <WalletCards size={15} />} Resume Ready approval</button>}
               </div>)}
               {exceptionStage && <p className="private-exception-feedback private-exception-feedback--progress" role="status" aria-live="polite"><LoaderCircle className="spin" size={14} /> {exceptionStageLabel[exceptionStage]}</p>}
             </div>}

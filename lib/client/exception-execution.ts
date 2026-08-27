@@ -1,5 +1,6 @@
 import type { STRK20_INVOKE_ACTION } from "starknet";
-import { decryptVaultRecord, encryptVaultRecord, type VaultPrincipalKeyPair } from "@/lib/crypto/vault";
+import { z } from "zod";
+import { decryptVaultRecord, encryptVaultRecord, type EncryptedVaultRecord, type VaultPrincipalKeyPair } from "@/lib/crypto/vault";
 import {
   generateUuidV7,
   remediationRecordSchema,
@@ -9,7 +10,12 @@ import {
 import { commitPayoActionTokenTotals } from "@/lib/domain/settlement";
 import { buildPayrollIntegrityInputsFromSerialized, type SerializedPayrollIntegrityBuildRequest } from "@/lib/proof/input-builder";
 import { proveEncryptedPayroll, type ProofProgressListener } from "@/lib/proof/client";
-import type { ProofWorkerSuccess } from "@/lib/proof/protocol";
+import {
+  PAYO_MAX_PROOF_CALLDATA_FELTS,
+  type PayrollIntegrityPublicInputs,
+  type PayrollIntegrityShardProof,
+  type ProofWorkerSuccess,
+} from "@/lib/proof/protocol";
 import { buildWageClaimInputs, buildWageRemediationInputs } from "@/lib/proof/wage-claim-input";
 import {
   buildPayoSealedAction,
@@ -49,6 +55,66 @@ export type WageClaimExecutionResult = PendingExceptionSubmission & {
   transactionHash: string;
   verificationQueued: true;
 };
+
+const pendingExceptionSubmissionSchema = z.object({
+  version: z.literal(1),
+  workflowType: z.enum(["wage_claim", "wage_remediation"]),
+  organizationId: z.string().min(1),
+  runId: z.string().min(1),
+  subjectRecordId: z.string().min(1),
+  proofBundleId: z.string().min(1),
+  settlementId: z.string().min(1),
+  walletRequestId: z.string().min(1),
+  idempotencyKey: z.string().min(1),
+  tokenTotalsCommitment: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+  proofShards: z.tuple([
+    z.array(z.string().regex(/^0x[0-9a-fA-F]+$/)).min(1).max(PAYO_MAX_PROOF_CALLDATA_FELTS),
+    z.array(z.string().regex(/^0x[0-9a-fA-F]+$/)).min(1).max(PAYO_MAX_PROOF_CALLDATA_FELTS),
+  ]),
+  transactionHash: z.string().regex(/^0x[0-9a-fA-F]{1,64}$/).optional(),
+  createdAt: z.string().datetime(),
+}).strict();
+
+const payrollPublicInputsSchema = z.object({
+  chainId: z.string(),
+  sealAddress: z.string(),
+  proofVersion: z.string(),
+  schemaVersion: z.string(),
+  agreementRootHigh: z.string(),
+  agreementRootLow: z.string(),
+  manifestRootHigh: z.string(),
+  manifestRootLow: z.string(),
+  policyRootHigh: z.string(),
+  policyRootLow: z.string(),
+  fxRootHigh: z.string(),
+  fxRootLow: z.string(),
+  runNullifierHigh: z.string(),
+  runNullifierLow: z.string(),
+  validityStart: z.string(),
+  validityExpiry: z.string(),
+  shardIndex: z.string(),
+}).strict();
+
+const resumableExceptionProofSchema = z.object({
+  shards: z.tuple([
+    z.object({
+      shardIndex: z.literal(0),
+      proofCalldata: z.array(z.string().regex(/^0x[0-9a-fA-F]+$/)).min(1).max(PAYO_MAX_PROOF_CALLDATA_FELTS),
+      calldataHash: z.string().regex(/^0x[0-9a-fA-F]+$/),
+      publicInputs: payrollPublicInputsSchema,
+    }).passthrough(),
+    z.object({
+      shardIndex: z.literal(1),
+      proofCalldata: z.array(z.string().regex(/^0x[0-9a-fA-F]+$/)).min(1).max(PAYO_MAX_PROOF_CALLDATA_FELTS),
+      calldataHash: z.string().regex(/^0x[0-9a-fA-F]+$/),
+      publicInputs: payrollPublicInputsSchema,
+    }).passthrough(),
+  ]),
+}).passthrough();
+
+export function parsePendingExceptionSubmission(value: unknown): PendingExceptionSubmission {
+  return pendingExceptionSubmissionSchema.parse(value) as PendingExceptionSubmission;
+}
 
 function canonicalRoot(high: string, low: string): `0x${string}` {
   const upper = BigInt(high);
@@ -327,6 +393,153 @@ export async function executeProofBoundWageClaim(input: {
     },
     principals: [input.principal],
   });
+  input.persistPendingSubmission?.(null);
+  input.onStage?.("queued");
+  return { ...submitted, verificationQueued: true };
+}
+
+export async function resumeProofBoundWageClaim(input: {
+  client: PayoClient;
+  organizationId: string;
+  principal: VaultPrincipalKeyPair;
+  chainId: string;
+  sealAddress: string;
+  claim: WageClaimRecord;
+  pendingSubmission: PendingExceptionSubmission;
+  submitException: (
+    workflow: "wage_claim",
+    recipients: [],
+    action: STRK20_INVOKE_ACTION,
+  ) => Promise<string>;
+  onStage?: (stage: PayrollExecutionStage) => void;
+  persistPendingSubmission?: (submission: PendingExceptionSubmission | null) => void;
+  now?: () => Date;
+}): Promise<WageClaimExecutionResult> {
+  const pending = parsePendingExceptionSubmission(input.pendingSubmission);
+  const claim = wageClaimRecordSchema.parse(input.claim);
+  if (
+    pending.workflowType !== "wage_claim"
+    || pending.organizationId !== input.organizationId
+    || pending.subjectRecordId !== claim.id
+    || pending.runId !== claim.runId
+    || claim.organizationId !== input.organizationId
+    || claim.state !== "proven"
+    || claim.proofBundleId !== pending.proofBundleId
+    || !claim.claimNullifier
+  ) {
+    throw new Error("The saved Ready approval does not match this proven wage claim.");
+  }
+  if (!input.sealAddress || BigInt(input.chainId) === 0n || BigInt(input.sealAddress) === 0n) {
+    throw new Error("PAYO claim recovery requires non-zero chain and seal bindings.");
+  }
+
+  input.onStage?.("loading");
+  const settlementResponse = await input.client.getSettlement(pending.settlementId);
+  const settlement = settlementResponse.settlement as Record<string, unknown>;
+  if (
+    settlement.organizationId !== input.organizationId
+    || settlement.runId !== pending.runId
+    || settlement.workflowType !== "wage_claim"
+    || settlement.subjectRecordId !== claim.id
+    || settlement.tokenTotalsCommitment !== pending.tokenTotalsCommitment
+  ) {
+    throw new Error("The durable claim approval intent does not match the saved proof.");
+  }
+  const serverTransactionHash = typeof settlement.transactionHash === "string"
+    ? settlement.transactionHash
+    : undefined;
+  if (!serverTransactionHash && settlement.state !== "approval_pending") {
+    throw new Error("This claim approval can no longer be resumed because its settlement is " + String(settlement.state) + ".");
+  }
+
+  const proofResponse = await input.client.getEncryptedRecord({
+    organizationId: input.organizationId,
+    recordId: pending.proofBundleId,
+  }) as { record?: { envelope?: EncryptedVaultRecord } };
+  if (!proofResponse.record?.envelope) {
+    throw new Error("The encrypted wage-claim proof is unavailable for Ready recovery.");
+  }
+  const proofPayload = resumableExceptionProofSchema.parse(
+    decryptVaultRecord(proofResponse.record.envelope, input.principal),
+  );
+  const shards = proofPayload.shards.map((shard) => ({
+    shardIndex: shard.shardIndex,
+    proof: new Uint8Array(),
+    proofCalldata: shard.proofCalldata,
+    calldataHash: shard.calldataHash,
+    publicInputs: shard.publicInputs as PayrollIntegrityPublicInputs,
+  })) as [PayrollIntegrityShardProof, PayrollIntegrityShardProof];
+  if (
+    JSON.stringify(shards[0].proofCalldata) !== JSON.stringify(pending.proofShards[0])
+    || JSON.stringify(shards[1].proofCalldata) !== JSON.stringify(pending.proofShards[1])
+  ) {
+    throw new Error("The saved claim calldata does not match its encrypted proof bundle.");
+  }
+  const proofNullifier = canonicalRoot(
+    shards[0].publicInputs.runNullifierHigh,
+    shards[0].publicInputs.runNullifierLow,
+  );
+  if (BigInt(proofNullifier) !== BigInt(claim.claimNullifier)) {
+    throw new Error("The saved proof is bound to a different wage claim.");
+  }
+
+  const now = input.now?.() ?? new Date();
+  const nowUnix = BigInt(Math.floor(now.getTime() / 1_000));
+  input.onStage?.("preflight");
+  const { readiness } = await input.client.checkDeploymentReadiness({
+    chainId: input.chainId,
+    sealAddress: input.sealAddress,
+    mode: PAYO_PROOF_MODE_CLAIM,
+    proofVersion: 3,
+    agreementRoot: canonicalRoot(shards[0].publicInputs.agreementRootHigh, shards[0].publicInputs.agreementRootLow),
+    policyRoot: canonicalRoot(shards[0].publicInputs.policyRootHigh, shards[0].publicInputs.policyRootLow),
+    fxRoot: canonicalRoot(shards[0].publicInputs.fxRootHigh, shards[0].publicInputs.fxRootLow),
+  });
+  if (!readiness.ready) {
+    throw new Error("PAYO claim deployment is not ready: " + readiness.checks.filter(({ ready }) => !ready).map(({ message }) => message).join(" "));
+  }
+  const sealed = buildPayoSealedAction({
+    sealAddress: input.sealAddress,
+    chainId: input.chainId,
+    shards,
+    mode: PAYO_PROOF_MODE_CLAIM,
+    nowUnixSeconds: nowUnix,
+  });
+
+  let transactionHash = serverTransactionHash ?? pending.transactionHash;
+  if (!transactionHash) {
+    input.onStage?.("wallet");
+    transactionHash = await input.submitException("wage_claim", [], sealed.invokeAction);
+    if (!/^0x[0-9a-fA-F]{1,64}$/.test(transactionHash)) {
+      throw new Error("Ready submitted the wage claim without returning a valid transaction hash.");
+    }
+    input.persistPendingSubmission?.({ ...pending, transactionHash });
+  }
+  if (!/^0x[0-9a-fA-F]{1,64}$/.test(transactionHash)) {
+    throw new Error("The recovered wage-claim transaction hash is invalid.");
+  }
+
+  input.onStage?.("recording");
+  await retryWrite(() => input.client.recordSettlementSubmission(pending.settlementId, transactionHash!));
+  await retryWrite(() => input.client.enqueueProofVerification({
+    settlementId: pending.settlementId,
+    proofBundleId: pending.proofBundleId,
+    shards: pending.proofShards,
+  }));
+  await storeCanonicalEncryptedRecord({
+    client: input.client,
+    organizationId: input.organizationId,
+    recordType: "wage-claim",
+    record: {
+      ...claim,
+      revision: claim.revision + 1,
+      updatedAt: new Date().toISOString(),
+      settlementId: pending.settlementId,
+      state: "submitted",
+    },
+    principals: [input.principal],
+  });
+  const submitted = { ...pending, transactionHash };
   input.persistPendingSubmission?.(null);
   input.onStage?.("queued");
   return { ...submitted, verificationQueued: true };
