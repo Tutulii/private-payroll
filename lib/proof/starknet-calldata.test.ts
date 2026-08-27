@@ -69,4 +69,47 @@ describe("PayrollIntegrity Starknet calldata", () => {
     });
     expect(shardOne).toMatchObject({ ...shardZero, shardIndex: "1" });
   });
+
+  it("extracts and validates the v2 inputs from PAYO's linked advanced envelope", () => {
+    const base = readFileSync(
+      new URL(
+        "../../contracts/integrity_verifier/tests/proof_calldata-shard-0.txt",
+        import.meta.url,
+      ),
+      "utf8",
+    ).trim().split(/\s+/);
+    const advanced = [...base];
+    advanced[5] = "0x2";
+    const wrapped = [`0x${base.length.toString(16)}`, ...base, ...advanced];
+
+    expect(parsePayrollPublicInputsFromGaragaCalldata(wrapped)).toMatchObject({
+      chainId: "1",
+      sealAddress: "74565",
+      proofVersion: "2",
+      schemaVersion: "1",
+      validityStart: "1010",
+      validityExpiry: "2000",
+      shardIndex: "0",
+    });
+  });
+
+  it("rejects malformed linked advanced calldata", () => {
+    const malformed = ["0xc73", "0x10", ...Array.from({ length: 34 }, () => "0x0")];
+    expect(() => parsePayrollPublicInputsFromGaragaCalldata(malformed)).toThrow(
+      "invalid composite packing",
+    );
+
+    const base = [
+      "0x11",
+      ...Array.from({ length: 34 }, (_, index) => index === 4 ? "0x1" : "0x0"),
+    ];
+    const advanced = [...base];
+    advanced[5] = "0x2";
+    advanced[1] = "0x99";
+    expect(() => parsePayrollPublicInputsFromGaragaCalldata([
+      `0x${base.length.toString(16)}`,
+      ...base,
+      ...advanced,
+    ])).toThrow("not linked at public input chainId");
+  });
 });

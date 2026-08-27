@@ -98,22 +98,31 @@ export function hashProofCalldata(calldata: readonly string[]): string {
   return hash.computePoseidonHashOnElements(canonical);
 }
 
-/** Extracts the 17 verifier-returned u256 values from Garaga's proof calldata. */
-export function parsePayrollPublicInputsFromGaragaCalldata(
+function parsePayrollPublicInputsAt(
   calldata: readonly string[],
+  publicInputOffset: number,
 ): PayrollIntegrityPublicInputs {
-  if (calldata.length < 1 + PAYROLL_INTEGRITY_PUBLIC_INPUT_COUNT * 2) {
+  const requiredLength = publicInputOffset + 1 + PAYROLL_INTEGRITY_PUBLIC_INPUT_COUNT * 2;
+  if (calldata.length < requiredLength) {
     throw new Error("Garaga proof calldata is too short for PayrollIntegrity public inputs.");
   }
-  const count = parseUnsigned(calldata[0], "Garaga public input count", 1n << 32n);
+  const count = parseUnsigned(calldata[publicInputOffset], "Garaga public input count", 1n << 32n);
   if (count !== BigInt(PAYROLL_INTEGRITY_PUBLIC_INPUT_COUNT)) {
     throw new Error(
       `Expected ${PAYROLL_INTEGRITY_PUBLIC_INPUT_COUNT} Garaga public inputs; received ${count}.`,
     );
   }
   const values = Array.from({ length: PAYROLL_INTEGRITY_PUBLIC_INPUT_COUNT }, (_, index) => {
-    const low = parseUnsigned(calldata[1 + index * 2], `Public input ${index} low limb`, 1n << 128n);
-    const high = parseUnsigned(calldata[2 + index * 2], `Public input ${index} high limb`, 1n << 128n);
+    const low = parseUnsigned(
+      calldata[publicInputOffset + 1 + index * 2],
+      `Public input ${index} low limb`,
+      1n << 128n,
+    );
+    const high = parseUnsigned(
+      calldata[publicInputOffset + 2 + index * 2],
+      `Public input ${index} high limb`,
+      1n << 128n,
+    );
     return (low + (high << 128n)).toString();
   });
   return {
@@ -135,4 +144,41 @@ export function parsePayrollPublicInputsFromGaragaCalldata(
     validityExpiry: values[15],
     shardIndex: values[16],
   };
+}
+
+/**
+ * Extracts the effective 17 verifier-returned u256 values from a direct Garaga
+ * proof or PAYO's linked advanced-proof envelope:
+ * `[base_calldata_len, base_calldata..., advanced_calldata...]`.
+ *
+ * Composite validation mirrors PayoAdvancedBundleVerifier before returning the
+ * v2 inputs. The committed calldata hash still binds the complete payload.
+ */
+export function parsePayrollPublicInputsFromGaragaCalldata(
+  calldata: readonly string[],
+): PayrollIntegrityPublicInputs {
+  if (calldata.length < 1 + PAYROLL_INTEGRITY_PUBLIC_INPUT_COUNT * 2) {
+    throw new Error("Garaga proof calldata is too short for PayrollIntegrity public inputs.");
+  }
+  const firstHeader = parseUnsigned(calldata[0], "Garaga calldata header", 1n << 53n);
+  if (firstHeader === BigInt(PAYROLL_INTEGRITY_PUBLIC_INPUT_COUNT)) {
+    return parsePayrollPublicInputsAt(calldata, 0);
+  }
+
+  const baseLength = Number(firstHeader);
+  const advancedOffset = baseLength + 1;
+  if (baseLength === 0 || advancedOffset >= calldata.length) {
+    throw new Error("PAYO advanced proof calldata has invalid composite packing.");
+  }
+  const baseInputs = parsePayrollPublicInputsAt(calldata, 1);
+  const advancedInputs = parsePayrollPublicInputsAt(calldata, advancedOffset);
+  if (BigInt(baseInputs.proofVersion) !== 1n || BigInt(advancedInputs.proofVersion) !== 2n) {
+    throw new Error("PAYO advanced proof calldata has invalid linked proof versions.");
+  }
+  for (const key of PUBLIC_INPUT_KEYS) {
+    if (key !== "proofVersion" && BigInt(baseInputs[key]) !== BigInt(advancedInputs[key])) {
+      throw new Error(`PAYO advanced proof calldata is not linked at public input ${key}.`);
+    }
+  }
+  return advancedInputs;
 }
