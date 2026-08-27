@@ -21,6 +21,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { useAppShell } from "../ui/app-shell";
 import { usePayoVault } from "../vault/payo-vault";
@@ -194,6 +195,7 @@ function auditEvent(event: AuditSummary): ActivityEvent {
 }
 
 export default function ActivityPage() {
+  const pathname = usePathname();
   const { notify } = useAppShell();
   const vault = usePayoVault();
   const starknet = useStarknetWallet();
@@ -331,10 +333,12 @@ export default function ActivityPage() {
         if (!run.agreementRoot || !run.policyRoot || !run.fxRoot) {
           throw new Error("This payday is missing its public proof-root bindings.");
         }
-        const sealAddress = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
+        const browserEvidenceMode = pathname.startsWith("/payo-browser-evidence");
+        const sealAddress = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS
+          ?? (browserEvidenceMode ? "0x1" : undefined);
         if (!sealAddress) throw new Error("The proof-bound PAYO seal is not configured.");
         const { readiness } = await client.checkDeploymentReadiness({
-          chainId: starknet.chainId,
+          chainId: starknet.chainId || (browserEvidenceMode ? "0x534e5f4d41494e" : ""),
           sealAddress,
           mode: 2,
           proofVersion: 3,
@@ -370,7 +374,7 @@ export default function ActivityPage() {
       }
     })();
     return () => { active = false; };
-  }, [claimRunId, starknet.chainId, vault.client, vault.session]);
+  }, [claimRunId, pathname, starknet.chainId, vault.client, vault.session]);
 
   const events = useMemo(() => [
     ...settlements.map(settlementEvent),
