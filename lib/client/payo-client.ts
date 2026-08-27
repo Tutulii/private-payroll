@@ -392,21 +392,38 @@ export class PayoClient {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 30 * 60_000);
     try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${accessToken}`,
-          accept: "application/json",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          version: 1,
-          requestId: crypto.randomUUID(),
-          encryptedWitness: input.encryptedWitness,
-          principal: input.principal,
-        } satisfies RemoteProofRequest),
-        signal: controller.signal,
-      });
+      let response: Response;
+      try {
+        response = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${accessToken}`,
+            accept: "application/json",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            version: 1,
+            requestId: crypto.randomUUID(),
+            encryptedWitness: input.encryptedWitness,
+            principal: input.principal,
+          } satisfies RemoteProofRequest),
+          signal: controller.signal,
+        });
+      } catch {
+        if (controller.signal.aborted) {
+          throw new PayoApiError(
+            "The remote ZK prover did not respond within 30 minutes.",
+            "PROVER_TIMEOUT",
+            408,
+          );
+        }
+        const browserOrigin = window.location.origin;
+        throw new PayoApiError(
+          `The remote ZK prover could not be reached from ${browserOrigin}. Local PAYO sessions cannot use a prover authenticated against a different deployment; use the deployed PAYO origin or configure a same-environment prover.`,
+          "PROVER_FETCH_FAILED",
+          0,
+        );
+      }
       const body = await response.json();
       if (!response.ok) {
         throw new PayoApiError(

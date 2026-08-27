@@ -625,14 +625,6 @@ export async function executeProofBoundPayroll(
     fxSnapshots: snapshots,
     lines,
   });
-  if (input.authorizeFxRoot) {
-    input.onStage?.("authorizing");
-    await input.authorizeFxRoot({
-      root: precomputedFxRoot,
-      snapshots,
-      publicationWindow: fxCatalogPublicationWindow(snapshots),
-    });
-  }
   const proofRequestId = generateUuidV7();
   const encryptedWitness = encryptVaultRecord(
     advancedProfile ? {
@@ -655,13 +647,25 @@ export async function executeProofBoundPayroll(
     principal: input.principal,
     onProgress: (stage) => input.onStage?.(stage),
   });
+  // Prove before requesting any registry transaction. A remote prover can be
+  // unavailable or reject this origin/session; no user should spend Mainnet
+  // fees merely to discover that failure. The proved FX root is authorized
+  // immediately afterward and still checked by the deployment preflight.
+  if (input.authorizeFxRoot) {
+    input.onStage?.("authorizing");
+    await input.authorizeFxRoot({
+      root: precomputedFxRoot,
+      snapshots,
+      publicationWindow: fxCatalogPublicationWindow(snapshots),
+    });
+  }
   const publicInputs = proof.shards[0].publicInputs;
   const agreementRoot = rootFromLimbs(publicInputs.agreementRootHigh, publicInputs.agreementRootLow);
   const manifestRoot = rootFromLimbs(publicInputs.manifestRootHigh, publicInputs.manifestRootLow);
   const policyRoot = rootFromLimbs(publicInputs.policyRootHigh, publicInputs.policyRootLow);
   const fxRoot = rootFromLimbs(publicInputs.fxRootHigh, publicInputs.fxRootLow);
   if (BigInt(fxRoot) !== BigInt(precomputedFxRoot)) {
-    throw new Error("The proof FX root differs from the root authorized before proving.");
+    throw new Error("The proof FX root differs from the root authorized for this payroll.");
   }
   const runNullifier = rootFromLimbs(publicInputs.runNullifierHigh, publicInputs.runNullifierLow);
   for (const { agreement } of input.obligations) {

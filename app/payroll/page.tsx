@@ -48,6 +48,8 @@ import {
 } from "@/lib/client/payroll-execution";
 import { payrollRecoveryMode } from "@/lib/client/payroll-recovery-state";
 import {
+  obligationAuthorizationSelectionKey,
+  payeesMissingActiveAgreements,
   reconcileProofProfileSelection,
   toggleProofProfileSelection,
 } from "@/lib/client/payroll-selection";
@@ -136,7 +138,7 @@ export default function PayrollPage() {
     validAfter: number | null;
     state: "active" | "scheduled";
   } | null>(null);
-  const [obligationRootChecking, setObligationRootChecking] = useState(false);
+  const [obligationAuthorizationActionPending, setObligationAuthorizationActionPending] = useState(false);
   const [runsLoading, setRunsLoading] = useState(false);
   const [dueScheduleKeys, setDueScheduleKeys] = useState<Set<string>>(() => new Set());
   const [scheduleSyncError, setScheduleSyncError] = useState("");
@@ -156,8 +158,14 @@ export default function PayrollPage() {
   const hasActiveAgreement = agreements.some((agreement) =>
     !agreement.effectiveUntil
     && payees.some(({ id, status }) => id === agreement.payeeId && status === "active"));
+  const payeesMissingAgreements = useMemo(
+    () => payeesMissingActiveAgreements(payees, agreements),
+    [agreements, payees],
+  );
   const payrollBusy = payrollStage !== null && payrollStage !== "queued";
-  const busy = payrollBusy || starknet.transaction?.stage === "wallet" || starknet.transaction?.stage === "confirming";
+  const walletTransactionBusy = starknet.transaction?.stage === "wallet" || starknet.transaction?.stage === "confirming";
+  const registryTransactionBusy = starknet.transaction?.kind === "registry" && walletTransactionBusy;
+  const busy = payrollBusy || obligationAuthorizationActionPending || walletTransactionBusy;
   const privacyChecking = starknet.privacyCapability === "checking";
   const privacyUnsupported = starknet.privacyCapability === "unsupported";
   const registrationRequired = starknet.privacyCapability === "uninitialized";
@@ -203,6 +211,17 @@ export default function PayrollPage() {
   [dueScheduleKeys, locallyDueObligations]);
   const selectedObligations = useMemo(() => dueObligations.filter(({ agreement }) =>
     selectedAgreementIds.includes(agreement.id)), [dueObligations, selectedAgreementIds]);
+  const selectedObligationAuthorizationKey = useMemo(
+    () => obligationAuthorizationSelectionKey(
+      vault.session?.organizationId,
+      selectedObligations,
+    ),
+    [selectedObligations, vault.session?.organizationId],
+  );
+  const selectedObligationsRef = useRef(selectedObligations);
+  useEffect(() => {
+    selectedObligationsRef.current = selectedObligations;
+  }, [selectedObligations]);
   const selectedProofProfile = selectedObligations[0]?.agreement.agreement.agreementVersion === "payo-agreement-v2"
     ? "Advanced obligations · proof v2"
     : "Recurring payroll · proof v1";
@@ -393,26 +412,19 @@ export default function PayrollPage() {
   useEffect(() => {
     let stale = false;
     const timer = window.setTimeout(() => {
+      const organizationId = vault.session?.organizationId;
       if (
-        !vault.session
+        !organizationId
         || !shieldWalletConnected
         || !shieldWalletMainnet
-        || selectedObligations.length === 0
+        || !selectedObligationAuthorizationKey
       ) {
-        setObligationRootChecking(false);
         setObligationSchedule(null);
         return;
       }
-
-      if (payrollBusy) {
-        setObligationRootChecking(false);
-        return;
-      }
-
-      setObligationRootChecking(true);
       void preparePayrollObligationRoot({
-        organizationId: vault.session.organizationId,
-        obligations: selectedObligations,
+        organizationId,
+        obligations: selectedObligationsRef.current,
       })
         .then(async (planned) => ({
           planned,
@@ -431,9 +443,6 @@ export default function PayrollPage() {
         })
         .catch(() => {
           if (!stale) setObligationSchedule(null);
-        })
-        .finally(() => {
-          if (!stale) setObligationRootChecking(false);
         });
     }, 0);
 
@@ -441,7 +450,7 @@ export default function PayrollPage() {
       stale = true;
       window.clearTimeout(timer);
     };
-  }, [payrollBusy, readObligationRootActive, selectedObligations, shieldWalletConnected, shieldWalletMainnet, vault.session]);
+  }, [readObligationRootActive, selectedObligationAuthorizationKey, shieldWalletConnected, shieldWalletMainnet, vault.session?.organizationId]);
 
   useEffect(() => {
     let stale = false;
@@ -574,7 +583,10 @@ export default function PayrollPage() {
   };
 
   const scheduleSelectedObligationRoot = async () => {
+    if (obligationAuthorizationActionPending) return;
     setFormError("");
+    setObligationAuthorizationActionPending(true);
+    starknet.clearTransaction();
     try {
       if (!vault.session) throw new Error("Unlock the encrypted workspace first.");
       if (!starknet.isConnected || !starknet.isMainnet) {
@@ -605,6 +617,8 @@ export default function PayrollPage() {
       notify(`Obligation root active · ${scheduled.transactionHash.slice(0, 10)}…`);
     } catch (scheduleError) {
       setFormError(scheduleError instanceof Error ? scheduleError.message : "The obligation root was not scheduled.");
+    } finally {
+      setObligationAuthorizationActionPending(false);
     }
   };
 
@@ -844,6 +858,17 @@ export default function PayrollPage() {
     queued: "Verification queued",
   };
 
+  const authorizePayo = async () => {
+    try {
+      await vault.login();
+      notify("PAYO session authorized by Ready");
+    } catch (authenticationError) {
+      notify(authenticationError instanceof Error
+        ? authenticationError.message
+        : "PAYO authorization failed");
+    }
+  };
+
   const createWorkspace = async () => {
     setWorkspaceError("");
     const normalizedWorkspaceName = workspaceName.trim();
@@ -1002,7 +1027,7 @@ export default function PayrollPage() {
           ) : !vault.ready || vault.loading ? (
             <div className="vault-gate__copy"><small>ENCRYPTED WORKSPACE</small><strong>Opening the private desk…</strong><p>Keys remain in this browser session.</p></div>
           ) : !vault.authenticated ? (
-            <><div className="vault-gate__copy"><small>ENCRYPTED WORKSPACE</small><strong>{starknet.isConnected ? "Authorize this Ready account" : "Connect Ready to open payroll"}</strong><p>Ready signs a short-lived PAYO session. Salaries are still encrypted locally before storage.</p></div>{starknet.isConnected ? <button type="button" className="button button--ink" disabled={!starknet.isMainnet} onClick={() => void vault.login()}>Authorize with Ready</button> : <Link className="button button--ink" href="/wallet">Connect Ready</Link>}</>
+            <><div className="vault-gate__copy"><small>ENCRYPTED WORKSPACE</small><strong>{starknet.isConnected ? "Authorize this Ready account" : "Connect Ready to open payroll"}</strong><p>Ready signs a short-lived PAYO session. Salaries are still encrypted locally before storage.</p></div>{starknet.isConnected ? <button type="button" className="button button--ink" disabled={!starknet.isMainnet} onClick={authorizePayo}>Authorize with Ready</button> : <Link className="button button--ink" href="/wallet">Connect Ready</Link>}</>
           ) : vault.organizations.length === 0 ? (
             <>
               <div className="vault-gate__copy"><small>{vault.selectedOrganizationId ? "RECOVER EXISTING WORKSPACE" : "NEW ENCRYPTED WORKSPACE"}</small><strong>{vault.selectedOrganizationId ? "Link this Ready account securely" : "Create your private payroll vault"}</strong><p>{vault.selectedOrganizationId ? "The imported recovery key proves access without sending it to PAYO." : "A recovery file downloads once. PAYO cannot reset a lost vault password."}</p></div>
@@ -1149,6 +1174,15 @@ export default function PayrollPage() {
                   <button type="button" className="recipient-remove" aria-label={`${selected ? "Exclude" : "Include"} ${payee.displayName}`} disabled={busy} onClick={() => toggleAgreement(agreement.id)}>{selected ? <CheckCircle2 size={15} /> : <X size={15} />}</button>
                 </div>
               );})}
+              {payeesMissingAgreements.map((payee, index) => (
+                <div className="recipient-editor recipient-editor--setup" key={`setup-${payee.id}`}>
+                  <span className="recipient-index">{dueObligations.length + index + 1}</span>
+                  <label><span>Contributor</span><input value={payee.displayName} readOnly /></label>
+                  <label className="recipient-address"><span>Registered Starknet address</span><input value={payee.recipientAddress} spellCheck={false} readOnly /></label>
+                  <span className="recipient-setup-status"><small>Setup required</small><strong>No pay agreement</strong></span>
+                  <Link className="button button--soft recipient-setup-action" href="/team#team-directory">Set agreement</Link>
+                </div>
+              ))}
               {!runsLoading && vault.session && dueObligations.length === 0 && (
                 <div className="directory-empty payroll-empty-guide">
                   <CalendarDays size={24} />
@@ -1178,8 +1212,42 @@ export default function PayrollPage() {
 
             <div className="recipient-note"><ShieldCheck size={17} /><span><strong>Authoritative proof-bound obligations</strong><small>Amounts, recipient salts, schedule commitments, classifications, and policy roots come from the encrypted agreements. They cannot be edited inside a payroll run. Active policy, FX, obligation, and verifier roots are required before Ready can open.</small></span></div>
             <div className="obligation-root-control">
-              <span><strong>{obligationRootChecking ? "Checking authorization" : obligationSchedule?.state === "active" ? "Obligation root active" : obligationSchedule?.state === "scheduled" ? "Activation confirming" : "Activate before payroll"}</strong><small>{obligationRootChecking ? "Reading the exact selected agreement root from the Mainnet registry." : obligationSchedule?.state === "active" ? "The selected encrypted agreement set is authorized on-chain." : obligationSchedule?.validAfter ? `Submitted at ${new Date(obligationSchedule.validAfter * 1_000).toLocaleString()}. Changing the selection creates a different root.` : "The registry administrator can authorize this exact encrypted agreement set immediately in one transaction."}</small></span>
-              <button type="button" className="button button--soft" disabled={!vault.session || !starknet.isConnected || !starknet.isMainnet || selectedObligations.length === 0 || busy || obligationRootChecking} onClick={scheduleSelectedObligationRoot}>{obligationRootChecking ? <><LoaderCircle className="spin" size={15} /> Checking</> : starknet.transaction?.kind === "registry" && busy ? <><LoaderCircle className="spin" size={15} /> {starknet.transaction.stage === "wallet" ? "Approve in Ready" : "Confirming"}</> : obligationSchedule?.state === "active" ? <>Check again <ShieldCheck size={15} /></> : <>Authorize batch <Clock3 size={15} /></>}</button>
+              <span>
+                <strong>{registryTransactionBusy
+                  ? starknet.transaction?.stage === "wallet" ? "Ready approval requested" : "Authorization confirming"
+                  : obligationAuthorizationActionPending
+                    ? "Preparing authorization"
+                    : obligationSchedule?.state === "active"
+                      ? "Obligation root active"
+                      : obligationSchedule?.state === "scheduled"
+                        ? "Activation confirming"
+                        : "Activate before payroll"}</strong>
+                <small>{registryTransactionBusy
+                  ? starknet.transaction?.stage === "wallet"
+                    ? "Approve the single obligation-root transaction in Ready."
+                    : "The authorization transaction was submitted to Mainnet."
+                  : obligationAuthorizationActionPending
+                    ? "Preparing the exact selected agreement root before opening Ready."
+                    : obligationSchedule?.state === "active"
+                      ? "The selected encrypted agreement set is authorized on-chain."
+                      : obligationSchedule?.validAfter
+                        ? `Submitted at ${new Date(obligationSchedule.validAfter * 1_000).toLocaleString()}. Changing the selection creates a different root.`
+                        : "The registry administrator can authorize this exact encrypted agreement set immediately in one transaction."}</small>
+              </span>
+              <button
+                type="button"
+                className="button button--soft"
+                disabled={!vault.session || !starknet.isConnected || !starknet.isMainnet || selectedObligations.length === 0 || busy}
+                onClick={scheduleSelectedObligationRoot}
+              >
+                {registryTransactionBusy
+                  ? <><LoaderCircle className="spin" size={15} /> {starknet.transaction?.stage === "wallet" ? "Approve in Ready" : "Confirming"}</>
+                  : obligationAuthorizationActionPending
+                    ? <><LoaderCircle className="spin" size={15} /> Preparing</>
+                    : obligationSchedule?.state === "active"
+                      ? <>Check again <ShieldCheck size={15} /></>
+                      : <>Authorize batch <Clock3 size={15} /></>}
+              </button>
             </div>
 
             <div className="composer-summary">
@@ -1192,16 +1260,16 @@ export default function PayrollPage() {
                 <button
                   type="button"
                   className="button button--ink"
-                  disabled={!vault.session || !vault.recoveryReady || !starknet.isConnected || !starknet.isMainnet || busy || obligationRootChecking || selectedObligations.length === 0 || (obligationSchedule?.state === "active" && !canRunPayroll)}
+                  disabled={!vault.session || !vault.recoveryReady || !starknet.isConnected || !starknet.isMainnet || busy || selectedObligations.length === 0 || (obligationSchedule?.state === "active" && !canRunPayroll)}
                   onClick={obligationSchedule?.state === "active" ? submitPayroll : scheduleSelectedObligationRoot}
                 >
                   {payrollStage && payrollStage !== "queued"
                     ? <><LoaderCircle className="spin" size={17} /> {payrollStageLabel[payrollStage]}</>
-                    : obligationRootChecking
-                    ? <><LoaderCircle className="spin" size={17} /> Checking authorization</>
-                    : starknet.transaction?.kind === "registry" && busy
-                      ? <><LoaderCircle className="spin" size={17} /> {starknet.transaction.stage === "wallet" ? "Approve authorization in Ready" : "Confirming authorization"}</>
-                      : starknet.transaction?.kind === "payroll" && busy
+                    : registryTransactionBusy
+                      ? <><LoaderCircle className="spin" size={17} /> {starknet.transaction?.stage === "wallet" ? "Approve authorization in Ready" : "Confirming authorization"}</>
+                      : obligationAuthorizationActionPending
+                        ? <><LoaderCircle className="spin" size={17} /> Preparing Ready authorization</>
+                      : starknet.transaction?.kind === "payroll" && walletTransactionBusy
                         ? <><LoaderCircle className="spin" size={17} /> {starknet.transaction.stage === "wallet" ? "Approve in Ready" : "Confirming on Mainnet"}</>
                         : !vault.session
                           ? <>Unlock workspace <KeyRound size={17} /></>

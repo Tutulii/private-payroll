@@ -203,7 +203,7 @@ describe("proof-bound payroll browser orchestration", () => {
     );
   });
 
-  it("authorizes the exact fresh FX root before proof generation", async () => {
+  it("authorizes the exact proved FX root before deployment preflight", async () => {
     const mockClient = client();
     const input = await executionInput(mockClient);
     const authorizeFxRoot = vi.fn().mockResolvedValue(undefined);
@@ -214,12 +214,26 @@ describe("proof-bound payroll browser orchestration", () => {
     expect(mockClient.checkDeploymentReadiness).toHaveBeenCalledWith(
       expect.objectContaining({ fxRoot: authorizedRoot }),
     );
+    expect(proveSpy.mock.invocationCallOrder[0]).toBeLessThan(authorizeFxRoot.mock.invocationCallOrder[0]);
     expect(authorizeFxRoot.mock.invocationCallOrder[0]).toBeLessThan(
-      proveSpy.mock.invocationCallOrder[0],
+      mockClient.checkDeploymentReadiness.mock.invocationCallOrder[0],
     );
   });
 
-  it("does not prove or open payroll when FX-root authorization fails", async () => {
+  it("never spends an FX authorization transaction when proving fails", async () => {
+    const mockClient = client();
+    const input = await executionInput(mockClient);
+    const authorizeFxRoot = vi.fn();
+    await expect(executeProofBoundPayroll({
+      ...input,
+      prove: vi.fn().mockRejectedValue(new Error("prover unavailable")),
+      authorizeFxRoot,
+    })).rejects.toThrow("prover unavailable");
+    expect(authorizeFxRoot).not.toHaveBeenCalled();
+    expect(input.submitPayroll).not.toHaveBeenCalled();
+  });
+
+  it("proves but does not open payroll when FX-root authorization fails", async () => {
     const mockClient = client();
     const input = await executionInput(mockClient);
     const proveSpy = vi.fn(prove);
@@ -228,7 +242,7 @@ describe("proof-bound payroll browser orchestration", () => {
       prove: proveSpy,
       authorizeFxRoot: vi.fn().mockRejectedValue(new Error("FX publisher unavailable")),
     })).rejects.toThrow("FX publisher unavailable");
-    expect(proveSpy).not.toHaveBeenCalled();
+    expect(proveSpy).toHaveBeenCalledTimes(1);
     expect(input.submitPayroll).not.toHaveBeenCalled();
   });
 

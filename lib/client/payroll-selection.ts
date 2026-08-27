@@ -6,6 +6,61 @@ export type ProofProfileAgreement = {
   };
 };
 
+export type AuthorizationSelectionObligation = {
+  agreement: {
+    id: string;
+    revision: number;
+    updatedAt: string;
+    agreementCommitment: string;
+    proofScheduleCommitment?: string;
+    agreement: { id: string };
+  };
+  payee: {
+    id: string;
+    revision: number;
+    updatedAt: string;
+    recipientAddress: string;
+  };
+};
+
+/**
+ * React receives freshly decrypted agreement objects whenever payroll history
+ * refreshes. Object identity is therefore not a valid signal that the
+ * proof-bound authorization selection changed. This key includes every record
+ * revision/binding that can make the scheduled root stale while remaining
+ * stable across equivalent refresh results.
+ */
+export function obligationAuthorizationSelectionKey(
+  organizationId: string | null | undefined,
+  obligations: readonly AuthorizationSelectionObligation[],
+): string | null {
+  if (!organizationId || obligations.length === 0) return null;
+  return JSON.stringify({
+    organizationId,
+    obligations: obligations.map(({ agreement, payee }) => ({
+      agreementRecordId: agreement.id,
+      agreementId: agreement.agreement.id,
+      agreementRevision: agreement.revision,
+      agreementUpdatedAt: agreement.updatedAt,
+      agreementCommitment: agreement.agreementCommitment.toLowerCase(),
+      proofScheduleCommitment: agreement.proofScheduleCommitment?.toLowerCase() ?? null,
+      payeeRecordId: payee.id,
+      payeeRevision: payee.revision,
+      payeeUpdatedAt: payee.updatedAt,
+      recipientAddress: payee.recipientAddress.toLowerCase(),
+    })),
+  });
+}
+
+export function payeesMissingActiveAgreements<Payee extends { id: string; status: string }>(
+  payees: readonly Payee[],
+  agreements: readonly { payeeId: string; effectiveUntil?: string }[],
+): Payee[] {
+  return payees.filter(({ id, status }) => status === "active" && !agreements.some(
+    (agreement) => agreement.payeeId === id && !agreement.effectiveUntil,
+  ));
+}
+
 function profileFor(id: string, agreements: readonly ProofProfileAgreement[]) {
   const agreement = agreements.find((candidate) => candidate.id === id)?.agreement;
   if (!agreement) return undefined;

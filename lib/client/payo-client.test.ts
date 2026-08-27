@@ -1,8 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { decryptVaultRecord, generateVaultPrincipal } from "@/lib/crypto/vault";
 import { deriveRunNullifier } from "@/lib/crypto/commitments";
 import type { SerializedPayrollIntegrityBuildRequest } from "@/lib/proof/input-builder";
-import { prepareEncryptedPayrollRun } from "./payo-client";
+import { PayoClient, prepareEncryptedPayrollRun } from "./payo-client";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("client-encrypted payroll preparation", () => {
   it("commits and encrypts salary data before API transport", () => {
@@ -63,5 +67,28 @@ describe("client-encrypted payroll preparation", () => {
     expect(privateLine).toMatchObject({ agreementId, payeeId, netAtomic: "900000000000000000" });
     expect(prepared.agreementRoot).toBe(`0x${"aa".repeat(32)}`);
     expect(prepared.manifestRoot).toBe(`0x${"bb".repeat(32)}`);
+  });
+});
+
+describe("remote prover failures", () => {
+  it("turns an opaque cross-origin fetch failure into an actionable error", async () => {
+    vi.stubGlobal("window", {
+      location: { origin: "http://localhost:3000" },
+      setTimeout,
+      clearTimeout,
+    });
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    const client = new PayoClient(async () => "a".repeat(64));
+
+    const request = client.provePayrollIntegrityRemotely({
+      proverBaseUrl: "https://private-payroll.fly.dev",
+      encryptedWitness: {} as never,
+      principal: {} as never,
+    });
+    await expect(request).rejects.toMatchObject({
+      code: "PROVER_FETCH_FAILED",
+      status: 0,
+      message: expect.stringContaining("Local PAYO sessions cannot use a prover authenticated against a different deployment"),
+    });
   });
 });
