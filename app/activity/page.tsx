@@ -40,6 +40,14 @@ import {
   type PayAgreementDirectoryRecord,
 } from "@/lib/client/agreement-directory";
 import {
+  loadEncryptedPayees,
+  type PayeeDirectoryRecord,
+} from "@/lib/client/payee-directory";
+import {
+  activityAgreementOptionLabel,
+  activityRunOptionLabel,
+} from "@/lib/client/activity-option-labels";
+import {
   executeProofBoundWageClaim,
   executeProofBoundWageRemediation,
 } from "@/lib/client/exception-execution";
@@ -172,6 +180,7 @@ export default function ActivityPage() {
   const [auditEvents, setAuditEvents] = useState<AuditSummary[]>([]);
   const [receiptCount, setReceiptCount] = useState(0);
   const [agreements, setAgreements] = useState<PayAgreementDirectoryRecord[]>([]);
+  const [payees, setPayees] = useState<PayeeDirectoryRecord[]>([]);
   const [runs, setRuns] = useState<PayrollRunSummary[]>([]);
   const [claims, setClaims] = useState<WageClaimRecord[]>([]);
   const [remediations, setRemediations] = useState<RemediationRecord[]>([]);
@@ -205,6 +214,7 @@ export default function ActivityPage() {
       setAuditEvents([]);
       setReceiptCount(0);
       setAgreements([]);
+      setPayees([]);
       setRuns([]);
       setClaims([]);
       setRemediations([]);
@@ -214,11 +224,16 @@ export default function ActivityPage() {
     setLoading(true);
     setActivityError("");
     try {
-      const [settlementResult, auditResult, receiptResult, agreementResult, runResult, claimResult, remediationResult, disclosureResult] = await Promise.all([
+      const [settlementResult, auditResult, receiptResult, agreementResult, payeeResult, runResult, claimResult, remediationResult, disclosureResult] = await Promise.all([
         vault.client.listSettlements(vault.session.organizationId),
         vault.client.listAuditEvents(vault.session.organizationId),
         vault.client.listEncryptedRecords(vault.session.organizationId, "receipt"),
         loadEncryptedPayAgreements({
+          client: vault.client,
+          organizationId: vault.session.organizationId,
+          principal: vault.session.principal,
+        }),
+        loadEncryptedPayees({
           client: vault.client,
           organizationId: vault.session.organizationId,
           principal: vault.session.principal,
@@ -240,6 +255,7 @@ export default function ActivityPage() {
       setAuditEvents(auditResult.events);
       setReceiptCount(receiptResult.records.length);
       setAgreements(agreementResult);
+      setPayees(payeeResult);
       setRuns(runResult.runs.flatMap((run) => {
         if (
           typeof run.id !== "string"
@@ -273,6 +289,22 @@ export default function ActivityPage() {
     ...settlements.map(settlementEvent),
     ...auditEvents.map(auditEvent),
   ].sort((left, right) => right.timestamp - left.timestamp), [auditEvents, settlements]);
+
+  const agreementOptions = useMemo(() => {
+    const payeeNames = new Map(payees.map(({ id, displayName }) => [id, displayName]));
+    return agreements.map((agreement, index) => ({
+      agreement,
+      label: activityAgreementOptionLabel({
+        classification: agreement.agreement.classification,
+        payeeName: payeeNames.get(agreement.payeeId),
+      }, index),
+    }));
+  }, [agreements, payees]);
+
+  const runOptions = useMemo(() => runs.map((run, index) => ({
+    run,
+    label: activityRunOptionLabel(run, index),
+  })), [runs]);
 
   const visibleEvents = useMemo(() => events.filter((event) => {
     const matchesFilter = filter === "All" || event.kind === filter;
@@ -668,7 +700,7 @@ export default function ActivityPage() {
             {showDisclosure && <form className="receipt-disclosure-form" onSubmit={createDisclosure}>
               <label><span>Verified workflow</span><select value={disclosureSettlement?.id ?? ""} onChange={(event) => { setDisclosureSettlementId(event.target.value); setDisclosureAgreementId(""); }} required>{disclosureSettlements.map((settlement) => <option value={settlement.id} key={settlement.id}>{settlement.workflowType.replaceAll("_", " ")} · {shortId(settlement.transactionHash)}</option>)}</select></label>
               <label><span>Recipient scope</span><select value={disclosureScope} onChange={(event) => setDisclosureScope(event.target.value as typeof disclosureScope)}><option value="worker">Worker · own line only</option><option value="employer">Employer · full books</option><option value="auditor">Auditor · no identities</option><option value="tax">Tax reviewer · no classification</option></select></label>
-              {disclosureScope === "worker" && disclosureSettlement?.workflowType === "payroll" && <label><span>Worker payroll line</span><select value={disclosureAgreementId} onChange={(event) => setDisclosureAgreementId(event.target.value)} required><option value="">Choose a proved agreement</option>{agreements.map((agreement) => <option key={agreement.id} value={agreement.agreement.id}>{agreement.agreement.id.slice(0, 8)}… · {agreement.agreement.settlementToken}</option>)}</select></label>}
+              {disclosureScope === "worker" && disclosureSettlement?.workflowType === "payroll" && <label><span>Worker payroll line</span><select value={disclosureAgreementId} onChange={(event) => setDisclosureAgreementId(event.target.value)} required><option value="">Choose a proved agreement</option>{agreementOptions.map(({ agreement, label }) => <option key={agreement.id} value={agreement.agreement.id}>{label} · {agreement.agreement.settlementToken}</option>)}</select></label>}
               {disclosureScope === "worker" && disclosureSettlement?.workflowType !== "payroll" && <p>PAYO derives the claimant or remediation recipient from the encrypted, proof-bound exception record; no other payroll line can be selected.</p>}
               <label><span>Recipient principal UUID</span><input value={granteePrincipalId} onChange={(event) => setGranteePrincipalId(event.target.value)} placeholder="UUIDv7" required pattern="[0-9a-fA-F-]{36}" /></label>
               <label><span>Recipient X25519 public key</span><input value={granteePublicKey} onChange={(event) => setGranteePublicKey(event.target.value)} placeholder="Recipient encryption key" required /></label>
@@ -699,8 +731,8 @@ export default function ActivityPage() {
             </div>
             <button type="button" className="button button--ink button--wide" onClick={() => setShowClaimForm((current) => !current)} disabled={!vault.session || creatingException || agreements.length === 0 || runs.length === 0}><FileText size={16} /> Draft private claim</button>
             {showClaimForm && <form className="receipt-disclosure-form" onSubmit={createClaimDraft}>
-              <label><span>Committed agreement</span><select value={claimAgreementId} onChange={(event) => setClaimAgreementId(event.target.value)} required><option value="">Choose agreement</option>{agreements.map((agreement) => <option value={agreement.agreement.id} key={agreement.id}>{agreement.agreement.classification} · {shortId(agreement.agreement.id)}</option>)}</select></label>
-              <label><span>Payroll run</span><select value={claimRunId} onChange={(event) => setClaimRunId(event.target.value)} required><option value="">Choose run</option>{runs.map((run) => <option value={run.id} key={run.id}>{run.cycleId} · {run.state}</option>)}</select></label>
+              <label><span>Committed agreement</span><select value={claimAgreementId} onChange={(event) => setClaimAgreementId(event.target.value)} required><option value="">Choose agreement</option>{agreementOptions.map(({ agreement, label }) => <option value={agreement.agreement.id} key={agreement.id}>{label}</option>)}</select></label>
+              <label><span>Payroll run</span><select value={claimRunId} onChange={(event) => setClaimRunId(event.target.value)} required><option value="">Choose run</option>{runOptions.map(({ run, label }) => <option value={run.id} key={run.id}>{label}</option>)}</select></label>
               <label><span>Claim type</span><select value={claimKind} onChange={(event) => setClaimKind(event.target.value as WageClaimRecord["claimKind"])}><option value="missing_obligation">Missing obligation</option><option value="below_committed_floor">Below committed floor</option><option value="incomplete_final_pay">Incomplete final pay</option></select></label>
               {claimKind === "below_committed_floor" && <label><span>Disputed reference value (6-decimal atomic)</span><input inputMode="numeric" pattern="[0-9]+" value={claimReferenceValue} onChange={(event) => setClaimReferenceValue(event.target.value)} placeholder="900000" required /></label>}
               {claimKind === "incomplete_final_pay" && <label><span>Included final-pay mask (0–31)</span><input type="number" min="0" max="31" step="1" value={claimFinalMask} onChange={(event) => setClaimFinalMask(event.target.value)} required /></label>}

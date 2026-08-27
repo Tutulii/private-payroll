@@ -187,8 +187,13 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
   await expect(claimButton).toBeEnabled();
   await claimButton.click();
   const claimForm = page.locator("form.receipt-disclosure-form").filter({ hasText: "This creates a salted" });
-  await claimForm.getByLabel("Committed agreement").selectOption(recurringAgreement.id);
-  await claimForm.getByLabel("Payroll run").selectOption(runId);
+  const agreementSelect = claimForm.getByLabel("Committed agreement");
+  const runSelect = claimForm.getByLabel("Payroll run");
+  await expect(agreementSelect.locator(`option[value="${recurringAgreement.id}"]`))
+    .toHaveText(/Agreement \d+ · Recurring worker/);
+  await expect(runSelect.locator(`option[value="${runId}"]`)).toHaveText("Payday 1 · Disputed");
+  await agreementSelect.selectOption(recurringAgreement.id);
+  await runSelect.selectOption(runId);
   await claimForm.getByLabel("Claim type").selectOption("missing_obligation");
   await claimForm.getByRole("button", { name: "Encrypt claim draft" }).click();
   await expect(page.locator(".private-exception-row").filter({ hasText: "missing obligation" })).toContainText("draft");
