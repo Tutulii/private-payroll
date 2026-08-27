@@ -118,20 +118,19 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       try {
         const storageKey = `payo:pending-settlement:v1:${session.organizationId}`;
         const serialized = window.localStorage.getItem(storageKey);
-        if (!serialized) return;
-        let pending;
-        try {
-          pending = parsePendingPayrollSubmission(JSON.parse(serialized));
-        } catch {
-          // Keep corrupt recovery evidence untouched for explicit support recovery.
-          return;
+        let pending = null;
+        if (serialized) {
+          try {
+            const parsed = parsePendingPayrollSubmission(JSON.parse(serialized));
+            if (parsed.organizationId === session.organizationId) pending = parsed;
+          } catch {
+            // Keep corrupt recovery evidence untouched for explicit support recovery.
+          }
         }
-        if (pending.organizationId !== session.organizationId) return;
         const { runs } = await client.listPayrollRuns(session.organizationId);
         const candidates = runs.flatMap((run) => {
           if (
             typeof run.id !== "string"
-            || run.id !== pending.runId
             || run.state !== "confirmed"
             || typeof run.transactionHash !== "string"
             || proofRecoveryRunsRef.current.has(run.id)
@@ -148,7 +147,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               runId,
               indexedTransactionHash: transactionHash,
               principal: session.principal,
-              pendingSubmission: pending,
+              pendingSubmission: pending?.runId === runId ? pending : null,
               persistPendingSubmission: (next) => {
                 if (next) window.localStorage.setItem(storageKey, JSON.stringify(next));
                 else window.localStorage.removeItem(storageKey);
@@ -161,8 +160,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             // refresh remains best-effort and must never hold Activity loading.
             void reconcilePayrollTransaction(recovered.transactionHash);
             if (!cancelled) setToast("Confirmed payroll proof verification queued automatically");
-          } catch {
-            window.setTimeout(() => proofRecoveryRunsRef.current.delete(runId), 15_000);
+          } catch (error) {
+            const permanentExpiry = error instanceof Error
+              && error.message.includes("missed its on-chain proof-delivery window");
+            if (!permanentExpiry) {
+              window.setTimeout(() => proofRecoveryRunsRef.current.delete(runId), 15_000);
+            }
           }
         }
       } finally {

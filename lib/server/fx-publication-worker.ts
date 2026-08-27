@@ -12,6 +12,7 @@ import {
 import { observeStarknetTransaction, type ConfirmationRpc } from "./confirmation-worker";
 import type { PayoDeploymentConfig } from "./payo-deployment";
 import {
+  assertFxRootNotRevoked,
   isFxRootActive,
   verifyFxPublicationProof,
   type FxPublicationRpc,
@@ -30,6 +31,7 @@ export type FxPublicationSubmitter = {
 export type FxPublicationWorkerDependencies = {
   lease: typeof leaseFxPublicationJobs;
   isActive: typeof isFxRootActive;
+  assertNotRevoked: typeof assertFxRootNotRevoked;
   verify: typeof verifyFxPublicationProof;
   observe: (rpc: ConfirmationRpc, transactionHash: string) => Promise<SettlementObservation>;
   recordSubmission: typeof recordFxPublicationSubmission;
@@ -40,6 +42,7 @@ export type FxPublicationWorkerDependencies = {
 const defaultDependencies: FxPublicationWorkerDependencies = {
   lease: leaseFxPublicationJobs,
   isActive: isFxRootActive,
+  assertNotRevoked: assertFxRootNotRevoked,
   verify: verifyFxPublicationProof,
   observe: observeStarknetTransaction,
   recordSubmission: recordFxPublicationSubmission,
@@ -63,6 +66,8 @@ function deterministicProofFailure(error: unknown): boolean {
     "not bound to this payo fx catalog",
     "validity window is not active",
     "non-canonical fx root",
+    "was revoked",
+    "pagination exceeded",
   ].some((fragment) => message.includes(fragment));
 }
 
@@ -141,6 +146,27 @@ async function processLeasedJob(input: {
     return result.state;
   }
 
+  if (job.historicalRenewal) {
+    try {
+      await dependencies.assertNotRevoked({
+        rpc: input.rpc,
+        policyRegistryAddress: input.policyRegistryAddress,
+        catalogRoot: job.catalogRoot,
+        fromBlock: Number(process.env.PAYO_POLICY_REGISTRY_FROM_BLOCK ?? process.env.PAYO_INDEX_FROM_BLOCK ?? "0"),
+        toBlock: await input.rpc.getBlockNumber(),
+      });
+    } catch (error) {
+      const result = await dependencies.defer(job, {
+        errorCode: deterministicProofFailure(error)
+          ? "FX_RENEWAL_REVOKED"
+          : "FX_REVOCATION_READ_FAILED",
+        errorMessage: errorText(error),
+        permanent: deterministicProofFailure(error),
+      }, now);
+      return result.state;
+    }
+  }
+
   let verified;
   try {
     verified = await dependencies.verify({
@@ -150,6 +176,7 @@ async function processLeasedJob(input: {
       catalogRoot: job.catalogRoot,
       proofVersion: job.proofVersion,
       shards: job.shards,
+      requireActiveWindow: !job.historicalRenewal,
     });
   } catch (error) {
     const result = await dependencies.defer(job, {

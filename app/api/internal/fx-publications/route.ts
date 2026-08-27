@@ -77,6 +77,7 @@ export async function POST(request: Request) {
       getBlockTimestamp: async (blockNumber: number) => Number((await provider.getBlock(blockNumber)).timestamp),
       getBlockWithTxHashes: (blockNumber: number) => provider.getBlockWithTxHashes(blockNumber),
       getTransactionReceipt: (transactionHash: string) => provider.getTransactionReceipt(transactionHash),
+      getEvents: (filter: Parameters<typeof provider.getEvents>[0]) => provider.getEvents(filter),
       callContract: (call: Parameters<typeof provider.callContract>[0], blockIdentifier?: number) =>
         provider.callContract(call, blockIdentifier),
     };

@@ -27,7 +27,7 @@ import { prepareEncryptedPayrollIntegrityBundle } from "./proof-bundle";
 import type { PayoClient } from "./payo-client";
 import { storeCanonicalEncryptedRecord } from "./encrypted-records";
 import type { RemediationRecord, WageClaimRecord } from "./claim-workflows";
-import type { PayrollExecutionStage } from "./payroll-execution";
+import { recoverConfirmedPayrollVerification, type PayrollExecutionStage } from "./payroll-execution";
 
 type ProveException = (input: {
   encryptedWitness: Parameters<typeof proveEncryptedPayroll>[0]["encryptedWitness"];
@@ -145,6 +145,87 @@ async function retryWrite<T>(operation: () => Promise<T>): Promise<T> {
   throw failure;
 }
 
+async function requireConfirmedPayrollProof(input: {
+  client: PayoClient;
+  organizationId: string;
+  runId: string;
+  principal: VaultPrincipalKeyPair;
+  onStage?: (stage: PayrollExecutionStage) => void;
+}): Promise<void> {
+  input.onStage?.("verifying");
+  const recovery = await recoverConfirmedPayrollVerification({
+    client: input.client,
+    organizationId: input.organizationId,
+    runId: input.runId,
+    principal: input.principal,
+    onStage: input.onStage,
+  });
+  const deadline = Date.now() + 20 * 60_000;
+  while (true) {
+    const { proofVerification } = await input.client.getProofVerification(recovery.settlementId) as {
+      proofVerification: {
+        state?: string;
+        lastErrorCode?: string | null;
+        lastErrorMessage?: string | null;
+      };
+    };
+    if (proofVerification.state === "complete") return;
+    if (proofVerification.state === "dead") {
+      throw new Error(
+        proofVerification.lastErrorMessage
+        ?? proofVerification.lastErrorCode
+        ?? "The confirmed payroll proof could not be verified on-chain.",
+      );
+    }
+    if (Date.now() >= deadline) {
+      throw new Error("The confirmed payroll proof is still being verified on-chain. This claim is safe to retry.");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+}
+
+async function requireExceptionDeploymentReady(input: {
+  client: PayoClient;
+  organizationId: string;
+  runId: string;
+  workflowType: "wage_claim" | "wage_remediation";
+  chainId: string;
+  sealAddress: string;
+  mode: 0 | 2 | 3;
+  proofVersion: number;
+  agreementRoot: string;
+  policyRoot: string;
+  fxRoot: string;
+}): Promise<void> {
+  const check = () => input.client.checkDeploymentReadiness({
+    chainId: input.chainId,
+    sealAddress: input.sealAddress,
+    mode: input.mode,
+    proofVersion: input.proofVersion,
+    agreementRoot: input.agreementRoot,
+    policyRoot: input.policyRoot,
+    fxRoot: input.fxRoot,
+  });
+  let { readiness } = await check();
+  if (readiness.ready) return;
+  const failures = readiness.checks.filter(({ ready }) => !ready);
+  const fxFailure = failures.some(({ code }) => code === "fx_root");
+  const nonFxFailures = failures.filter(({ code }) => code !== "fx_root");
+  if (fxFailure && nonFxFailures.length === 0) {
+    await input.client.renewHistoricalFxRoot({
+      organizationId: input.organizationId,
+      runId: input.runId,
+      workflowType: input.workflowType,
+    });
+    ({ readiness } = await check());
+    if (readiness.ready) return;
+  }
+  throw new Error(
+    "PAYO exception deployment is not ready: "
+    + readiness.checks.filter(({ ready }) => !ready).map(({ message }) => message).join(" "),
+  );
+}
+
 export async function executeProofBoundWageClaim(input: {
   client: PayoClient;
   organizationId: string;
@@ -188,11 +269,21 @@ export async function executeProofBoundWageClaim(input: {
   assertSameRoot(payroll.fxRoot, run.fxRoot, "FX root");
   assertSameRoot(payroll.runNullifier, run.runNullifier, "run nullifier");
 
-  // Historical payroll roots are known before claim proving. Fail before
-  // spending prover CPU when an hourly FX authorization has already expired;
-  // repeat the same check after proving to close the expiry race.
+  // Renew only the exact FX root bound to the confirmed payday before
+  // spending prover CPU, then repeat after proving to close the expiry race.
+  await requireConfirmedPayrollProof({
+    client: input.client,
+    organizationId: input.organizationId,
+    runId: claim.runId,
+    principal: input.principal,
+    onStage: input.onStage,
+  });
   input.onStage?.("preflight");
-  const initialReadiness = await input.client.checkDeploymentReadiness({
+  await requireExceptionDeploymentReady({
+    client: input.client,
+    organizationId: input.organizationId,
+    runId: claim.runId,
+    workflowType: "wage_claim",
     chainId: input.chainId,
     sealAddress: input.sealAddress,
     mode: PAYO_PROOF_MODE_CLAIM,
@@ -201,12 +292,6 @@ export async function executeProofBoundWageClaim(input: {
     policyRoot: payroll.policyRoot,
     fxRoot: payroll.fxRoot,
   });
-  if (!initialReadiness.readiness.ready) {
-    const fxExpired = initialReadiness.readiness.checks.some(({ code, ready }) => code === "fx_root" && !ready);
-    throw new Error(fxExpired
-      ? "This claim uses an expired payday FX authorization. Create the claim from the newest confirmed payday."
-      : `PAYO claim deployment is not ready: ${initialReadiness.readiness.checks.filter(({ ready }) => !ready).map(({ message }) => message).join(" ")}`);
-  }
 
   const now = input.now?.() ?? new Date();
   const nowUnix = BigInt(Math.floor(now.getTime() / 1_000));
@@ -249,7 +334,11 @@ export async function executeProofBoundWageClaim(input: {
   }
 
   input.onStage?.("preflight");
-  const { readiness } = await input.client.checkDeploymentReadiness({
+  await requireExceptionDeploymentReady({
+    client: input.client,
+    organizationId: input.organizationId,
+    runId: claim.runId,
+    workflowType: "wage_claim",
     chainId: input.chainId,
     sealAddress: input.sealAddress,
     mode: PAYO_PROOF_MODE_CLAIM,
@@ -258,12 +347,6 @@ export async function executeProofBoundWageClaim(input: {
     policyRoot,
     fxRoot,
   });
-  if (!readiness.ready) {
-    const fxExpired = readiness.checks.some(({ code, ready }) => code === "fx_root" && !ready);
-    throw new Error(fxExpired
-      ? "This claim uses an expired payday FX authorization. Create the claim from the newest confirmed payday."
-      : `PAYO claim deployment is not ready: ${readiness.checks.filter(({ ready }) => !ready).map(({ message }) => message).join(" ")}`);
-  }
 
   input.onStage?.("persisting");
   const proofBundleId = generateUuidV7();
@@ -413,6 +496,7 @@ export async function resumeProofBoundWageClaim(input: {
   ) => Promise<string>;
   onStage?: (stage: PayrollExecutionStage) => void;
   persistPendingSubmission?: (submission: PendingExceptionSubmission | null) => void;
+  prove?: ProveException;
   now?: () => Date;
 }): Promise<WageClaimExecutionResult> {
   const pending = parsePendingExceptionSubmission(input.pendingSubmission);
@@ -455,7 +539,7 @@ export async function resumeProofBoundWageClaim(input: {
   const proofResponse = await input.client.getEncryptedRecord({
     organizationId: input.organizationId,
     recordId: pending.proofBundleId,
-  }) as { record?: { envelope?: EncryptedVaultRecord } };
+  }) as { record?: { envelope?: EncryptedVaultRecord; revision?: number } };
   if (!proofResponse.record?.envelope) {
     throw new Error("The encrypted wage-claim proof is unavailable for Ready recovery.");
   }
@@ -469,11 +553,11 @@ export async function resumeProofBoundWageClaim(input: {
     calldataHash: shard.calldataHash,
     publicInputs: shard.publicInputs as PayrollIntegrityPublicInputs,
   })) as [PayrollIntegrityShardProof, PayrollIntegrityShardProof];
-  if (
+  const proofCalldataChanged =
     JSON.stringify(shards[0].proofCalldata) !== JSON.stringify(pending.proofShards[0])
-    || JSON.stringify(shards[1].proofCalldata) !== JSON.stringify(pending.proofShards[1])
-  ) {
-    throw new Error("The saved claim calldata does not match its encrypted proof bundle.");
+    || JSON.stringify(shards[1].proofCalldata) !== JSON.stringify(pending.proofShards[1]);
+  if (proofCalldataChanged && pending.transactionHash) {
+    throw new Error("A submitted claim cannot switch to refreshed proof calldata.");
   }
   const proofNullifier = canonicalRoot(
     shards[0].publicInputs.runNullifierHigh,
@@ -483,37 +567,151 @@ export async function resumeProofBoundWageClaim(input: {
     throw new Error("The saved proof is bound to a different wage claim.");
   }
 
-  const now = input.now?.() ?? new Date();
-  const nowUnix = BigInt(Math.floor(now.getTime() / 1_000));
-  input.onStage?.("preflight");
-  const { readiness } = await input.client.checkDeploymentReadiness({
-    chainId: input.chainId,
-    sealAddress: input.sealAddress,
-    mode: PAYO_PROOF_MODE_CLAIM,
-    proofVersion: 3,
-    agreementRoot: canonicalRoot(shards[0].publicInputs.agreementRootHigh, shards[0].publicInputs.agreementRootLow),
-    policyRoot: canonicalRoot(shards[0].publicInputs.policyRootHigh, shards[0].publicInputs.policyRootLow),
-    fxRoot: canonicalRoot(shards[0].publicInputs.fxRootHigh, shards[0].publicInputs.fxRootLow),
-  });
-  if (!readiness.ready) {
-    throw new Error("PAYO claim deployment is not ready: " + readiness.checks.filter(({ ready }) => !ready).map(({ message }) => message).join(" "));
-  }
-  const sealed = buildPayoSealedAction({
-    sealAddress: input.sealAddress,
-    chainId: input.chainId,
-    shards,
-    mode: PAYO_PROOF_MODE_CLAIM,
-    nowUnixSeconds: nowUnix,
-  });
-
+  let activePending: PendingExceptionSubmission = proofCalldataChanged ? {
+    ...pending,
+    proofShards: [shards[0].proofCalldata, shards[1].proofCalldata],
+  } : pending;
+  if (proofCalldataChanged) input.persistPendingSubmission?.(activePending);
+  let activeShards = shards;
   let transactionHash = serverTransactionHash ?? pending.transactionHash;
   if (!transactionHash) {
+    const agreementRoot = canonicalRoot(shards[0].publicInputs.agreementRootHigh, shards[0].publicInputs.agreementRootLow);
+    const policyRoot = canonicalRoot(shards[0].publicInputs.policyRootHigh, shards[0].publicInputs.policyRootLow);
+    const fxRoot = canonicalRoot(shards[0].publicInputs.fxRootHigh, shards[0].publicInputs.fxRootLow);
+    await requireConfirmedPayrollProof({
+      client: input.client,
+      organizationId: input.organizationId,
+      runId: claim.runId,
+      principal: input.principal,
+      onStage: input.onStage,
+    });
+    input.onStage?.("preflight");
+    await requireExceptionDeploymentReady({
+      client: input.client,
+      organizationId: input.organizationId,
+      runId: claim.runId,
+      workflowType: "wage_claim",
+      chainId: input.chainId,
+      sealAddress: input.sealAddress,
+      mode: PAYO_PROOF_MODE_CLAIM,
+      proofVersion: 3,
+      agreementRoot,
+      policyRoot,
+      fxRoot,
+    });
+
+    const now = input.now?.() ?? new Date();
+    const nowUnix = BigInt(Math.floor(now.getTime() / 1_000));
+    const proofExpiry = BigInt(shards[0].publicInputs.validityExpiry);
+    if (proofExpiry - nowUnix < 300n) {
+      const proofRevision = proofResponse.record?.revision;
+      if (!Number.isInteger(proofRevision) || !proofRevision || proofRevision < 1) {
+        throw new Error("The encrypted wage-claim proof revision is unavailable for safe refresh.");
+      }
+      input.onStage?.("loading");
+      const { run } = await input.client.getPayrollRun(claim.runId);
+      if (run.organizationId !== input.organizationId || !["confirmed", "reconciled"].includes(run.state)) {
+        throw new Error("The payroll is no longer eligible for claim-proof refresh.");
+      }
+      const privateRun = decryptVaultRecord<{
+        claimProofSource?: { buildInput?: SerializedPayrollIntegrityBuildRequest };
+      }>(run.envelope, input.principal);
+      if (!privateRun.claimProofSource?.buildInput) {
+        throw new Error("The encrypted claim-proof source is unavailable for safe refresh.");
+      }
+      const payroll = await buildPayrollIntegrityInputsFromSerialized(privateRun.claimProofSource.buildInput);
+      assertSameRoot(payroll.agreementRoot, run.agreementRoot, "agreement root");
+      assertSameRoot(payroll.manifestRoot, run.manifestRoot, "manifest root");
+      assertSameRoot(payroll.policyRoot, run.policyRoot, "policy root");
+      assertSameRoot(payroll.fxRoot, run.fxRoot, "FX root");
+      assertSameRoot(payroll.runNullifier, run.runNullifier, "run nullifier");
+      const validityStart = nowUnix - 30n;
+      const validityExpiry = validityStart + 3_600n;
+      const claimInput = await buildWageClaimInputs({
+        payroll,
+        agreementId: claim.agreementId,
+        claimKind: claim.claimKind,
+        claimSalt: claim.claimSalt as `0x${string}`,
+        validityStart,
+        validityExpiry,
+        disputedReferenceValueAtomic: claim.disputedReferenceValueAtomic,
+        disputedFinalIncludedMask: claim.disputedFinalIncludedMask,
+      });
+      if (BigInt(claimInput.claimNullifier) !== BigInt(claim.claimNullifier)) {
+        throw new Error("The refreshed claim witness changed its claim nullifier.");
+      }
+      const requestId = generateUuidV7();
+      const encryptedWitness = encryptVaultRecord(
+        { circuitProfile: "wage_claim", circuitInputs: claimInput.witness.circuitInputs },
+        {
+          schemaVersion: 1,
+          organizationId: input.organizationId,
+          recordType: "payroll-proof-request",
+          recordId: requestId,
+          revision: 1,
+        },
+        [input.principal],
+      );
+      const refreshedProof = await (input.prove ?? proveEncryptedPayroll)({
+        encryptedWitness,
+        principal: input.principal,
+        onProgress: (stage) => input.onStage?.(stage),
+      });
+      const refreshedNullifier = canonicalRoot(
+        refreshedProof.shards[0].publicInputs.runNullifierHigh,
+        refreshedProof.shards[0].publicInputs.runNullifierLow,
+      );
+      if (BigInt(refreshedNullifier) !== BigInt(claim.claimNullifier)) {
+        throw new Error("The refreshed proof returned a different claim nullifier.");
+      }
+      input.onStage?.("persisting");
+      await input.client.storeEncryptedProofBundle(prepareEncryptedPayrollIntegrityBundle({
+        id: pending.proofBundleId,
+        organizationId: input.organizationId,
+        runId: claim.runId,
+        revision: proofRevision + 1,
+        proof: refreshedProof,
+        subjectRecordId: claim.id,
+        principals: [input.principal],
+      }));
+      activeShards = refreshedProof.shards;
+      activePending = {
+        ...pending,
+        proofShards: [
+          refreshedProof.shards[0].proofCalldata,
+          refreshedProof.shards[1].proofCalldata,
+        ],
+      };
+      input.persistPendingSubmission?.(activePending);
+    }
+
+    input.onStage?.("preflight");
+    await requireExceptionDeploymentReady({
+      client: input.client,
+      organizationId: input.organizationId,
+      runId: claim.runId,
+      workflowType: "wage_claim",
+      chainId: input.chainId,
+      sealAddress: input.sealAddress,
+      mode: PAYO_PROOF_MODE_CLAIM,
+      proofVersion: 3,
+      agreementRoot: canonicalRoot(activeShards[0].publicInputs.agreementRootHigh, activeShards[0].publicInputs.agreementRootLow),
+      policyRoot: canonicalRoot(activeShards[0].publicInputs.policyRootHigh, activeShards[0].publicInputs.policyRootLow),
+      fxRoot: canonicalRoot(activeShards[0].publicInputs.fxRootHigh, activeShards[0].publicInputs.fxRootLow),
+    });
+    const sealed = buildPayoSealedAction({
+      sealAddress: input.sealAddress,
+      chainId: input.chainId,
+      shards: activeShards,
+      mode: PAYO_PROOF_MODE_CLAIM,
+      nowUnixSeconds: BigInt(Math.floor((input.now?.() ?? new Date()).getTime() / 1_000)),
+    });
     input.onStage?.("wallet");
     transactionHash = await input.submitException("wage_claim", [], sealed.invokeAction);
     if (!/^0x[0-9a-fA-F]{1,64}$/.test(transactionHash)) {
       throw new Error("Ready submitted the wage claim without returning a valid transaction hash.");
     }
-    input.persistPendingSubmission?.({ ...pending, transactionHash });
+    input.persistPendingSubmission?.({ ...activePending, transactionHash });
   }
   if (!/^0x[0-9a-fA-F]{1,64}$/.test(transactionHash)) {
     throw new Error("The recovered wage-claim transaction hash is invalid.");
@@ -523,8 +721,8 @@ export async function resumeProofBoundWageClaim(input: {
   await retryWrite(() => input.client.recordSettlementSubmission(pending.settlementId, transactionHash!));
   await retryWrite(() => input.client.enqueueProofVerification({
     settlementId: pending.settlementId,
-    proofBundleId: pending.proofBundleId,
-    shards: pending.proofShards,
+    proofBundleId: activePending.proofBundleId,
+    shards: activePending.proofShards,
   }));
   await storeCanonicalEncryptedRecord({
     client: input.client,
@@ -539,7 +737,7 @@ export async function resumeProofBoundWageClaim(input: {
     },
     principals: [input.principal],
   });
-  const submitted = { ...pending, transactionHash };
+  const submitted = { ...activePending, transactionHash };
   input.persistPendingSubmission?.(null);
   input.onStage?.("queued");
   return { ...submitted, verificationQueued: true };

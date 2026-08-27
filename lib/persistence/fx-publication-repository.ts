@@ -8,7 +8,7 @@ import type { AuthenticatedPrincipal } from "@/lib/server/auth";
 import { ApiError } from "@/lib/server/auth";
 import { getDatabase } from "./db";
 import { requireOrganizationRole } from "./repository";
-import { auditEvents, fxPublicationJobs } from "./schema";
+import { auditEvents, fxPublicationJobs, payrollRuns, proofBundles, settlements } from "./schema";
 
 const FX_JOB_LEASE_MS = 180_000;
 const MAX_FX_JOB_ATTEMPTS = 48;
@@ -23,6 +23,8 @@ export type LeasedFxPublicationJob = {
   shards: readonly [string[], string[]];
   observedAt: number;
   maximumAgeSeconds: number;
+  historicalRenewal: boolean;
+  renewalRunId: string | null;
   transactionHash: string | null;
   attempts: number;
   leaseOwner: string;
@@ -32,7 +34,9 @@ function publicJob<T extends {
   shard0Calldata: unknown;
   shard1Calldata: unknown;
 }>(job: T) {
-  const { shard0Calldata: _shardZero, shard1Calldata: _shardOne, ...safe } = job;
+  const { shard0Calldata, shard1Calldata, ...safe } = job;
+  void shard0Calldata;
+  void shard1Calldata;
   return safe;
 }
 
@@ -163,6 +167,203 @@ export async function getFxPublicationJob(input: {
   return job;
 }
 
+export type HistoricalFxRenewalEvidence = {
+  runId: string;
+  organizationId: string;
+  catalogRoot: string;
+  runNullifier: string;
+  transactionHash: string;
+};
+
+function assertRenewablePayrollState(state: string): void {
+  if (!["confirmed", "reconciled", "disputed"].includes(state)) {
+    throw new ApiError(409, "Only a confirmed payroll can renew its historical FX root.", "FX_RENEWAL_RUN_INVALID");
+  }
+}
+
+export async function getHistoricalFxRenewalEvidence(input: {
+  runId: string;
+  principal: AuthenticatedPrincipal;
+}): Promise<HistoricalFxRenewalEvidence> {
+  const database = getDatabase();
+  const [run] = await database
+    .select()
+    .from(payrollRuns)
+    .where(eq(payrollRuns.id, input.runId))
+    .limit(1);
+  if (!run) throw new ApiError(404, "Payroll run not found.", "RUN_NOT_FOUND");
+  await requireOrganizationRole(run.organizationId, input.principal, ["admin", "operator"]);
+  assertRenewablePayrollState(run.state);
+  if (!run.fxRoot || !run.runNullifier || !run.transactionHash) {
+    throw new ApiError(409, "The confirmed payroll is missing its sealed FX evidence.", "FX_RENEWAL_EVIDENCE_MISSING");
+  }
+  const [settlement] = await database
+    .select({ transactionHash: settlements.transactionHash, state: settlements.state })
+    .from(settlements)
+    .where(and(
+      eq(settlements.organizationId, run.organizationId),
+      eq(settlements.runId, run.id),
+      eq(settlements.workflowType, "payroll"),
+    ))
+    .limit(1);
+  if (
+    !settlement?.transactionHash
+    || BigInt(settlement.transactionHash) !== BigInt(run.transactionHash)
+    || !["confirmed", "finalized", "reconciled"].includes(settlement.state)
+  ) {
+    throw new ApiError(409, "The payroll has no finalized matching settlement.", "FX_RENEWAL_SETTLEMENT_INVALID");
+  }
+  const [proof] = await database
+    .select({ verificationState: proofBundles.verificationState })
+    .from(proofBundles)
+    .where(and(
+      eq(proofBundles.organizationId, run.organizationId),
+      eq(proofBundles.runId, run.id),
+      eq(proofBundles.proofType, "payroll_integrity"),
+      eq(proofBundles.subjectRecordId, run.id),
+    ))
+    .limit(1);
+  if (proof?.verificationState !== "onchain_verified") {
+    throw new ApiError(409, "The payroll proof has not completed on-chain verification.", "FX_RENEWAL_PROOF_UNVERIFIED");
+  }
+  const [publication] = await database
+    .select({ id: fxPublicationJobs.id, state: fxPublicationJobs.state })
+    .from(fxPublicationJobs)
+    .where(and(
+      eq(fxPublicationJobs.organizationId, run.organizationId),
+      eq(fxPublicationJobs.catalogRoot, run.fxRoot),
+    ))
+    .limit(1);
+  if (!publication || publication.state === "dead") {
+    throw new ApiError(409, "The payroll FX publication evidence is unavailable.", "FX_RENEWAL_PUBLICATION_MISSING");
+  }
+  return {
+    runId: run.id,
+    organizationId: run.organizationId,
+    catalogRoot: run.fxRoot,
+    runNullifier: run.runNullifier,
+    transactionHash: run.transactionHash,
+  };
+}
+
+export async function enqueueHistoricalFxRenewal(input: {
+  evidence: HistoricalFxRenewalEvidence;
+  observedAt: number;
+  principal: AuthenticatedPrincipal;
+}) {
+  if (!Number.isSafeInteger(input.observedAt) || input.observedAt < 0) {
+    throw new ApiError(400, "The renewal block timestamp is invalid.", "FX_RENEWAL_TIME_INVALID");
+  }
+  await requireOrganizationRole(input.evidence.organizationId, input.principal, ["admin", "operator"]);
+  const database = getDatabase();
+  return database.transaction(async (transaction) => {
+    const [run] = await transaction
+      .select()
+      .from(payrollRuns)
+      .where(eq(payrollRuns.id, input.evidence.runId))
+      .limit(1)
+      .for("update");
+    if (
+      !run
+      || run.organizationId !== input.evidence.organizationId
+      || !run.fxRoot
+      || !run.runNullifier
+      || !run.transactionHash
+      || BigInt(run.fxRoot) !== BigInt(input.evidence.catalogRoot)
+      || BigInt(run.runNullifier) !== BigInt(input.evidence.runNullifier)
+      || BigInt(run.transactionHash) !== BigInt(input.evidence.transactionHash)
+    ) {
+      throw new ApiError(409, "The payroll changed during FX renewal.", "FX_RENEWAL_EVIDENCE_CHANGED");
+    }
+    assertRenewablePayrollState(run.state);
+    const [settlement] = await transaction
+      .select({ transactionHash: settlements.transactionHash, state: settlements.state })
+      .from(settlements)
+      .where(and(
+        eq(settlements.organizationId, run.organizationId),
+        eq(settlements.runId, run.id),
+        eq(settlements.workflowType, "payroll"),
+      ))
+      .limit(1)
+      .for("update");
+    if (
+      !settlement?.transactionHash
+      || BigInt(settlement.transactionHash) !== BigInt(run.transactionHash)
+      || !["confirmed", "finalized", "reconciled"].includes(settlement.state)
+    ) {
+      throw new ApiError(409, "The payroll settlement changed during FX renewal.", "FX_RENEWAL_SETTLEMENT_CHANGED");
+    }
+    const [proof] = await transaction
+      .select({ verificationState: proofBundles.verificationState })
+      .from(proofBundles)
+      .where(and(
+        eq(proofBundles.organizationId, run.organizationId),
+        eq(proofBundles.runId, run.id),
+        eq(proofBundles.proofType, "payroll_integrity"),
+        eq(proofBundles.subjectRecordId, run.id),
+      ))
+      .limit(1)
+      .for("update");
+    if (proof?.verificationState !== "onchain_verified") {
+      throw new ApiError(409, "The payroll proof changed during FX renewal.", "FX_RENEWAL_PROOF_CHANGED");
+    }
+    const [job] = await transaction
+      .select()
+      .from(fxPublicationJobs)
+      .where(and(
+        eq(fxPublicationJobs.organizationId, run.organizationId),
+        eq(fxPublicationJobs.catalogRoot, run.fxRoot),
+      ))
+      .limit(1)
+      .for("update");
+    if (!job || job.state === "dead") {
+      throw new ApiError(409, "The payroll FX publication cannot be renewed.", "FX_RENEWAL_PUBLICATION_MISSING");
+    }
+    if (job.state === "pending" || job.state === "leased") {
+      return { ...publicJob(job), replayed: true };
+    }
+    const now = new Date();
+    const [renewed] = await transaction
+      .update(fxPublicationJobs)
+      .set({
+        historicalRenewal: true,
+        renewalRunId: run.id,
+        renewalCount: job.renewalCount + 1,
+        observedAt: input.observedAt,
+        maximumAgeSeconds: 3_600,
+        state: "pending",
+        transactionHash: null,
+        attempts: 0,
+        availableAt: now,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        lastErrorCode: null,
+        lastErrorMessage: null,
+        updatedAt: now,
+      })
+      .where(eq(fxPublicationJobs.id, job.id))
+      .returning();
+    await transaction.insert(auditEvents).values({
+      id: generateUuidV7(),
+      organizationId: run.organizationId,
+      actorId: input.principal.principalId,
+      action: "fx_publication.historical_renewal_queued",
+      subjectId: job.id,
+      metadata: {
+        catalogRoot: run.fxRoot,
+        runId: run.id,
+        runNullifier: run.runNullifier,
+        payrollTransactionHash: run.transactionHash,
+        renewalCount: renewed.renewalCount,
+        observedAt: input.observedAt,
+        previousObservedAt: job.observedAt,
+        previousTransactionHash: job.transactionHash,
+      },
+    });
+    return { ...publicJob(renewed), replayed: false };
+  });
+}
+
 export async function leaseFxPublicationJobs(
   workerId: string,
   limit = 1,
@@ -210,6 +411,8 @@ export async function leaseFxPublicationJobs(
           ],
           observedAt: job.observedAt,
           maximumAgeSeconds: job.maximumAgeSeconds,
+          historicalRenewal: job.historicalRenewal,
+          renewalRunId: job.renewalRunId,
           transactionHash: job.transactionHash,
           attempts: job.attempts,
           leaseOwner: workerId,

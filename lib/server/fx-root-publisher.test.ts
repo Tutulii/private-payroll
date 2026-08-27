@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Call } from "starknet";
-import { isFxRootActive, verifyFxPublicationProof } from "./fx-root-publisher";
+import { hash, type Call } from "starknet";
+import { assertFxRootNotRevoked, isFxRootActive, verifyFxPublicationProof } from "./fx-root-publisher";
 
 const root = `0x${"12".repeat(32)}`;
 const seal = "0x456";
@@ -64,6 +64,59 @@ describe("FX root proof authorization", () => {
       proofVersion: 2,
       shards: [["0xa"], ["0xb"]],
     })).rejects.toThrow("not bound");
+  });
+
+  it("accepts an expired but otherwise valid proof only for historical renewal", async () => {
+    const callContract = vi.fn(async (call: Call) => {
+      if (call.entrypoint === "is_verifier_valid") return ["0x1"];
+      if (call.entrypoint === "get_verifier") return [verifier];
+      if (call.entrypoint === "verify_payroll_integrity_shard") {
+        return verifierResult((call.calldata as string[] | undefined)?.at(-1) === "0xb" ? 1 : 0);
+      }
+      throw new Error("unexpected call");
+    });
+    await expect(verifyFxPublicationProof({
+      rpc: { getBlockNumber: async () => 10, getBlockTimestamp: async () => 2_000, callContract },
+      deployment: { chainId, sealAddress: seal },
+      policyRegistryAddress: "0xabc",
+      catalogRoot: root,
+      proofVersion: 2,
+      shards: [["0xa"], ["0xb"]],
+    })).rejects.toThrow("validity window");
+    await expect(verifyFxPublicationProof({
+      rpc: { getBlockNumber: async () => 10, getBlockTimestamp: async () => 2_000, callContract },
+      deployment: { chainId, sealAddress: seal },
+      policyRegistryAddress: "0xabc",
+      catalogRoot: root,
+      proofVersion: 2,
+      shards: [["0xa"], ["0xb"]],
+      requireActiveWindow: false,
+    })).resolves.toMatchObject({ blockTimestamp: 2_000 });
+  });
+
+  it("fails closed when a matching FX-root revocation event exists", async () => {
+    const getEvents = vi.fn().mockResolvedValue({
+      events: [{
+        block_number: 10,
+        keys: [hash.getSelectorFromName("CatalogRootRevoked"), "0x1"],
+      }],
+    });
+    await expect(assertFxRootNotRevoked({
+      rpc: {
+        getBlockNumber: async () => 10,
+        getBlockTimestamp: async () => 1_000,
+        callContract: async () => [],
+        getEvents,
+      },
+      policyRegistryAddress: "0xabc",
+      catalogRoot: root,
+      fromBlock: 1,
+      toBlock: 10,
+    })).rejects.toThrow("was revoked");
+    expect(getEvents).toHaveBeenCalledWith(expect.objectContaining({
+      address: "0xabc",
+      keys: expect.arrayContaining([["0x1"]]),
+    }));
   });
 
   it("reads an already-active root idempotently", async () => {

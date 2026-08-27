@@ -475,8 +475,8 @@ describe("proof-bound payroll browser orchestration", () => {
         envelope: encryptVaultRecord(
           {
             shards: [
-              { shardIndex: 0, proofCalldata: ["0x1", "0x2"] },
-              { shardIndex: 1, proofCalldata: ["0x3", "0x4"] },
+              { shardIndex: 0, proofCalldata: ["0x1", "0x2"], publicInputs: { validityExpiry: String(Math.floor(Date.now() / 1_000) + 3_600) } },
+              { shardIndex: 1, proofCalldata: ["0x3", "0x4"], publicInputs: { validityExpiry: String(Math.floor(Date.now() / 1_000) + 3_600) } },
             ],
           },
           {
@@ -532,8 +532,8 @@ describe("proof-bound payroll browser orchestration", () => {
         envelope: encryptVaultRecord(
           {
             shards: [
-              { shardIndex: 0, proofCalldata: ["0x1", "0x2"] },
-              { shardIndex: 1, proofCalldata: ["0x3", "0x4"] },
+              { shardIndex: 0, proofCalldata: ["0x1", "0x2"], publicInputs: { validityExpiry: String(Math.floor(Date.now() / 1_000) + 3_600) } },
+              { shardIndex: 1, proofCalldata: ["0x3", "0x4"], publicInputs: { validityExpiry: String(Math.floor(Date.now() / 1_000) + 3_600) } },
             ],
           },
           {
@@ -561,5 +561,34 @@ describe("proof-bound payroll browser orchestration", () => {
       proofBundleId,
       shards: [["0x1", "0x2"], ["0x3", "0x4"]],
     });
+
+    mockClient.enqueueProofVerification.mockClear();
+    mockClient.getEncryptedRecord.mockResolvedValue({
+      record: {
+        envelope: encryptVaultRecord(
+          {
+            shards: [
+              { shardIndex: 0, proofCalldata: ["0x1"], publicInputs: { validityExpiry: "1" } },
+              { shardIndex: 1, proofCalldata: ["0x2"], publicInputs: { validityExpiry: "1" } },
+            ],
+          },
+          {
+            schemaVersion: 1,
+            organizationId,
+            recordType: "proof-bundle",
+            recordId: proofBundleId,
+            revision: 1,
+          },
+          [principal],
+        ),
+      },
+    });
+    await expect(recoverConfirmedPayrollVerification({
+      client: mockClient as unknown as PayoClient,
+      organizationId,
+      runId,
+      principal,
+    })).rejects.toThrow("missed its on-chain proof-delivery window");
+    expect(mockClient.enqueueProofVerification).not.toHaveBeenCalled();
   });
 });

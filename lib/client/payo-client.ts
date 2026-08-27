@@ -537,6 +537,61 @@ export class PayoClient {
     };
   }
 
+  async renewHistoricalFxRoot(input: {
+    organizationId: string;
+    runId: string;
+    workflowType: "wage_claim" | "wage_remediation";
+  }) {
+    type FxRenewalJob = {
+      id: string;
+      catalogRoot: `0x${string}`;
+      state: "pending" | "leased" | "complete" | "dead";
+      transactionHash: string | null;
+      attempts: number;
+      lastErrorCode: string | null;
+      lastErrorMessage: string | null;
+    };
+    const queued = await this.request<{ job: FxRenewalJob }>(
+      `/api/v1/runs/${encodeURIComponent(input.runId)}/fx-renewal`,
+      { method: "POST", body: JSON.stringify({ workflowType: input.workflowType }) },
+    );
+    let job = queued.job;
+    const deadline = Date.now() + 20 * 60_000;
+    const query = new URLSearchParams({
+      organizationId: input.organizationId,
+      catalogRoot: job.catalogRoot,
+    });
+    while (job.state !== "complete") {
+      if (job.state === "dead") {
+        throw new PayoApiError(
+          job.lastErrorMessage ?? "The historical FX root could not be renewed.",
+          job.lastErrorCode ?? "FX_RENEWAL_FAILED",
+          422,
+        );
+      }
+      if (Date.now() >= deadline) {
+        throw new PayoApiError(
+          "The historical FX root is still being renewed. This claim is safe to retry.",
+          "FX_RENEWAL_POLL_TIMEOUT",
+          504,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      try {
+        const result = await this.request<{ job: FxRenewalJob }>(
+          `/api/v1/fx-publications?${query.toString()}`,
+        );
+        job = result.job;
+      } catch (error) {
+        if (!retryableApiRead(error)) throw error;
+      }
+    }
+    return {
+      catalogRoot: job.catalogRoot,
+      transactionHash: job.transactionHash,
+    };
+  }
+
   async provePayrollIntegrityRemotely(input: Omit<RemoteProofRequest, "version" | "requestId"> & {
     proverBaseUrl: string;
   }): Promise<ProofWorkerSuccess> {

@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { hashCanonicalJson } from "@/lib/crypto/digest";
 import type { EncryptedPayrollIntegrityBundleCreate } from "@/lib/domain/proof-bundle";
 import { assertOperationalMetadataSafe } from "@/lib/domain/privacy";
@@ -15,6 +15,7 @@ import {
   organizations,
   payrollRuns,
   proofBundles,
+  settlements,
   vaultRecords,
 } from "./schema";
 
@@ -141,18 +142,132 @@ export async function storeEncryptedPayrollIntegrityBundle(input: {
       throw new ApiError(404, "Payroll run not found in this organization.", "RUN_NOT_FOUND");
     }
 
+    const payrollProfile = bundle.proofType === "payroll_integrity";
     const [existing] = await transaction
       .select()
       .from(proofBundles)
       .where(eq(proofBundles.id, bundle.id))
-      .limit(1);
+      .limit(1)
+      .for("update");
     if (existing) {
-      if (existing.proofHash !== envelopeHash) {
+      if (existing.proofHash === envelopeHash) {
+        return { ...existing, replayed: true };
+      }
+      if (payrollProfile) {
         throw new ApiError(409, "Proof-bundle ID already contains different ciphertext.", "PROOF_BUNDLE_CONFLICT");
       }
-      return { ...existing, replayed: true };
+      if (
+        existing.organizationId !== bundle.organizationId
+        || existing.runId !== bundle.runId
+        || existing.proofType !== bundle.proofType
+        || existing.proofVersion !== bundle.proofVersion
+        || existing.subjectRecordId !== bundle.subjectRecordId
+        || existing.verificationState !== "locally_verified"
+        || existing.verificationTransactionHash
+      ) {
+        throw new ApiError(409, "This exception proof can no longer be refreshed.", "EXCEPTION_PROOF_REFRESH_FORBIDDEN");
+      }
+      const previousPackage = existing.proofPackage as { commonInputs?: Record<string, string> };
+      const nextCommon = metadata.commonInputs as Record<string, string>;
+      const stableInputKeys = [
+        "chainId", "sealAddress", "proofVersion", "schemaVersion",
+        "agreementRootHigh", "agreementRootLow", "manifestRootHigh", "manifestRootLow",
+        "policyRootHigh", "policyRootLow", "fxRootHigh", "fxRootLow",
+        "runNullifierHigh", "runNullifierLow",
+      ];
+      if (!previousPackage.commonInputs || stableInputKeys.some((key) =>
+        previousPackage.commonInputs?.[key] !== nextCommon[key])) {
+        throw new ApiError(409, "The refreshed proof changed an immutable claim binding.", "EXCEPTION_PROOF_BINDING_CHANGED");
+      }
+      const validityStart = Number(nextCommon.validityStart);
+      const validityExpiry = Number(nextCommon.validityExpiry);
+      const nowSeconds = Math.floor(Date.now() / 1_000);
+      if (
+        !Number.isSafeInteger(validityStart)
+        || !Number.isSafeInteger(validityExpiry)
+        || validityStart > nowSeconds + 60
+        || validityExpiry <= nowSeconds
+        || validityExpiry - validityStart > 3_600
+      ) {
+        throw new ApiError(400, "The refreshed exception proof validity window is invalid.", "EXCEPTION_PROOF_WINDOW_INVALID");
+      }
+      const [approval] = await transaction
+        .select({ id: settlements.id })
+        .from(settlements)
+        .where(and(
+          eq(settlements.organizationId, bundle.organizationId),
+          eq(settlements.runId, bundle.runId),
+          eq(settlements.workflowType, bundle.proofType),
+          eq(settlements.subjectRecordId, bundle.subjectRecordId),
+          eq(settlements.state, "approval_pending"),
+          isNull(settlements.transactionHash),
+        ))
+        .limit(1)
+        .for("update");
+      if (!approval) {
+        throw new ApiError(409, "A pending unsigned approval is required to refresh this proof.", "EXCEPTION_PROOF_APPROVAL_MISSING");
+      }
+      const [latestVault] = await transaction
+        .select({ revision: vaultRecords.revision })
+        .from(vaultRecords)
+        .where(and(
+          eq(vaultRecords.organizationId, bundle.organizationId),
+          eq(vaultRecords.id, bundle.id),
+          eq(vaultRecords.recordType, "proof-bundle"),
+        ))
+        .orderBy(desc(vaultRecords.revision))
+        .limit(1)
+        .for("update");
+      if (!latestVault || bundle.revision !== latestVault.revision + 1) {
+        throw new ApiError(409, "The exception proof refresh revision is stale.", "EXCEPTION_PROOF_REVISION_CONFLICT");
+      }
+      const refreshedAt = new Date();
+      await transaction
+        .update(vaultRecords)
+        .set({ supersededAt: refreshedAt })
+        .where(and(
+          eq(vaultRecords.organizationId, bundle.organizationId),
+          eq(vaultRecords.id, bundle.id),
+          eq(vaultRecords.recordType, "proof-bundle"),
+          isNull(vaultRecords.supersededAt),
+        ));
+      await transaction.insert(vaultRecords).values({
+        id: bundle.id,
+        organizationId: bundle.organizationId,
+        recordType: "proof-bundle",
+        revision: bundle.revision,
+        ciphertext: envelope.ciphertext,
+        envelope,
+        envelopeHash,
+        createdBy: principal.principalId,
+      });
+      const [refreshed] = await transaction
+        .update(proofBundles)
+        .set({
+          proofPackage: metadata,
+          proofHash: envelopeHash,
+          verificationState: "locally_verified",
+          verificationTransactionHash: null,
+        })
+        .where(eq(proofBundles.id, bundle.id))
+        .returning();
+      await transaction.insert(auditEvents).values({
+        id: generateUuidV7(),
+        organizationId: bundle.organizationId,
+        actorId: principal.principalId,
+        action: "proof_bundle.exception_refreshed",
+        subjectId: bundle.id,
+        metadata: {
+          runId: bundle.runId,
+          subjectRecordId: bundle.subjectRecordId,
+          proofType: bundle.proofType,
+          revision: bundle.revision,
+          previousEnvelopeHash: existing.proofHash,
+          envelopeHash,
+        },
+      });
+      return { ...refreshed, replayed: false, refreshed: true };
     }
-    const payrollProfile = bundle.proofType === "payroll_integrity";
     if (payrollProfile && run.state !== "calculated") {
       throw new ApiError(409, `Payroll must be calculated before proof storage; current state is ${run.state}.`, "RUN_NOT_CALCULATED");
     }

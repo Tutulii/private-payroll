@@ -14,7 +14,12 @@ import {
 import { buildWageClaimInputs, buildWageRemediationInputs } from "@/lib/proof/wage-claim-input";
 import { hashProofCalldata } from "@/lib/proof/starknet-calldata";
 import type { PayoClient } from "./payo-client";
-import { executeProofBoundWageClaim, executeProofBoundWageRemediation } from "./exception-execution";
+import {
+  executeProofBoundWageClaim,
+  executeProofBoundWageRemediation,
+  resumeProofBoundWageClaim,
+} from "./exception-execution";
+import { prepareEncryptedPayrollIntegrityBundle } from "./proof-bundle";
 
 const organizationId = "0198f300-0000-7000-8000-000000000001";
 const runId = "0198f300-0000-7000-8000-000000000002";
@@ -64,8 +69,45 @@ function sourceRequest() {
   });
 }
 
+function payrollProofRecoveryClient(principal: ReturnType<typeof generateVaultPrincipal>) {
+  const proofBundleId = "0198f300-0000-7000-8000-000000000009";
+  const settlementId = "0198f300-0000-7000-8000-000000000010";
+  const envelope = encryptVaultRecord(
+    {
+      shards: [
+        { shardIndex: 0, proofCalldata: ["0x1"], publicInputs: { validityExpiry: String(Math.floor(Date.now() / 1_000) + 3_600) } },
+        { shardIndex: 1, proofCalldata: ["0x2"], publicInputs: { validityExpiry: String(Math.floor(Date.now() / 1_000) + 3_600) } },
+      ],
+    },
+    {
+      schemaVersion: 1,
+      organizationId,
+      recordType: "proof-bundle",
+      recordId: proofBundleId,
+      revision: 1,
+    },
+    [principal],
+  );
+  return {
+    payrollRecoveryEnvelope: envelope,
+    getSealedPayrollRecovery: vi.fn().mockResolvedValue({
+      recovery: {
+        recoveryKind: "verification",
+        runId,
+        proofBundleId,
+        settlementId,
+        transactionHash: "0xabc",
+        blockNumber: "1",
+      },
+    }),
+    getEncryptedRecord: vi.fn().mockResolvedValue({ record: { envelope, revision: 1 } }),
+    enqueueProofVerification: vi.fn().mockResolvedValue({ proofVerification: { state: "complete" } }),
+    getProofVerification: vi.fn().mockResolvedValue({ proofVerification: { state: "complete" } }),
+  };
+}
+
 describe("proof-bound wage-claim execution", () => {
-  it("rejects an expired payday FX root before invoking the prover", async () => {
+  it("fails closed when an expired payday FX root cannot be renewed", async () => {
     const principal = generateVaultPrincipal("worker:expired-claim-test");
     const buildInput = sourceRequest();
     const payroll = await buildPayrollIntegrityInputsFromSerialized(buildInput);
@@ -82,6 +124,7 @@ describe("proof-bound wage-claim execution", () => {
     );
     const prove = vi.fn();
     const client = {
+      ...payrollProofRecoveryClient(principal),
       getPayrollRun: vi.fn().mockResolvedValue({
         run: {
           id: runId,
@@ -101,6 +144,7 @@ describe("proof-bound wage-claim execution", () => {
           checks: [{ code: "fx_root", ready: false, message: "FX root is inactive." }],
         },
       }),
+      renewHistoricalFxRoot: vi.fn().mockResolvedValue({ transactionHash: "0xabc" }),
     } as unknown as PayoClient;
 
     await expect(executeProofBoundWageClaim({
@@ -125,7 +169,12 @@ describe("proof-bound wage-claim execution", () => {
       submitException: vi.fn(),
       prove,
       now: () => now,
-    })).rejects.toThrow("expired payday FX authorization");
+    })).rejects.toThrow("PAYO exception deployment is not ready");
+    expect(client.renewHistoricalFxRoot).toHaveBeenCalledWith({
+      organizationId,
+      runId,
+      workflowType: "wage_claim",
+    });
     expect(prove).not.toHaveBeenCalled();
   });
 
@@ -174,6 +223,7 @@ describe("proof-bound wage-claim execution", () => {
     const recordSettlementSubmission = vi.fn().mockResolvedValue({ settlement: {} });
     const enqueueProofVerification = vi.fn().mockResolvedValue({ job: {} });
     const client = {
+      ...payrollProofRecoveryClient(principal),
       getPayrollRun: vi.fn().mockResolvedValue({
         run: {
           id: runId,
@@ -236,6 +286,169 @@ describe("proof-bound wage-claim execution", () => {
     expect(enqueueProofVerification).toHaveBeenCalledWith(expect.objectContaining({ proofBundleId: result.proofBundleId }));
     expect(storeEncryptedRecord).toHaveBeenCalledTimes(2);
     expect(pending).toHaveBeenLastCalledWith(null);
+  });
+
+  it("renews the payday root and atomically refreshes an expired unsigned claim proof", async () => {
+    const principal = generateVaultPrincipal("worker:claim-resume-refresh");
+    const buildInput = sourceRequest();
+    const payroll = await buildPayrollIntegrityInputsFromSerialized(buildInput);
+    const claimSalt = `0x${"51".repeat(32)}` as const;
+    const oldClaimInput = await buildWageClaimInputs({
+      payroll,
+      agreementId,
+      claimKind: "missing_obligation",
+      claimSalt,
+      validityStart: nowUnix - 4_000n,
+      validityExpiry: nowUnix - 1_000n,
+    });
+    const refreshedClaimInput = await buildWageClaimInputs({
+      payroll,
+      agreementId,
+      claimKind: "missing_obligation",
+      claimSalt,
+      validityStart: nowUnix - 30n,
+      validityExpiry: nowUnix + 3_570n,
+    });
+    const proof = (claimInput: typeof oldClaimInput, calldata: string[]): ProofWorkerSuccess => ({
+      version: 1,
+      type: "proof-complete",
+      requestId: "claim-refresh-proof",
+      scheme: "ultra_keccak_zk_honk",
+      circuitSha256: WAGE_CLAIM_CIRCUIT_SHA256,
+      provingTimeMs: 100,
+      shards: [0, 1].map((shardIndex) => ({
+        shardIndex: shardIndex as 0 | 1,
+        proof: new Uint8Array([3, shardIndex + 1]),
+        proofCalldata: calldata,
+        calldataHash: hashProofCalldata(calldata),
+        publicInputs: claimInput.publicInputs[shardIndex],
+      })) as ProofWorkerSuccess["shards"],
+    });
+    const oldProof = proof(oldClaimInput, ["0x11", "0x12", "0x13"]);
+    const refreshedProof = proof(refreshedClaimInput, ["0x21", "0x22", "0x23"]);
+    const proofBundleId = "0198f300-0000-7000-8000-000000000005";
+    const settlementId = "0198f300-0000-7000-8000-000000000006";
+    const oldBundle = prepareEncryptedPayrollIntegrityBundle({
+      id: proofBundleId,
+      organizationId,
+      runId,
+      revision: 1,
+      proof: oldProof,
+      subjectRecordId: claimId,
+      principals: [principal],
+    });
+    const runEnvelope = encryptVaultRecord(
+      { claimProofSource: { buildInput } },
+      {
+        schemaVersion: 1,
+        organizationId,
+        recordType: "payroll-run",
+        recordId: runId,
+        revision: 1,
+      },
+      [principal],
+    );
+    const readiness = vi.fn()
+      .mockResolvedValueOnce({
+        readiness: { ready: false, checks: [{ code: "fx_root", ready: false, message: "expired" }] },
+      })
+      .mockResolvedValue({ readiness: { ready: true, checks: [] } });
+    const storeEncryptedProofBundle = vi.fn().mockResolvedValue({ proofBundle: {} });
+    const renewHistoricalFxRoot = vi.fn().mockResolvedValue({ transactionHash: "0xf001" });
+    const payrollRecovery = payrollProofRecoveryClient(principal);
+    const client = {
+      getSealedPayrollRecovery: payrollRecovery.getSealedPayrollRecovery,
+      getProofVerification: payrollRecovery.getProofVerification,
+      getSettlement: vi.fn().mockResolvedValue({
+        settlement: {
+          organizationId,
+          runId,
+          workflowType: "wage_claim",
+          subjectRecordId: claimId,
+          tokenTotalsCommitment: `0x${"52".repeat(32)}`,
+          transactionHash: null,
+          state: "approval_pending",
+        },
+      }),
+      getEncryptedRecord: vi.fn()
+        .mockResolvedValueOnce({ record: { envelope: oldBundle.envelope, revision: 1 } })
+        .mockResolvedValueOnce({ record: { envelope: payrollRecovery.payrollRecoveryEnvelope, revision: 1 } }),
+      getPayrollRun: vi.fn().mockResolvedValue({
+        run: {
+          id: runId,
+          organizationId,
+          state: "confirmed",
+          agreementRoot: payroll.agreementRoot,
+          manifestRoot: payroll.manifestRoot,
+          policyRoot: payroll.policyRoot,
+          fxRoot: payroll.fxRoot,
+          runNullifier: payroll.runNullifier,
+          envelope: runEnvelope,
+        },
+      }),
+      checkDeploymentReadiness: readiness,
+      renewHistoricalFxRoot,
+      storeEncryptedProofBundle,
+      recordSettlementSubmission: vi.fn().mockResolvedValue({ settlement: {} }),
+      enqueueProofVerification: vi.fn().mockResolvedValue({ proofVerification: {} }),
+      storeEncryptedRecord: vi.fn().mockResolvedValue({ record: {} }),
+    } as unknown as PayoClient;
+    const pending = {
+      version: 1 as const,
+      workflowType: "wage_claim" as const,
+      organizationId,
+      runId,
+      subjectRecordId: claimId,
+      proofBundleId,
+      settlementId,
+      walletRequestId: "0198f300-0000-7000-8000-000000000007",
+      idempotencyKey: "claim-refresh-approval",
+      tokenTotalsCommitment: `0x${"52".repeat(32)}` as const,
+      proofShards: [oldProof.shards[0].proofCalldata, oldProof.shards[1].proofCalldata] as [string[], string[]],
+      createdAt: now.toISOString(),
+    };
+    const persist = vi.fn();
+    const result = await resumeProofBoundWageClaim({
+      client,
+      organizationId,
+      principal,
+      chainId: "0x1",
+      sealAddress: "0x12345",
+      claim: {
+        schemaVersion: 1,
+        id: claimId,
+        organizationId,
+        revision: 2,
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+        agreementId,
+        runId,
+        claimSalt,
+        claimKind: "missing_obligation",
+        claimNullifier: oldClaimInput.claimNullifier,
+        shortfallAtomic: oldClaimInput.shortfallAtomic,
+        token: oldClaimInput.token,
+        proofBundleId,
+        state: "proven",
+      },
+      pendingSubmission: pending,
+      submitException: vi.fn().mockResolvedValue("0xc1a2"),
+      persistPendingSubmission: persist,
+      prove: vi.fn().mockResolvedValue(refreshedProof),
+      now: () => now,
+    });
+    expect(renewHistoricalFxRoot).toHaveBeenCalledWith({
+      organizationId,
+      runId,
+      workflowType: "wage_claim",
+    });
+    expect(storeEncryptedProofBundle).toHaveBeenCalledWith(expect.objectContaining({
+      id: proofBundleId,
+      revision: 2,
+    }));
+    expect(result).toMatchObject({ transactionHash: "0xc1a2" });
+    expect(result.proofShards[0]).toEqual(refreshedProof.shards[0].proofCalldata);
+    expect(persist).toHaveBeenLastCalledWith(null);
   });
 
   it("binds one private remediation transfer to the accepted claim and v4 proof", async () => {

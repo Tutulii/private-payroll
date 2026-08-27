@@ -61,6 +61,11 @@ import {
 import { closeDatabase, getDatabase } from "./db";
 import { storeEncryptedPayrollIntegrityBundle } from "./proof-bundle-repository";
 import {
+  enqueueFxPublication,
+  enqueueHistoricalFxRenewal,
+  getHistoricalFxRenewalEvidence,
+} from "./fx-publication-repository";
+import {
   enqueueProofVerification,
   leaseProofVerificationJobs,
   recordProofVerificationProgress,
@@ -93,6 +98,7 @@ import {
   auditEvents,
   confirmationJobs,
   disclosureGrants,
+  fxPublicationJobs,
   organizationMembers,
   obligationSchedules,
   organizations,
@@ -118,6 +124,7 @@ async function resetDatabase() {
       agent_capabilities,
       receipts,
       disclosure_grants,
+      fx_publication_jobs,
       indexed_chain_events,
       indexed_chain_blocks,
       chain_cursors,
@@ -1252,6 +1259,198 @@ databaseSuite("PostgreSQL durability integration", () => {
       verificationTransactionHash: "0x1001",
     });
   }, 30_000);
+
+  it("renews an expired FX root only from finalized and on-chain-verified payroll evidence", async () => {
+    const organizationId = await seedOrganization();
+    const runId = generateUuidV7();
+    const proofBundleId = generateUuidV7();
+    const fxRoot = `0x${"71".repeat(32)}`;
+    const runNullifier = `0x${"72".repeat(32)}`;
+    const payrollTransactionHash = "0x7100";
+    await getDatabase().insert(payrollRuns).values({
+      id: runId,
+      organizationId,
+      cycleId: "historical-fx-renewal",
+      revision: 1,
+      state: "confirmed",
+      dueAt: new Date("2026-08-26T00:00:00.000Z"),
+      fxRoot,
+      runNullifier,
+      transactionHash: payrollTransactionHash,
+    });
+    await getDatabase().insert(proofBundles).values({
+      id: proofBundleId,
+      runId,
+      organizationId,
+      proofType: "payroll_integrity",
+      proofVersion: "2",
+      subjectRecordId: runId,
+      proofPackage: { commonInputs: { fxRoot } },
+      proofHash: `0x${"73".repeat(32)}`,
+      verificationState: "onchain_verified",
+      verificationTransactionHash: "0x7101",
+    });
+    await getDatabase().insert(settlements).values({
+      id: generateUuidV7(),
+      organizationId,
+      runId,
+      workflowType: "payroll",
+      subjectRecordId: runId,
+      walletRequestId: generateUuidV7(),
+      idempotencyKey: "historical-fx-payroll",
+      state: "finalized",
+      tokenTotalsCommitment: `0x${"74".repeat(32)}`,
+      transactionHash: payrollTransactionHash,
+    });
+    await enqueueFxPublication({
+      organizationId,
+      catalogRoot: fxRoot,
+      proofVersion: 2,
+      shards: [
+        Array.from({ length: 35 }, (_, index) => `0x${(index + 1).toString(16)}`),
+        Array.from({ length: 35 }, (_, index) => `0x${(index + 36).toString(16)}`),
+      ],
+      observedAt: 1_000,
+      maximumAgeSeconds: 3_600,
+      principal: admin,
+    });
+    await getDatabase().update(fxPublicationJobs).set({
+      state: "complete",
+      transactionHash: "0x7102",
+    });
+    const evidence = await getHistoricalFxRenewalEvidence({ runId, principal: admin });
+    const renewed = await enqueueHistoricalFxRenewal({
+      evidence,
+      observedAt: 2_000,
+      principal: admin,
+    });
+    expect(renewed).toMatchObject({
+      state: "pending",
+      historicalRenewal: true,
+      renewalRunId: runId,
+      renewalCount: 1,
+      observedAt: 2_000,
+      transactionHash: null,
+      replayed: false,
+    });
+    await expect(getHistoricalFxRenewalEvidence({
+      runId,
+      principal: { principalId: "admin:other", sessionId: "other" },
+    })).rejects.toMatchObject({ code: "ORG_FORBIDDEN" });
+    const [audit] = await getDatabase().select().from(auditEvents)
+      .where(sql`${auditEvents.action} = ${"fx_publication.historical_renewal_queued"}`);
+    expect(audit?.metadata).toMatchObject({ runId, renewalCount: 1 });
+  });
+
+  it("atomically refreshes only an unsigned expired exception proof with stable bindings", async () => {
+    const organizationId = await seedOrganization();
+    const runId = generateUuidV7();
+    const claimId = generateUuidV7();
+    const proofBundleId = generateUuidV7();
+    const fixture = preparePhase3ExceptionProof({
+      profile: "claim",
+      organizationId,
+      runId,
+      subjectRecordId: claimId,
+      proofBundleId,
+    });
+    const root = (high: string, low: string) =>
+      `0x${BigInt(high).toString(16).padStart(32, "0")}${BigInt(low).toString(16).padStart(32, "0")}`;
+    await getDatabase().insert(payrollRuns).values({
+      id: runId,
+      organizationId,
+      cycleId: "exception-proof-refresh",
+      revision: 1,
+      state: "confirmed",
+      dueAt: new Date("2026-08-26T00:00:00.000Z"),
+      agreementRoot: root(fixture.commonInputs.agreementRootHigh, fixture.commonInputs.agreementRootLow),
+      policyRoot: root(fixture.commonInputs.policyRootHigh, fixture.commonInputs.policyRootLow),
+      fxRoot: root(fixture.commonInputs.fxRootHigh, fixture.commonInputs.fxRootLow),
+    });
+    await getDatabase().insert(vaultRecords).values({
+      id: claimId,
+      organizationId,
+      recordType: "wage-claim",
+      revision: 1,
+      ciphertext: "encrypted-refresh-claim",
+      envelope: { ciphertext: "encrypted-refresh-claim" },
+      envelopeHash: `0x${"75".repeat(32)}`,
+      createdBy: admin.principalId,
+    });
+    const deployment = {
+      chainId: fixture.commonInputs.chainId,
+      sealAddress: fixture.commonInputs.sealAddress,
+    };
+    await storeEncryptedPayrollIntegrityBundle({ bundle: fixture.bundle, deployment, principal: admin });
+    await getDatabase().insert(settlements).values({
+      id: generateUuidV7(),
+      organizationId,
+      runId,
+      workflowType: "wage_claim",
+      subjectRecordId: claimId,
+      walletRequestId: generateUuidV7(),
+      idempotencyKey: "exception-proof-refresh",
+      state: "approval_pending",
+      tokenTotalsCommitment: `0x${"76".repeat(32)}`,
+    });
+    const nowSeconds = Math.floor(Date.now() / 1_000);
+    const commonInputs = {
+      ...fixture.commonInputs,
+      validityStart: String(nowSeconds - 30),
+      validityExpiry: String(nowSeconds + 3_500),
+    };
+    const envelope = encryptVaultRecord(
+      { profile: "claim", refreshed: true, shards: fixture.shards },
+      {
+        schemaVersion: 1,
+        organizationId,
+        recordType: "proof-bundle",
+        recordId: proofBundleId,
+        revision: 2,
+      },
+      [generateVaultPrincipal(admin.principalId)],
+    );
+    const refreshedBundle = {
+      ...fixture.bundle,
+      revision: 2,
+      commonInputs,
+      publicInputsHash: hashCanonicalJson([
+        { ...commonInputs, shardIndex: "0" },
+        { ...commonInputs, shardIndex: "1" },
+      ]),
+      envelope,
+    };
+    await expect(storeEncryptedPayrollIntegrityBundle({
+      bundle: refreshedBundle,
+      deployment,
+      principal: admin,
+    })).resolves.toMatchObject({ replayed: false, refreshed: true });
+    const proofVaults = await getDatabase().select().from(vaultRecords)
+      .where(sql`${vaultRecords.id} = ${proofBundleId}`);
+    expect(proofVaults.map(({ revision, supersededAt }) => ({ revision, active: supersededAt === null })))
+      .toEqual([{ revision: 1, active: false }, { revision: 2, active: true }]);
+    const changedBindings = {
+      ...refreshedBundle,
+      revision: 3,
+      commonInputs: { ...commonInputs, fxRootLow: String(BigInt(commonInputs.fxRootLow) + 1n) },
+      envelope: encryptVaultRecord(
+        { changed: true },
+        {
+          schemaVersion: 1,
+          organizationId,
+          recordType: "proof-bundle",
+          recordId: proofBundleId,
+          revision: 3,
+        },
+        [generateVaultPrincipal(admin.principalId)],
+      ),
+    };
+    await expect(storeEncryptedPayrollIntegrityBundle({
+      bundle: changedBindings,
+      deployment,
+      principal: admin,
+    })).rejects.toMatchObject({ code: "EXCEPTION_PROOF_BINDING_CHANGED" });
+  });
 
   it("drives confirmed -> disputed -> reconciled only after v3/v4 proof jobs complete", async () => {
     const organizationId = await seedOrganization();

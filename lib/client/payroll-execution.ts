@@ -579,6 +579,18 @@ export async function recoverConfirmedPayrollVerification(input: {
   const proof = sealedRecoveryProofSchema.parse(
     decryptVaultRecord(response.record.envelope, input.principal),
   );
+  const validityExpiry = proof.shards[0].publicInputs
+    && typeof proof.shards[0].publicInputs === "object"
+    && "validityExpiry" in proof.shards[0].publicInputs
+    && typeof proof.shards[0].publicInputs.validityExpiry === "string"
+      ? BigInt(proof.shards[0].publicInputs.validityExpiry)
+      : undefined;
+  const nowUnix = BigInt(Math.floor(Date.now() / 1_000));
+  if (!validityExpiry || validityExpiry - nowUnix < 900n) {
+    throw new Error(
+      "This confirmed payroll missed its on-chain proof-delivery window and cannot be used for claims. Create a replacement payroll; no wallet transaction was requested.",
+    );
+  }
   await retryDurableWrite(() => input.client.enqueueProofVerification({
     settlementId: recovery.settlementId!,
     proofBundleId: recovery.proofBundleId,

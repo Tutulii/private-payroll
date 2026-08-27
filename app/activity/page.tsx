@@ -724,6 +724,17 @@ export default function ActivityPage() {
         submitException: starknet.runProofBoundException,
         onStage: setExceptionStage,
         persistPendingSubmission: persistPendingException,
+        prove: process.env.NEXT_PUBLIC_PAYO_PROVER_URL?.trim()
+          ? async ({ encryptedWitness, principal, onProgress }) => {
+              onProgress?.("loading");
+              onProgress?.("proving");
+              return vault.client!.provePayrollIntegrityRemotely({
+                proverBaseUrl: process.env.NEXT_PUBLIC_PAYO_PROVER_URL!.trim(),
+                encryptedWitness,
+                principal,
+              });
+            }
+          : undefined,
       });
       await refreshActivity();
       const message = `Private wage claim submitted · ${result.transactionHash.slice(0, 10)}…`;

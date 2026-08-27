@@ -1,6 +1,6 @@
 import "server-only";
 
-import { num, type Call } from "starknet";
+import { hash, num, type Call } from "starknet";
 import { PAYO_MAX_PROOF_CALLDATA_FELTS } from "@/lib/proof/protocol";
 import type { PayoDeploymentConfig } from "./payo-deployment";
 
@@ -8,6 +8,14 @@ export type FxPublicationRpc = {
   getBlockNumber: () => Promise<number>;
   getBlockTimestamp: (blockNumber: number) => Promise<number>;
   callContract: (call: Call, blockIdentifier?: number) => Promise<unknown>;
+  getEvents?: (filter: {
+    from_block: { block_number: number };
+    to_block: { block_number: number };
+    address: string;
+    keys: string[][];
+    chunk_size: number;
+    continuation_token?: string;
+  }) => Promise<unknown>;
 };
 
 function resultFelts(response: unknown): string[] {
@@ -40,6 +48,63 @@ function rootFromLimbs(high: bigint, low: bigint): string {
   return `0x${((high << 128n) | low).toString(16).padStart(64, "0")}`;
 }
 
+export async function assertFxRootNotRevoked(input: {
+  rpc: FxPublicationRpc;
+  policyRegistryAddress: string;
+  catalogRoot: string;
+  fromBlock: number;
+  toBlock: number;
+}): Promise<void> {
+  if (!input.rpc.getEvents) throw new Error("The FX renewal RPC cannot inspect revocation events.");
+  if (!Number.isInteger(input.fromBlock) || input.fromBlock < 0 || input.fromBlock > input.toBlock) {
+    throw new Error("The FX renewal event range is invalid.");
+  }
+  const root = BigInt(input.catalogRoot);
+  const rootHigh = num.toHex(root >> 128n);
+  const rootLow = num.toHex(root & ((1n << 128n) - 1n));
+  const scheduledSelector = hash.getSelectorFromName("CatalogRootScheduled");
+  const revokedSelector = hash.getSelectorFromName("CatalogRootRevoked");
+  let continuationToken: string | undefined;
+  let latestEvent: { blockNumber: number; order: number; selector: string } | undefined;
+  let order = 0;
+  for (let page = 0; page < 100; page += 1) {
+    const response = await input.rpc.getEvents({
+      from_block: { block_number: input.fromBlock },
+      to_block: { block_number: input.toBlock },
+      address: input.policyRegistryAddress,
+      keys: [[scheduledSelector, revokedSelector], ["0x1"], [rootHigh], [rootLow]],
+      chunk_size: 100,
+      ...(continuationToken ? { continuation_token: continuationToken } : {}),
+    }) as {
+      events?: Array<{ block_number?: number; keys?: string[] }>;
+      continuation_token?: string;
+    };
+    for (const event of response.events ?? []) {
+      const blockNumber = event.block_number;
+      const selector = event.keys?.[0];
+      if (!Number.isInteger(blockNumber) || !selector) {
+        throw new Error("The FX renewal RPC returned malformed registry evidence.");
+      }
+      const candidate = { blockNumber: blockNumber!, order, selector: num.toHex(BigInt(selector)) };
+      order += 1;
+      if (!latestEvent
+        || candidate.blockNumber > latestEvent.blockNumber
+        || (candidate.blockNumber === latestEvent.blockNumber && candidate.order > latestEvent.order)) {
+        latestEvent = candidate;
+      }
+    }
+    continuationToken = response.continuation_token;
+    if (!continuationToken) {
+      if (!latestEvent) throw new Error("The historical FX root has no registry authorization history.");
+      if (BigInt(latestEvent.selector) === BigInt(revokedSelector)) {
+        throw new Error("The historical FX root was revoked and cannot be renewed.");
+      }
+      return;
+    }
+  }
+  throw new Error("FX registry-event pagination exceeded the safety limit.");
+}
+
 export async function verifyFxPublicationProof(input: {
   rpc: FxPublicationRpc;
   deployment: PayoDeploymentConfig;
@@ -47,6 +112,7 @@ export async function verifyFxPublicationProof(input: {
   catalogRoot: string;
   proofVersion: 1 | 2;
   shards: readonly [readonly string[], readonly string[]];
+  requireActiveWindow?: boolean;
 }): Promise<{ blockNumber: number; blockTimestamp: number; verifierAddress: string }> {
   if (input.shards.some((shard) =>
     shard.length < 1
@@ -96,7 +162,8 @@ export async function verifyFxPublicationProof(input: {
   ) {
     throw new Error("The payroll proof is not bound to this PAYO FX catalog and deployment.");
   }
-  if (results[0][14] > BigInt(blockTimestamp) || BigInt(blockTimestamp) > results[0][15]) {
+  if (input.requireActiveWindow !== false
+    && (results[0][14] > BigInt(blockTimestamp) || BigInt(blockTimestamp) > results[0][15])) {
     throw new Error("The payroll proof validity window is not active.");
   }
   return { blockNumber, blockTimestamp, verifierAddress };

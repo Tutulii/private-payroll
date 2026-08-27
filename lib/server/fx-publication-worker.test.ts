@@ -22,6 +22,8 @@ function leasedJob(overrides: Partial<LeasedFxPublicationJob> = {}): LeasedFxPub
     shards: [["0x1"], ["0x2"]],
     observedAt: nowSeconds - 60,
     maximumAgeSeconds: 3_600,
+    historicalRenewal: false,
+    renewalRunId: null,
     transactionHash: null,
     attempts: 0,
     leaseOwner: "worker-1",
@@ -43,6 +45,7 @@ function dependencies(input: {
   job?: LeasedFxPublicationJob;
   active?: boolean;
   verificationError?: Error;
+  revocationError?: Error;
   observation?: { state: "pending" | "confirmed" | "finalized" | "reorged" | "failed"; confirmationDepth: number; errorMessage?: string };
 }) {
   const recordSubmission = vi.fn().mockResolvedValue({ state: "pending" });
@@ -57,16 +60,20 @@ function dependencies(input: {
         blockTimestamp: nowSeconds,
         verifierAddress: "0x789",
       });
+  const assertNotRevoked = input.revocationError
+    ? vi.fn().mockRejectedValue(input.revocationError)
+    : vi.fn().mockResolvedValue(undefined);
   const deps = {
     lease: vi.fn().mockResolvedValue([input.job ?? leasedJob()]),
     isActive: vi.fn().mockResolvedValue(input.active ?? false),
+    assertNotRevoked,
     verify,
     observe: vi.fn().mockResolvedValue(input.observation ?? { state: "pending", confirmationDepth: 0 }),
     recordSubmission,
     recordComplete,
     defer,
   } as unknown as FxPublicationWorkerDependencies;
-  return { deps, verify, recordSubmission, recordComplete, defer };
+  return { deps, verify, assertNotRevoked, recordSubmission, recordComplete, defer };
 }
 
 describe("durable FX publication worker", () => {
@@ -150,6 +157,53 @@ describe("durable FX publication worker", () => {
     }), now);
     expect(verify).not.toHaveBeenCalled();
     expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("renews only after checking revocation and permits the historical proof window", async () => {
+    const job = leasedJob({ historicalRenewal: true, renewalRunId: "run-1" });
+    const state = dependencies({ job });
+    const renewalRpc = rpc();
+    vi.mocked(renewalRpc.getBlockNumber).mockResolvedValue(123);
+    await processFxPublicationBatch({
+      rpc: renewalRpc,
+      submitter: { submit: vi.fn().mockResolvedValue({ transactionHash: "0xabc" }) },
+      deployment,
+      policyRegistryAddress,
+      workerId: "worker-1",
+      now,
+      dependencies: state.deps,
+    });
+    expect(state.assertNotRevoked).toHaveBeenCalledWith(expect.objectContaining({
+      catalogRoot: job.catalogRoot,
+      toBlock: 123,
+    }));
+    expect(state.verify).toHaveBeenCalledWith(expect.objectContaining({
+      requireActiveWindow: false,
+    }));
+  });
+
+  it("permanently blocks renewal of an administrator-revoked FX root", async () => {
+    const job = leasedJob({ historicalRenewal: true, renewalRunId: "run-1" });
+    const state = dependencies({
+      job,
+      revocationError: new Error("The historical FX root was revoked and cannot be renewed."),
+    });
+    const renewalRpc = rpc();
+    vi.mocked(renewalRpc.getBlockNumber).mockResolvedValue(123);
+    await processFxPublicationBatch({
+      rpc: renewalRpc,
+      submitter: { submit: vi.fn() },
+      deployment,
+      policyRegistryAddress,
+      workerId: "worker-1",
+      now,
+      dependencies: state.deps,
+    });
+    expect(state.defer).toHaveBeenCalledWith(job, expect.objectContaining({
+      errorCode: "FX_RENEWAL_REVOKED",
+      permanent: true,
+    }), now);
+    expect(state.verify).not.toHaveBeenCalled();
   });
 
   it("fails closed on deterministic proof mismatch but retries RPC failures", async () => {
