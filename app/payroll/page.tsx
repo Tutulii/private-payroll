@@ -46,7 +46,10 @@ import {
   type PayrollExecutionResult,
   type PendingPayrollSubmission,
 } from "@/lib/client/payroll-execution";
-import { payrollRecoveryMode } from "@/lib/client/payroll-recovery-state";
+import {
+  payrollRecoveryMode,
+  payrollSubmissionRecoveryHash,
+} from "@/lib/client/payroll-recovery-state";
 import {
   obligationAuthorizationSelectionKey,
   payeesMissingActiveAgreements,
@@ -772,16 +775,31 @@ export default function PayrollPage() {
   };
 
   useEffect(() => {
-    if (!vault.client || !recoverableSubmission || recoverableSubmission.transactionHash) {
+    if (!vault.client || !recoverableSubmission) {
       automaticRecoveryRef.current = null;
       return;
     }
-    const recoveredHash = payrollRuns.find(({ id }) => id === recoverableSubmission.runId)?.transactionHash;
+    const indexedHash = payrollRuns.find(({ id }) => id === recoverableSubmission.runId)?.transactionHash;
+    let recoveredHash: string | null;
+    try {
+      recoveredHash = payrollSubmissionRecoveryHash({
+        pendingTransactionHash: recoverableSubmission.transactionHash,
+        indexedTransactionHash: indexedHash,
+      });
+    } catch (recoveryEvidenceError) {
+      queueMicrotask(() => {
+        setPayrollStage(null);
+        setFormError(recoveryEvidenceError instanceof Error
+          ? recoveryEvidenceError.message
+          : "The indexed payroll transaction could not be validated.");
+      });
+      return;
+    }
     if (!recoveredHash) return;
     const recoveryKey = `${recoverableSubmission.settlementId}:${recoveredHash}`;
     if (automaticRecoveryRef.current === recoveryKey) return;
     automaticRecoveryRef.current = recoveryKey;
-    let stale = false;
+    queueMicrotask(() => setFormError(""));
     void resumePendingPayrollSubmission({
       client: vault.client,
       pending: recoverableSubmission,
@@ -789,21 +807,15 @@ export default function PayrollPage() {
       persistPendingSubmission,
       onStage: setPayrollStage,
     }).then(async (result) => {
-      if (stale) return;
       setPayrollReceipt(result);
       await reconcilePayrollTransaction(result.transactionHash);
       setRecoveryTransactionHash("");
       await refreshPayrollRuns();
-      notify(`Ready hash recovered on-chain · ${result.transactionHash.slice(0, 10)}…`);
+      notify(`Payroll confirmed and proof verification queued · ${result.transactionHash.slice(0, 10)}…`);
     }).catch((recoveryError) => {
-      if (stale) return;
-      automaticRecoveryRef.current = null;
       setPayrollStage(null);
       setFormError(recoveryError instanceof Error ? recoveryError.message : "On-chain payroll recovery failed.");
     });
-    return () => {
-      stale = true;
-    };
   }, [notify, payrollRuns, persistPendingSubmission, reconcilePayrollTransaction, recoverableSubmission, refreshPayrollRuns, vault.client]);
 
   const recoverSealedRun = async (run: PayrollRunSummary) => {

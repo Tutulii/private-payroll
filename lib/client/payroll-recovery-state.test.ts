@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { payrollRecoveryMode } from "./payroll-recovery-state";
+import {
+  payrollRecoveryMode,
+  payrollSubmissionRecoveryHash,
+} from "./payroll-recovery-state";
 
 describe("payrollRecoveryMode", () => {
   it("does not expose emergency controls without a recovery payload", () => {
@@ -49,5 +52,29 @@ describe("payrollRecoveryMode", () => {
       executionStage: null,
       walletStage: "failed",
     })).toBe("recording_required");
+  });
+});
+
+describe("payrollSubmissionRecoveryHash", () => {
+  it("waits for independent finalized-chain evidence", () => {
+    expect(payrollSubmissionRecoveryHash({ pendingTransactionHash: "0xabc" })).toBeNull();
+  });
+
+  it("recovers a Ready hash after the indexer observes the same transaction", () => {
+    expect(payrollSubmissionRecoveryHash({
+      pendingTransactionHash: "0x0ABC",
+      indexedTransactionHash: "0xabc",
+    })).toBe("0xabc");
+  });
+
+  it("recovers a Wallet API promise that returned no hash", () => {
+    expect(payrollSubmissionRecoveryHash({ indexedTransactionHash: "0xfeed" })).toBe("0xfeed");
+  });
+
+  it("fails closed when local and indexed transactions differ", () => {
+    expect(() => payrollSubmissionRecoveryHash({
+      pendingTransactionHash: "0xabc",
+      indexedTransactionHash: "0xdef",
+    })).toThrow("does not match");
   });
 });
