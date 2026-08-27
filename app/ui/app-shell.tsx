@@ -97,6 +97,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }, [toast]);
 
   useEffect(() => {
+    if (pathname.startsWith("/payo-browser-evidence")) return;
     const client = vault.client;
     const session = vault.session;
     if (!client || !session) {
@@ -164,7 +165,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       window.clearTimeout(initial);
       window.clearInterval(interval);
     };
-  }, [reconcilePayrollTransaction, vault.client, vault.session]);
+  }, [pathname, reconcilePayrollTransaction, vault.client, vault.session]);
 
   return (
     <AppShellContext.Provider value={contextValue}>

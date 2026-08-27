@@ -178,6 +178,7 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
       cycleId: "phase3-browser-exception",
       state: "confirmed",
       dueAt: "2026-08-26T00:00:00.000Z",
+      updatedAt: "2026-08-26T00:01:00.000Z",
       lines: [{ agreementId }],
     }]);
   }, { runId, agreementId: recurringAgreement.id });

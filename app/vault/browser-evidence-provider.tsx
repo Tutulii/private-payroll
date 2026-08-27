@@ -21,6 +21,7 @@ import { wageClaimRecordSchema } from "@/lib/domain/records";
 const ORGANIZATION_ID = "018f1000-0000-7000-8000-000000000030";
 const ORGANIZATION_SECRET = `0x${"30".repeat(32)}`;
 const STORAGE_KEY = "payo:phase3-browser-evidence:v1";
+const SYNTHETIC_ROOT = `0x${"42".repeat(32)}`;
 
 // This key can only decrypt synthetic records created in the server-gated browser-evidence route.
 // It is deliberately unrelated to any PAYO deployment, user, or funded Starknet account.
@@ -204,12 +205,27 @@ export function PayoBrowserEvidenceProvider({ children }: { children: ReactNode 
           id: runId,
           organizationId: ORGANIZATION_ID,
           state: run.state,
-          agreementRoot: null,
-          manifestRoot: null,
-          policyRoot: null,
-          fxRoot: null,
-          runNullifier: null,
+          agreementRoot: SYNTHETIC_ROOT,
+          manifestRoot: SYNTHETIC_ROOT,
+          policyRoot: SYNTHETIC_ROOT,
+          fxRoot: SYNTHETIC_ROOT,
+          runNullifier: SYNTHETIC_ROOT,
           envelope,
+        },
+      };
+    },
+    async checkDeploymentReadiness() {
+      return {
+        readiness: {
+          ready: true,
+          blockNumber: 1,
+          chainId: "0x534e5f4d41494e",
+          sealAddress: "0x1",
+          poolAddress: "0x1",
+          catalogRegistryAddress: "0x1",
+          obligationRegistryAddress: "0x1",
+          verifierAddress: "0x1",
+          checks: [],
         },
       };
     },
