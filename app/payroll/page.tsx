@@ -598,6 +598,10 @@ export default function PayrollPage() {
         obligations: selectedObligations,
       });
       if (await starknet.isObligationRootActive(planned.root)) {
+        const owner = await starknet.getObligationRootOwner(planned.root);
+        if (BigInt(owner) !== BigInt(starknet.address)) {
+          throw new Error("This active obligation root belongs to another Ready account.");
+        }
         setObligationSchedule({
           root: planned.root,
           transactionHash: null,
@@ -656,6 +660,10 @@ export default function PayrollPage() {
           "This exact encrypted obligation root is not active. Activate it below before generating a proof.",
         );
       }
+      const obligationOwner = await starknet.getObligationRootOwner(plannedObligations.root);
+      if (BigInt(obligationOwner) !== BigInt(starknet.address)) {
+        throw new Error("The connected Ready account does not own this encrypted obligation root.");
+      }
       for (const token of Object.keys(PAYROLL_TOKENS) as PayrollTokenSymbol[]) {
         const available = starknet.shieldedBalances[token];
         if (available === null) throw new Error(`The shielded ${token} balance is unavailable.`);
@@ -691,13 +699,22 @@ export default function PayrollPage() {
           : undefined,
         onStage: setPayrollStage,
         persistPendingSubmission,
-        authorizeFxRoot: async ({ root, publicationWindow }) => {
+        authorizeFxRoot: async ({ root, publicationTicket, proof }) => {
           if (await starknet.isFxRootActive(root)) return;
-          await starknet.publishFxRoot({
-            root,
-            observedAt: publicationWindow.observedAt,
-            maximumAgeSeconds: publicationWindow.maximumAgeSeconds,
+          const proofVersion = Number(BigInt(proof.shards[0].publicInputs.proofVersion));
+          if (proofVersion !== 1 && proofVersion !== 2) {
+            throw new Error("The payroll proof returned an unsupported FX publication version.");
+          }
+          await vault.client!.publishPayrollFxRoot({
+            organizationId: vault.session!.organizationId,
+            catalogRoot: root,
+            publicationTicket,
+            proofVersion,
+            shards: [proof.shards[0].proofCalldata, proof.shards[1].proofCalldata],
           });
+          if (!(await starknet.isFxRootActive(root))) {
+            throw new Error("PAYO's trusted FX publisher returned without activating the proved root.");
+          }
         },
       });
       setPayrollReceipt(result);

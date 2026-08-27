@@ -17,6 +17,10 @@ use payo_contracts::payroll_seal::{IPayoPayrollSealDispatcher, IPayoPayrollSealD
 use payo_contracts::policy_registry::{
     IPayoPolicyRegistryDispatcher, IPayoPolicyRegistryDispatcherTrait,
 };
+use payo_contracts::tenant_obligation_registry::{
+    IPayoTenantObligationRootRegistryDispatcher,
+    IPayoTenantObligationRootRegistryDispatcherTrait,
+};
 use snforge_std::{
     ContractClassTrait, DeclareResultTrait, declare, start_cheat_block_timestamp,
     start_cheat_caller_address, start_mock_call,
@@ -793,6 +797,83 @@ fn obligation_roots_are_authoritative_and_expiring() {
     assert(dispatcher.is_obligation_root_valid(11, 12), 'obligation root not active');
     dispatcher.revoke_obligation_root(11, 12);
     assert(!dispatcher.is_obligation_root_valid(11, 12), 'obligation revocation ignored');
+}
+
+#[test]
+fn tenant_obligation_roots_are_owned_by_the_scheduling_wallet() {
+    let protocol_admin = address(1234);
+    let organization_owner = address(5678);
+    let contract = declare("PayoTenantObligationRootRegistry").unwrap().contract_class();
+    let mut calldata = array![];
+    protocol_admin.serialize(ref calldata);
+    let (registry, _) = contract.deploy(@calldata).unwrap();
+    start_cheat_caller_address(registry, organization_owner);
+    start_cheat_block_timestamp(registry, 100);
+    let dispatcher = IPayoTenantObligationRootRegistryDispatcher { contract_address: registry };
+
+    dispatcher.schedule_obligation_root(11, 12, 90_000, 90_000);
+    assert(dispatcher.get_obligation_root_owner(11, 12) == organization_owner, 'wrong root owner');
+    assert(dispatcher.is_obligation_root_valid(11, 12), 'tenant root not active');
+}
+
+#[test]
+#[should_panic(expected: ('PAYO_NOT_ROOT_OWNER',))]
+fn tenant_obligation_root_cannot_be_refreshed_by_another_wallet() {
+    let protocol_admin = address(1234);
+    let organization_owner = address(5678);
+    let attacker = address(9876);
+    let contract = declare("PayoTenantObligationRootRegistry").unwrap().contract_class();
+    let mut calldata = array![];
+    protocol_admin.serialize(ref calldata);
+    let (registry, _) = contract.deploy(@calldata).unwrap();
+    start_cheat_block_timestamp(registry, 100);
+    let dispatcher = IPayoTenantObligationRootRegistryDispatcher { contract_address: registry };
+
+    start_cheat_caller_address(registry, organization_owner);
+    dispatcher.schedule_obligation_root(11, 12, 90_000, 90_000);
+    start_cheat_caller_address(registry, attacker);
+    dispatcher.schedule_obligation_root(11, 12, 90_000, 90_000);
+}
+
+#[test]
+fn tenant_obligation_root_owner_can_transfer_control() {
+    let protocol_admin = address(1234);
+    let organization_owner = address(5678);
+    let next_owner = address(9876);
+    let contract = declare("PayoTenantObligationRootRegistry").unwrap().contract_class();
+    let mut calldata = array![];
+    protocol_admin.serialize(ref calldata);
+    let (registry, _) = contract.deploy(@calldata).unwrap();
+    start_cheat_block_timestamp(registry, 100);
+    let dispatcher = IPayoTenantObligationRootRegistryDispatcher { contract_address: registry };
+
+    start_cheat_caller_address(registry, organization_owner);
+    dispatcher.schedule_obligation_root(11, 12, 90_000, 90_000);
+    dispatcher.transfer_obligation_root_owner(11, 12, next_owner);
+    assert(dispatcher.get_obligation_root_owner(11, 12) == next_owner, 'owner not transferred');
+
+    start_cheat_caller_address(registry, next_owner);
+    dispatcher.revoke_obligation_root(11, 12);
+    assert(!dispatcher.is_obligation_root_valid(11, 12), 'new owner cannot revoke');
+}
+
+#[test]
+fn tenant_registry_admin_has_emergency_revoke_only() {
+    let protocol_admin = address(1234);
+    let organization_owner = address(5678);
+    let contract = declare("PayoTenantObligationRootRegistry").unwrap().contract_class();
+    let mut calldata = array![];
+    protocol_admin.serialize(ref calldata);
+    let (registry, _) = contract.deploy(@calldata).unwrap();
+    start_cheat_block_timestamp(registry, 100);
+    let dispatcher = IPayoTenantObligationRootRegistryDispatcher { contract_address: registry };
+
+    start_cheat_caller_address(registry, organization_owner);
+    dispatcher.schedule_obligation_root(11, 12, 90_000, 90_000);
+    start_cheat_caller_address(registry, protocol_admin);
+    dispatcher.revoke_obligation_root(11, 12);
+    assert(!dispatcher.is_obligation_root_valid(11, 12), 'emergency revoke failed');
+    assert(dispatcher.get_obligation_root_owner(11, 12) == organization_owner, 'admin stole root');
 }
 
 #[test]

@@ -16,7 +16,6 @@ import {
 import type { PrivatePayrollLine } from "@/lib/domain/payroll";
 import {
   fxCatalogPublicationWindow,
-  protectedFxSnapshotToPayrollSnapshot,
   type FxSnapshot,
 } from "@/lib/domain/fx";
 import { isAgreementDue } from "@/lib/domain/obligations";
@@ -317,6 +316,8 @@ export type ExecuteProofBoundPayrollInput = {
     root: `0x${string}`;
     snapshots: readonly FxSnapshot[];
     publicationWindow: ReturnType<typeof fxCatalogPublicationWindow>;
+    publicationTicket: string;
+    proof: ProofWorkerSuccess;
   }) => Promise<void>;
   runRevision?: number;
   now?: () => Date;
@@ -589,19 +590,16 @@ export async function executeProofBoundPayroll(
     );
   }
   const medianOnlyTokens = usedTokens.filter((token) => !protectedTokens.includes(token));
-  const [protectedResult, medianResult] = await Promise.all([
-    protectedTokens.length
-      ? input.client.getProtectedFxSnapshots(protectedTokens)
-      : Promise.resolve({ snapshots: [] }),
-    medianOnlyTokens.length
-      ? input.client.getFxSnapshots(medianOnlyTokens)
-      : Promise.resolve({ snapshots: [] }),
-  ]);
-  const snapshots = [
-    ...protectedResult.snapshots.map(protectedFxSnapshotToPayrollSnapshot),
-    ...medianResult.snapshots,
-  ];
+  const fxCatalog = await input.client.getPayrollFxCatalog({
+    organizationId: input.organizationId,
+    protectedTokens,
+    medianTokens: medianOnlyTokens,
+  });
+  const snapshots = fxCatalog.snapshots;
   const precomputedFxRoot = await buildFxCatalogRoot(snapshots);
+  if (BigInt(precomputedFxRoot) !== BigInt(fxCatalog.catalogRoot)) {
+    throw new Error("The authenticated PAYO FX catalog root does not match its snapshots.");
+  }
   const advancedScheduleCommitments = new Map<string, `0x${string}`>(await Promise.all(
     input.obligations.flatMap(({ agreement }) => agreement.agreement.agreementVersion === "payo-agreement-v2"
       ? [advancedPlanProofCommitment(agreement.agreement).then((commitment) => [agreement.agreement.id, commitment] as const)]
@@ -656,7 +654,9 @@ export async function executeProofBoundPayroll(
     await input.authorizeFxRoot({
       root: precomputedFxRoot,
       snapshots,
-      publicationWindow: fxCatalogPublicationWindow(snapshots),
+      publicationWindow: fxCatalog.publicationWindow,
+      publicationTicket: fxCatalog.publicationTicket,
+      proof,
     });
   }
   const publicInputs = proof.shards[0].publicInputs;

@@ -2,6 +2,7 @@ import { Account, RpcProvider } from "starknet";
 import { authorizeInternalWorker } from "@/lib/server/internal-auth";
 import { getPayoDeploymentConfig } from "@/lib/server/payo-deployment";
 import { processProofVerificationBatch } from "@/lib/server/proof-relayer";
+import { withStarknetRelayerSubmissionLock } from "@/lib/persistence/relayer-lock";
 
 export const runtime = "nodejs";
 
@@ -57,10 +58,10 @@ export async function POST(request: Request) {
         getBlockWithTxHashes: (blockNumber) => provider.getBlockWithTxHashes(blockNumber),
       },
       submitter: {
-        submit: async (call) => {
+        submit: (call) => withStarknetRelayerSubmissionLock(relayerAddress, async () => {
           const response = await account.execute(call);
           return { transactionHash: response.transaction_hash };
-        },
+        }),
       },
       deployment,
       workerId: request.headers.get("x-payo-worker-id") || "payo-proof-relayer",

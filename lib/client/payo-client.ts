@@ -380,6 +380,42 @@ export class PayoClient {
     );
   }
 
+  async getPayrollFxCatalog(input: {
+    organizationId: string;
+    medianTokens: readonly ("STRK" | "USDC")[];
+    protectedTokens: readonly ("STRK" | "USDC")[];
+  }) {
+    const query = new URLSearchParams({
+      organizationId: input.organizationId,
+      medianTokens: [...new Set(input.medianTokens)].join(","),
+      protectedTokens: [...new Set(input.protectedTokens)].join(","),
+    });
+    return this.request<{
+      snapshots: FxSnapshot[];
+      catalogRoot: `0x${string}`;
+      publicationWindow: { observedAt: number; maximumAgeSeconds: number; expiresAt: number };
+      publicationTicket: string;
+      sourceBlocks: { protected: number | null; median: number | null };
+    }>(`/api/v1/fx-catalog?${query.toString()}`);
+  }
+
+  async publishPayrollFxRoot(input: {
+    organizationId: string;
+    catalogRoot: `0x${string}`;
+    publicationTicket: string;
+    proofVersion: 1 | 2;
+    shards: [string[], string[]];
+  }) {
+    return this.request<{
+      catalogRoot: `0x${string}`;
+      alreadyActive: boolean;
+      transactionHash: string | null;
+    }>("/api/v1/fx-publications", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
   async provePayrollIntegrityRemotely(input: Omit<RemoteProofRequest, "version" | "requestId"> & {
     proverBaseUrl: string;
   }): Promise<ProofWorkerSuccess> {

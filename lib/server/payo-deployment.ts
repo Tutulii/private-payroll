@@ -10,6 +10,45 @@ export type PayoDeploymentConfig = {
   sealAddress: string;
 };
 
+export type PayoRegistryConfig = {
+  policyRegistryAddress: string;
+  obligationRegistryAddress: string;
+};
+
+function configuredAddress(privateName: string, publicName: string, label: string): string {
+  const privateValue = process.env[privateName];
+  const publicValue = process.env[publicName];
+  if (!privateValue && !publicValue) {
+    throw new ApiError(503, `${label} is not deployed/configured.`, "PAYO_REGISTRY_NOT_CONFIGURED");
+  }
+  try {
+    const privateAddress = validateAndParseAddress(privateValue ?? publicValue!);
+    const publicAddress = validateAndParseAddress(publicValue ?? privateValue!);
+    if (BigInt(privateAddress) !== BigInt(publicAddress)) {
+      throw new ApiError(503, `${label} server and browser addresses do not match.`, "PAYO_REGISTRY_CONFIG_MISMATCH");
+    }
+    return privateAddress;
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(503, `${label} address is invalid.`, "PAYO_REGISTRY_CONFIG_INVALID");
+  }
+}
+
+export function getPayoRegistryConfig(): PayoRegistryConfig {
+  return {
+    policyRegistryAddress: configuredAddress(
+      "PAYO_POLICY_REGISTRY_ADDRESS",
+      "NEXT_PUBLIC_PAYO_POLICY_REGISTRY_ADDRESS",
+      "The PAYO policy registry",
+    ),
+    obligationRegistryAddress: configuredAddress(
+      "PAYO_OBLIGATION_REGISTRY_ADDRESS",
+      "NEXT_PUBLIC_PAYO_OBLIGATION_REGISTRY_ADDRESS",
+      "The PAYO obligation registry",
+    ),
+  };
+}
+
 export function getPayoDeploymentConfig(): PayoDeploymentConfig {
   const privateSeal = process.env.PAYO_SEAL_ADDRESS;
   const publicSeal = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;

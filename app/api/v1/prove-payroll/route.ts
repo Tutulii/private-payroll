@@ -3,6 +3,7 @@ import { encryptedVaultRecordSchema } from "@/lib/crypto/vault";
 import { ApiError, requirePrincipal } from "@/lib/server/auth";
 import { apiFailure, readJson } from "@/lib/server/http";
 import { provePayrollOnSelfHostedNode } from "@/lib/proof/server-prover";
+import { requireOrganizationRole } from "@/lib/persistence/repository";
 
 export const runtime = "nodejs";
 
@@ -79,11 +80,12 @@ export async function POST(request: Request) {
       throw new ApiError(413, "The encrypted proof request is too large.", "PROVER_REQUEST_TOO_LARGE");
     }
     const authenticated = await requirePrincipal(request);
-    const allowedPrincipal = process.env.PAYO_PROVER_ALLOWED_PRINCIPAL_ID;
-    if (!allowedPrincipal || authenticated.principalId !== allowedPrincipal) {
-      throw new ApiError(403, "This principal cannot use the self-hosted prover.", "PROVER_PRINCIPAL_FORBIDDEN");
-    }
     const input = requestSchema.parse(await readJson(request));
+    await requireOrganizationRole(
+      input.encryptedWitness.aad.organizationId,
+      authenticated,
+      ["admin", "operator"],
+    );
     if (input.principal.principalId !== authenticated.principalId) {
       throw new ApiError(403, "The proof key does not belong to the authenticated principal.", "PROVER_KEY_FORBIDDEN");
     }

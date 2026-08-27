@@ -4,3 +4,4 @@ pub mod integrity_bundle_verifier;
 pub mod obligation_registry;
 pub mod payroll_seal;
 pub mod policy_registry;
+pub mod tenant_obligation_registry;

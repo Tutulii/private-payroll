@@ -231,6 +231,7 @@ type StarknetWalletContextValue = {
   reconcilePayrollTransaction: (transactionHash: string) => Promise<void>;
   scheduleObligationRoot: (agreementRoot: string) => Promise<ObligationRootScheduleResult>;
   isObligationRootActive: (agreementRoot: string) => Promise<boolean>;
+  getObligationRootOwner: (agreementRoot: string) => Promise<string>;
   publishFxRoot: (input: {
     root: string;
     observedAt: number;
@@ -1099,18 +1100,19 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     if (privateActionLockRef.current) {
       throw new Error("A Mainnet wallet request is already active.");
     }
-    const [latest, adminResponse] = await Promise.all([
+    const { high, low } = rootLimbs(agreementRoot);
+    const [latest, ownerResponse] = await Promise.all([
       mainnetProvider.getBlock("latest"),
       mainnetProvider.callContract({
         contractAddress: registryAddress,
-        entrypoint: "get_admin",
-        calldata: [],
+        entrypoint: "get_obligation_root_owner",
+        calldata: [high.toString(), low.toString()],
       }),
     ]);
-    const registryAdmin = validateAndParseAddress(adminResponse[0] ?? "0x0");
-    if (num.toBigInt(registryAdmin) !== num.toBigInt(address)) {
+    const rootOwner = validateAndParseAddress(ownerResponse[0] ?? "0x0");
+    if (num.toBigInt(rootOwner) !== 0n && num.toBigInt(rootOwner) !== num.toBigInt(address)) {
       throw new Error(
-        `Connected wallet ${shortStarknetAddress(address)} is not the obligation-registry administrator ${shortStarknetAddress(registryAdmin)}.`,
+        `This obligation root belongs to ${shortStarknetAddress(rootOwner)}, not connected wallet ${shortStarknetAddress(address)}.`,
       );
     }
     const schedule = prepareObligationRootSchedule({
@@ -1139,14 +1141,23 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
         retries: 400,
         retryInterval: 3_000,
       });
-      const { high, low } = rootLimbs(agreementRoot);
-      const active = await mainnetProvider.callContract({
-        contractAddress: registryAddress,
-        entrypoint: "is_obligation_root_valid",
-        calldata: [high.toString(), low.toString()],
-      });
+      const [active, confirmedOwner] = await Promise.all([
+        mainnetProvider.callContract({
+          contractAddress: registryAddress,
+          entrypoint: "is_obligation_root_valid",
+          calldata: [high.toString(), low.toString()],
+        }),
+        mainnetProvider.callContract({
+          contractAddress: registryAddress,
+          entrypoint: "get_obligation_root_owner",
+          calldata: [high.toString(), low.toString()],
+        }),
+      ]);
       if (num.toBigInt(active[0] ?? "0x0") === 0n) {
         throw new Error("The obligation root confirmed but did not activate immediately.");
+      }
+      if (num.toBigInt(confirmedOwner[0] ?? "0x0") !== num.toBigInt(address)) {
+        throw new Error("The obligation root confirmed without assigning the connected organization owner.");
       }
       setTransaction({ ...confirming, stage: "confirmed" });
       return {
@@ -1177,6 +1188,18 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
       calldata: [high.toString(), low.toString()],
     });
     return num.toBigInt(response[0] ?? "0x0") !== 0n;
+  }, []);
+
+  const getObligationRootOwner = useCallback(async (agreementRoot: string): Promise<string> => {
+    const registryAddress = process.env.NEXT_PUBLIC_PAYO_OBLIGATION_REGISTRY_ADDRESS;
+    if (!registryAddress) throw new Error("The PAYO obligation registry is not deployed/configured.");
+    const { high, low } = rootLimbs(agreementRoot);
+    const response = await mainnetProvider.callContract({
+      contractAddress: registryAddress,
+      entrypoint: "get_obligation_root_owner",
+      calldata: [high.toString(), low.toString()],
+    });
+    return validateAndParseAddress(response[0] ?? "0x0");
   }, []);
 
   const isFxRootActive = useCallback(async (fxRoot: string): Promise<boolean> => {
@@ -1737,6 +1760,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     reconcilePayrollTransaction,
     scheduleObligationRoot,
     isObligationRootActive,
+    getObligationRootOwner,
     publishFxRoot,
     isFxRootActive,
     deployPayoMainnet,

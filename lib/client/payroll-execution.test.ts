@@ -3,7 +3,7 @@ import { buildFxSnapshot } from "@/lib/domain/fx";
 import { referenceClassificationAnswers } from "@/lib/domain/classification";
 import { decryptVaultRecord, encryptVaultRecord, generateVaultPrincipal } from "@/lib/crypto/vault";
 import { hashProofCalldata } from "@/lib/proof/starknet-calldata";
-import { buildPayrollIntegrityInputsFromSerialized } from "@/lib/proof/input-builder";
+import { buildFxCatalogRoot, buildPayrollIntegrityInputsFromSerialized } from "@/lib/proof/input-builder";
 import {
   PAYROLL_INTEGRITY_CIRCUIT_SHA256,
   type EncryptedPayrollWitness,
@@ -72,6 +72,23 @@ function client(ready = true) {
     getFxSnapshots: vi.fn().mockImplementation((tokens: Array<"STRK" | "USDC">) =>
       Promise.resolve({ blockNumber: 1, snapshots: tokens.map((token) => snapshot(token)) })),
     getProtectedFxSnapshots: vi.fn(),
+    getPayrollFxCatalog: vi.fn().mockImplementation(async (input: {
+      medianTokens: Array<"STRK" | "USDC">;
+      protectedTokens: Array<"STRK" | "USDC">;
+    }) => {
+      const snapshots = [...input.protectedTokens, ...input.medianTokens].map((token) => snapshot(token));
+      return {
+        snapshots,
+        catalogRoot: await buildFxCatalogRoot(snapshots),
+        publicationWindow: {
+          observedAt: Math.floor(now.getTime() / 1_000),
+          maximumAgeSeconds: 3_600,
+          expiresAt: Math.floor(now.getTime() / 1_000) + 3_600,
+        },
+        publicationTicket: "test-publication-ticket",
+        sourceBlocks: { protected: null, median: 1 },
+      };
+    }),
     checkDeploymentReadiness: vi.fn().mockResolvedValue({
       readiness: {
         ready,
@@ -183,7 +200,7 @@ describe("proof-bound payroll browser orchestration", () => {
     const mockClient = client();
     const input = await unsupportedUsdcFxExecutionInput(mockClient);
     await expect(executeProofBoundPayroll(input)).rejects.toThrow(/unavailable for USDC\/USD/);
-    expect(mockClient.getProtectedFxSnapshots).not.toHaveBeenCalled();
+    expect(mockClient.getPayrollFxCatalog).not.toHaveBeenCalled();
     expect(input.prove).not.toHaveBeenCalled();
     expect(input.submitPayroll).not.toHaveBeenCalled();
   });
