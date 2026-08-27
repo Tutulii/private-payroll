@@ -11,6 +11,7 @@ if (!workerSecret || workerSecret.length < 32) {
 const jobs = [
   { name: "confirmations", path: "/api/internal/confirmations", intervalMs: 8_000 },
   { name: "proof-verifications", path: "/api/internal/proof-verifications", intervalMs: 5_000 },
+  { name: "fx-publications", path: "/api/internal/fx-publications", intervalMs: 3_000 },
   { name: "indexer", path: "/api/internal/indexer", intervalMs: 10_000, catchUpDelayMs: 1_000 },
   { name: "recurring-scheduler", path: "/api/internal/recurring-scheduler", intervalMs: 15_000 },
 ];

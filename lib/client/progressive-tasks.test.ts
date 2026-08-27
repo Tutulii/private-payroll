@@ -35,4 +35,24 @@ describe("runProgressiveTasks", () => {
     expect(maximumActive).toBe(3);
     expect(results.every(({ status }) => status === "fulfilled")).toBe(true);
   });
+
+  it("uses one batch deadline instead of multiplying the timeout across queued sections", async () => {
+    const started: string[] = [];
+    const before = Date.now();
+    const results = await runProgressiveTasks(
+      Array.from({ length: 8 }, (_, index) => ({
+        label: `stuck-${index}`,
+        run: () => {
+          started.push(`stuck-${index}`);
+          return new Promise<void>(() => undefined);
+        },
+      })),
+      { concurrency: 2, timeoutMs: 20 },
+    );
+
+    expect(Date.now() - before).toBeLessThan(100);
+    expect(started).toHaveLength(2);
+    expect(results).toHaveLength(8);
+    expect(results.every(({ status }) => status === "rejected")).toBe(true);
+  });
 });

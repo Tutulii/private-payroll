@@ -50,6 +50,21 @@ export const remoteProofResponseSchema = z.object({
 
 export type RemoteProofResponse = z.infer<typeof remoteProofResponseSchema>;
 
+export const remoteProofJobResponseSchema = z.object({
+  version: z.literal(2),
+  type: z.literal("proof-job"),
+  requestId: z.string().uuid(),
+  state: z.enum(["queued", "processing"]),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+}).strict();
+
+export type RemoteProofJobResponse = z.infer<typeof remoteProofJobResponseSchema>;
+
+export function decodeRemoteProofJobResponse(input: unknown): RemoteProofJobResponse {
+  return remoteProofJobResponseSchema.parse(input);
+}
+
 export type RemoteProofRequest = {
   version: 1;
   requestId: string;

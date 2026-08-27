@@ -244,6 +244,7 @@ export default function ActivityPage() {
     const generation = activityRefreshGeneration.current + 1;
     activityRefreshGeneration.current = generation;
     if (!vault.client || !vault.session) {
+      setLoading(false);
       setSettlements([]);
       setAuditEvents([]);
       setReceiptCount(0);
@@ -253,6 +254,7 @@ export default function ActivityPage() {
       setClaims([]);
       setRemediations([]);
       setDisclosureGrants([]);
+      setActivityError("");
       return;
     }
     setLoading(true);

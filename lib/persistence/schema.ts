@@ -385,6 +385,38 @@ export const proofVerificationJobs = pgTable(
   ],
 );
 
+export const fxPublicationJobs = pgTable(
+  "fx_publication_jobs",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    principalId: text("principal_id").notNull(),
+    catalogRoot: text("catalog_root").notNull(),
+    proofVersion: integer("proof_version").notNull(),
+    proofDigest: text("proof_digest").notNull(),
+    shard0Calldata: jsonb("shard_0_calldata").notNull(),
+    shard1Calldata: jsonb("shard_1_calldata").notNull(),
+    observedAt: bigint("observed_at", { mode: "number" }).notNull(),
+    maximumAgeSeconds: integer("maximum_age_seconds").notNull(),
+    state: durableJobState("state").default("pending").notNull(),
+    transactionHash: text("transaction_hash"),
+    attempts: integer("attempts").default(0).notNull(),
+    availableAt: timestamp("available_at", { withTimezone: true }).defaultNow().notNull(),
+    leaseOwner: text("lease_owner"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    lastErrorCode: text("last_error_code"),
+    lastErrorMessage: text("last_error_message"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("fx_publication_jobs_org_root_idx").on(table.organizationId, table.catalogRoot),
+    index("fx_publication_jobs_poll_idx").on(table.state, table.availableAt),
+  ],
+);
+
 export const idempotencyRequests = pgTable(
   "idempotency_requests",
   {

@@ -5,6 +5,7 @@ import type { SerializedPayrollIntegrityBuildRequest } from "@/lib/proof/input-b
 import { PayoClient, prepareEncryptedPayrollRun } from "./payo-client";
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -70,30 +71,121 @@ describe("client-encrypted payroll preparation", () => {
   });
 });
 
-describe("remote prover failures", () => {
-  it("turns an opaque cross-origin fetch failure into an actionable error", async () => {
-    vi.stubGlobal("window", {
-      location: { origin: "http://localhost:3000" },
-      setTimeout,
-      clearTimeout,
-    });
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+describe("remote prover recovery", () => {
+  const requestId = "0198ddf0-9c00-7000-8000-000000000001";
+  const encryptedWitness = { aad: { recordId: requestId } } as never;
+
+  it("retries an opaque fetch failure before reporting an actionable connection error", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("window", { setTimeout, clearTimeout });
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    vi.stubGlobal("fetch", fetchMock);
     const client = new PayoClient(async () => "a".repeat(64));
 
     const request = client.provePayrollIntegrityRemotely({
       proverBaseUrl: "https://private-payroll.fly.dev",
-      encryptedWitness: {} as never,
+      encryptedWitness,
       principal: {} as never,
     });
-    await expect(request).rejects.toMatchObject({
+    const assertion = expect(request).rejects.toMatchObject({
       code: "PROVER_FETCH_FAILED",
       status: 0,
-      message: expect.stringContaining("Local PAYO sessions cannot use a prover authenticated against a different deployment"),
+      message: expect.stringContaining("after three connection attempts"),
     });
+    await vi.advanceTimersByTimeAsync(3_000);
+    await assertion;
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("recovers a completed proof through short authenticated job polls", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("window", { setTimeout, clearTimeout });
+    const publicInputs = {
+      chainId: "1",
+      sealAddress: "2",
+      proofVersion: "1",
+      schemaVersion: "1",
+      agreementRootHigh: "3",
+      agreementRootLow: "4",
+      manifestRootHigh: "5",
+      manifestRootLow: "6",
+      policyRootHigh: "7",
+      policyRootLow: "8",
+      fxRootHigh: "9",
+      fxRootLow: "10",
+      runNullifierHigh: "11",
+      runNullifierLow: "12",
+      validityStart: "13",
+      validityExpiry: "14",
+    };
+    const job = {
+      version: 2,
+      type: "proof-job",
+      requestId,
+      state: "processing",
+      createdAt: "2026-08-27T00:00:00.000Z",
+      updatedAt: "2026-08-27T00:00:01.000Z",
+    };
+    const proof = {
+      version: 1,
+      type: "proof-complete",
+      requestId,
+      scheme: "ultra_keccak_zk_honk",
+      circuitSha256: "0x" + "11".repeat(32),
+      provingTimeMs: 10,
+      shards: ([0, 1] as const).map((shardIndex) => ({
+        shardIndex,
+        proofBase64: "AA==",
+        proofCalldata: ["0x1"],
+        calldataHash: "0x1",
+        publicInputs: { ...publicInputs, shardIndex: shardIndex.toString() },
+      })),
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json(job, { status: 202 }))
+      .mockResolvedValueOnce(Response.json(job, { status: 202 }))
+      .mockResolvedValueOnce(Response.json(proof));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PayoClient(async () => "a".repeat(64));
+
+    const request = client.provePayrollIntegrityRemotely({
+      proverBaseUrl: "https://private-payroll-prover.fly.dev",
+      encryptedWitness,
+      principal: {} as never,
+    });
+    const assertion = expect(request).resolves.toMatchObject({ requestId, provingTimeMs: 10 });
+    await vi.advanceTimersByTimeAsync(6_000);
+    await assertion;
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "GET" });
   });
 });
 
 describe("PAYO API response recovery", () => {
+  it("ends a hung vault read at the shared request deadline", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PayoClient(async () => "a".repeat(64));
+
+    const request = client.getPayrollFxCatalog({
+      organizationId: "0198ddf0-9c00-7000-8000-000000000002",
+      medianTokens: ["STRK"],
+      protectedTokens: [],
+    });
+    const assertion = expect(request).rejects.toMatchObject({
+      code: "PAYO_API_TIMEOUT",
+      status: 504,
+    });
+    await vi.advanceTimersByTimeAsync(13_000);
+    await assertion;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("retries a safe FX catalog read after Fly returns an empty successful response", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response("", { status: 200 }))

@@ -24,6 +24,7 @@ export async function runProgressiveTasks(
 ): Promise<ProgressiveTaskResult[]> {
   const concurrency = Math.max(1, Math.min(options.concurrency ?? 3, tasks.length || 1));
   const timeoutMs = options.timeoutMs ?? 12_000;
+  const deadlineAt = Date.now() + timeoutMs;
   const results: ProgressiveTaskResult[] = new Array(tasks.length);
   let cursor = 0;
 
@@ -32,8 +33,17 @@ export async function runProgressiveTasks(
       const index = cursor;
       cursor += 1;
       const task = tasks[index];
+      const remainingMs = deadlineAt - Date.now();
+      if (remainingMs <= 0) {
+        results[index] = {
+          label: task.label,
+          status: "rejected",
+          reason: new Error(`The refresh exceeded its ${Math.ceil(timeoutMs / 1_000)} second deadline.`),
+        };
+        continue;
+      }
       try {
-        await withDeadline(task.run(), task.label, timeoutMs);
+        await withDeadline(task.run(), task.label, remainingMs);
         results[index] = { label: task.label, status: "fulfilled" };
       } catch (reason) {
         results[index] = { label: task.label, status: "rejected", reason };

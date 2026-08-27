@@ -116,10 +116,22 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       if (polling || cancelled) return;
       polling = true;
       try {
+        const storageKey = `payo:pending-settlement:v1:${session.organizationId}`;
+        const serialized = window.localStorage.getItem(storageKey);
+        if (!serialized) return;
+        let pending;
+        try {
+          pending = parsePendingPayrollSubmission(JSON.parse(serialized));
+        } catch {
+          // Keep corrupt recovery evidence untouched for explicit support recovery.
+          return;
+        }
+        if (pending.organizationId !== session.organizationId) return;
         const { runs } = await client.listPayrollRuns(session.organizationId);
         const candidates = runs.flatMap((run) => {
           if (
             typeof run.id !== "string"
+            || run.id !== pending.runId
             || run.state !== "confirmed"
             || typeof run.transactionHash !== "string"
             || proofRecoveryRunsRef.current.has(run.id)
@@ -130,16 +142,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           if (cancelled) return;
           proofRecoveryRunsRef.current.add(runId);
           try {
-            const storageKey = `payo:pending-settlement:v1:${session.organizationId}`;
-            const serialized = window.localStorage.getItem(storageKey);
-            let pending = null;
-            if (serialized) {
-              try {
-                pending = parsePendingPayrollSubmission(JSON.parse(serialized));
-              } catch {
-                // Keep corrupt recovery evidence untouched for explicit support recovery.
-              }
-            }
             const recovered = await recoverConfirmedPayrollFromBrowser({
               client,
               organizationId: session.organizationId,

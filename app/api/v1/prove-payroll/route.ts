@@ -3,12 +3,13 @@ import { encryptedVaultRecordSchema } from "@/lib/crypto/vault";
 import { ApiError, requirePrincipal } from "@/lib/server/auth";
 import { apiFailure, readJson } from "@/lib/server/http";
 import { provePayrollOnSelfHostedNode } from "@/lib/proof/server-prover";
+import { enqueueProverJob, getProverJob, waitForProverJob, type ProverJobSnapshot } from "@/lib/proof/prover-job-store";
 import { requireOrganizationRole } from "@/lib/persistence/repository";
 
 export const runtime = "nodejs";
 
 const requestSchema = z.object({
-  version: z.literal(1),
+  version: z.union([z.literal(1), z.literal(2)]),
   requestId: z.string().uuid(),
   encryptedWitness: encryptedVaultRecordSchema,
   principal: z.object({
@@ -24,8 +25,6 @@ const requestSchema = z.object({
     context.addIssue({ code: "custom", message: "The encrypted record is not a payroll proof request." });
   }
 });
-
-let proverBusy = false;
 
 function allowedOrigin(request: Request): string | null {
   const origin = request.headers.get("origin");
@@ -51,6 +50,30 @@ function corsHeaders(origin: string | null): Record<string, string> {
   };
 }
 
+function proofResponse(proof: Awaited<ReturnType<typeof provePayrollOnSelfHostedNode>>, origin: string | null) {
+  return Response.json({
+    ...proof,
+    shards: proof.shards.map(({ proof: proofBytes, ...shard }) => ({
+      ...shard,
+      proofBase64: Buffer.from(proofBytes).toString("base64"),
+    })),
+  }, { headers: corsHeaders(origin) });
+}
+
+function jobResponse(job: ProverJobSnapshot, origin: string | null) {
+  if (job.state === "complete" && job.result) return proofResponse(job.result, origin);
+  if (job.state === "failed") {
+    return Response.json({ error: job.error }, { status: 422, headers: corsHeaders(origin) });
+  }
+  return Response.json({
+    version: 2,
+    type: "proof-job",
+    requestId: job.requestId,
+    state: job.state,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+  }, { status: 202, headers: corsHeaders(origin) });
+}
 export async function OPTIONS(request: Request) {
   try {
     const origin = allowedOrigin(request);
@@ -58,7 +81,7 @@ export async function OPTIONS(request: Request) {
       status: 204,
       headers: {
         ...corsHeaders(origin),
-        "access-control-allow-methods": "POST, OPTIONS",
+        "access-control-allow-methods": "GET, POST, OPTIONS",
         "access-control-allow-headers": "authorization, content-type",
         "access-control-max-age": "600",
       },
@@ -92,22 +115,51 @@ export async function POST(request: Request) {
     if (!input.encryptedWitness.wrappedKeys.some(({ principalId }) => principalId === authenticated.principalId)) {
       throw new ApiError(403, "The proof request is not encrypted to the authenticated principal.", "PROVER_ENVELOPE_FORBIDDEN");
     }
-    if (proverBusy) {
-      throw new ApiError(429, "The self-hosted prover is processing another proof. Retry after it finishes.", "PROVER_BUSY");
-    }
-    proverBusy = true;
+    // Both protocol versions use one queue so concurrent WASM provers cannot exhaust RAM.
+    // Version 1 keeps its long-lived response only for a safe rolling deployment.
+    let job: ProverJobSnapshot;
     try {
-      const proof = await provePayrollOnSelfHostedNode(input);
-      return Response.json({
-        ...proof,
-        shards: proof.shards.map(({ proof: proofBytes, ...shard }) => ({
-          ...shard,
-          proofBase64: Buffer.from(proofBytes).toString("base64"),
-        })),
-      }, { headers: corsHeaders(origin) });
-    } finally {
-      proverBusy = false;
+      job = enqueueProverJob({
+        principalId: authenticated.principalId,
+        request: { ...input, version: 1 },
+        run: () => provePayrollOnSelfHostedNode(input),
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === "PROVER_REQUEST_ID_REUSED") {
+        throw new ApiError(409, "This proof request ID was already used for different encrypted input.", "PROVER_REQUEST_ID_REUSED");
+      }
+      if (error instanceof Error && error.message === "PROVER_QUEUE_FULL") {
+        throw new ApiError(429, "The prover queue is full. Retry after an active proof finishes.", "PROVER_QUEUE_FULL");
+      }
+      throw error;
     }
+    if (input.version === 1) {
+      return jobResponse(await waitForProverJob(authenticated.principalId, input.requestId), origin);
+    }
+    return jobResponse(job, origin);
+  } catch (error) {
+    const response = apiFailure(error);
+    for (const [key, value] of Object.entries(corsHeaders(origin))) {
+      response.headers.set(key, String(value));
+    }
+    return response;
+  }
+}
+
+export async function GET(request: Request) {
+  let origin: string | null = null;
+  try {
+    origin = allowedOrigin(request);
+    if (process.env.PAYO_SELF_HOSTED_PROVER_ENABLED !== "true") {
+      throw new ApiError(404, "The self-hosted prover is disabled.", "PROVER_DISABLED");
+    }
+    const authenticated = await requirePrincipal(request);
+    const requestId = z.string().uuid().parse(new URL(request.url).searchParams.get("requestId"));
+    const job = getProverJob(authenticated.principalId, requestId);
+    if (!job) {
+      throw new ApiError(404, "This proof job is not available. Resubmit the encrypted request to resume safely.", "PROVER_JOB_NOT_FOUND");
+    }
+    return jobResponse(job, origin);
   } catch (error) {
     const response = apiFailure(error);
     for (const [key, value] of Object.entries(corsHeaders(origin))) {

@@ -20,7 +20,7 @@ import type {
 } from "@/lib/starknet/readiness";
 import type { VaultRotationRequest } from "@/lib/domain/vault-lifecycle";
 import type { SignedCapability } from "@/lib/domain/capability";
-import { decodeRemoteProofResponse, type RemoteProofRequest } from "@/lib/proof/remote-prover";
+import { decodeRemoteProofJobResponse, decodeRemoteProofResponse, type RemoteProofRequest } from "@/lib/proof/remote-prover";
 import type { ProofWorkerSuccess } from "@/lib/proof/protocol";
 import type { SerializedPayrollIntegrityBuildRequest } from "@/lib/proof/input-builder";
 import type { ReadySessionPayload } from "@/lib/auth/ready-session";
@@ -233,11 +233,19 @@ export class PayoClient {
     if (!accessToken) throw new Error("Sign in before accessing the PAYO vault.");
     const method = (init.method ?? "GET").toUpperCase();
     const maximumAttempts = method === "GET" || method === "HEAD" ? 3 : 1;
+    const requestDeadline = Date.now() + (maximumAttempts > 1 ? 12_000 : 20_000);
     let lastError: unknown;
     for (let attempt = 0; attempt < maximumAttempts; attempt += 1) {
+      const remainingMs = requestDeadline - Date.now();
+      if (remainingMs <= 0) break;
+      const controller = new AbortController();
+      const forwardAbort = () => controller.abort(init.signal?.reason);
+      init.signal?.addEventListener("abort", forwardAbort, { once: true });
+      const timeout = setTimeout(() => controller.abort("PAYO_API_TIMEOUT"), remainingMs);
       try {
         const response = await fetch(`${this.baseUrl}${path}`, {
           ...init,
+          signal: controller.signal,
           headers: {
             authorization: `Bearer ${accessToken}`,
             accept: "application/json",
@@ -256,7 +264,13 @@ export class PayoClient {
         }
         return body as T;
       } catch (error) {
-        lastError = error instanceof TypeError
+        lastError = controller.signal.aborted && !init.signal?.aborted
+          ? new PayoApiError(
+              "PAYO's data service did not respond before the request deadline.",
+              "PAYO_API_TIMEOUT",
+              504,
+            )
+          : error instanceof TypeError
           ? new PayoApiError(
               "PAYO could not reach its data service. The request is safe to retry.",
               "PAYO_API_NETWORK_ERROR",
@@ -265,9 +279,16 @@ export class PayoClient {
           : error;
         if (attempt + 1 >= maximumAttempts || !retryableApiRead(lastError)) throw lastError;
         await retryDelay(attempt);
+      } finally {
+        clearTimeout(timeout);
+        init.signal?.removeEventListener("abort", forwardAbort);
       }
     }
-    throw lastError;
+    throw lastError ?? new PayoApiError(
+      "PAYO's data service did not respond before the request deadline.",
+      "PAYO_API_TIMEOUT",
+      504,
+    );
   }
 
   private async unauthenticatedRequest<T>(path: string, init: RequestInit): Promise<T> {
@@ -465,14 +486,55 @@ export class PayoClient {
     proofVersion: 1 | 2;
     shards: [string[], string[]];
   }) {
-    return this.request<{
+    type FxPublicationJob = {
+      id: string;
       catalogRoot: `0x${string}`;
-      alreadyActive: boolean;
+      state: "pending" | "leased" | "complete" | "dead";
       transactionHash: string | null;
-    }>("/api/v1/fx-publications", {
+      attempts: number;
+      lastErrorCode: string | null;
+      lastErrorMessage: string | null;
+    };
+    const queued = await this.request<{ job: FxPublicationJob }>("/api/v1/fx-publications", {
       method: "POST",
       body: JSON.stringify(input),
     });
+    let job = queued.job;
+    const deadline = Date.now() + 20 * 60_000;
+    const query = new URLSearchParams({
+      organizationId: input.organizationId,
+      catalogRoot: input.catalogRoot,
+    });
+    while (job.state !== "complete") {
+      if (job.state === "dead") {
+        throw new PayoApiError(
+          job.lastErrorMessage ?? "The proved FX root could not be published.",
+          job.lastErrorCode ?? "FX_PUBLICATION_FAILED",
+          422,
+        );
+      }
+      if (Date.now() >= deadline) {
+        throw new PayoApiError(
+          "The FX root is still being authorized in the background. This payroll is safe to retry.",
+          "FX_PUBLICATION_POLL_TIMEOUT",
+          504,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      try {
+        const result = await this.request<{ job: FxPublicationJob }>(
+          `/api/v1/fx-publications?${query.toString()}`,
+        );
+        job = result.job;
+      } catch (error) {
+        if (!retryableApiRead(error)) throw error;
+      }
+    }
+    return {
+      catalogRoot: job.catalogRoot,
+      alreadyActive: job.transactionHash === null,
+      transactionHash: job.transactionHash,
+    };
   }
 
   async provePayrollIntegrityRemotely(input: Omit<RemoteProofRequest, "version" | "requestId"> & {
@@ -484,51 +546,100 @@ export class PayoClient {
     }
     const accessToken = await this.getAccessToken();
     if (!accessToken) throw new Error("Sign in before using the self-hosted prover.");
+    const requestId = input.encryptedWitness.aad.recordId;
+    const pollEndpoint = new URL(endpoint);
+    pollEndpoint.searchParams.set("requestId", requestId);
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 30 * 60_000);
+    const deadline = Date.now() + 30 * 60_000;
+    const requestBody = JSON.stringify({
+      version: 2,
+      requestId,
+      encryptedWitness: input.encryptedWitness,
+      principal: input.principal,
+    });
+    let accepted = false;
+    let initialFailures = 0;
     try {
-      let response: Response;
-      try {
-        response = await fetch(endpoint, {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${accessToken}`,
-            accept: "application/json",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({
-            version: 1,
-            requestId: crypto.randomUUID(),
-            encryptedWitness: input.encryptedWitness,
-            principal: input.principal,
-          } satisfies RemoteProofRequest),
-          signal: controller.signal,
-        });
-      } catch {
-        if (controller.signal.aborted) {
+      while (Date.now() < deadline) {
+        let response: Response;
+        try {
+          response = await fetch(accepted ? pollEndpoint : endpoint, {
+            method: accepted ? "GET" : "POST",
+            headers: {
+              authorization: "Bearer " + accessToken,
+              accept: "application/json",
+              ...(!accepted ? { "content-type": "application/json" } : {}),
+            },
+            ...(!accepted ? { body: requestBody } : {}),
+            signal: controller.signal,
+          });
+        } catch {
+          if (controller.signal.aborted) {
+            throw new PayoApiError(
+              "The remote ZK prover did not respond within 30 minutes.",
+              "PROVER_TIMEOUT",
+              408,
+            );
+          }
+          initialFailures += 1;
+          if (!accepted && initialFailures >= 3) {
+            throw new PayoApiError(
+              "The remote ZK prover could not start or recover the proof job after three connection attempts.",
+              "PROVER_FETCH_FAILED",
+              0,
+            );
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, Math.min(5_000, initialFailures * 1_000)));
+          continue;
+        }
+
+        let body: unknown;
+        try {
+          body = await parseApiResponse(response, "The self-hosted prover request failed.", "PROVER");
+        } catch (error) {
+          if (!retryableApiRead(error)) throw error;
+          await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+          continue;
+        }
+        if (!response.ok) {
+          const apiBody = body as { error?: { message?: string; code?: string } };
+          const code = apiBody?.error?.code ?? "PROVER_ERROR";
+          if (accepted && response.status === 404 && code === "PROVER_JOB_NOT_FOUND") {
+            accepted = false;
+            initialFailures = 0;
+            continue;
+          }
+          if (response.status === 429 || response.status >= 500) {
+            await new Promise((resolve) => window.setTimeout(resolve, 3_000));
+            continue;
+          }
           throw new PayoApiError(
-            "The remote ZK prover did not respond within 30 minutes.",
-            "PROVER_TIMEOUT",
-            408,
+            apiBody?.error?.message ?? "The self-hosted prover request failed.",
+            code,
+            response.status,
           );
         }
-        const browserOrigin = window.location.origin;
-        throw new PayoApiError(
-          `The remote ZK prover could not be reached from ${browserOrigin}. Local PAYO sessions cannot use a prover authenticated against a different deployment; use the deployed PAYO origin or configure a same-environment prover.`,
-          "PROVER_FETCH_FAILED",
-          0,
-        );
+        if (response.status === 200) {
+          const proof = decodeRemoteProofResponse(body);
+          if (proof.requestId !== requestId) {
+            throw new PayoApiError("The prover returned a result for a different proof job.", "PROVER_JOB_MISMATCH", 502);
+          }
+          return proof;
+        }
+        const job = decodeRemoteProofJobResponse(body);
+        if (job.requestId !== requestId) {
+          throw new PayoApiError("The prover returned a different proof job.", "PROVER_JOB_MISMATCH", 502);
+        }
+        accepted = true;
+        initialFailures = 0;
+        await new Promise((resolve) => window.setTimeout(resolve, 3_000));
       }
-      const body = await parseApiResponse(response, "The self-hosted prover request failed.", "PROVER");
-      if (!response.ok) {
-        const apiBody = body as { error?: { message?: string; code?: string } };
-        throw new PayoApiError(
-          apiBody?.error?.message ?? "The self-hosted prover request failed.",
-          apiBody?.error?.code ?? "PROVER_ERROR",
-          response.status,
-        );
-      }
-      return decodeRemoteProofResponse(body);
+      throw new PayoApiError(
+        "The remote ZK prover did not respond within 30 minutes.",
+        "PROVER_TIMEOUT",
+        408,
+      );
     } finally {
       window.clearTimeout(timeout);
     }

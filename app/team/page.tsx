@@ -17,7 +17,7 @@ import {
   Zap,
 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAppShell } from "../ui/app-shell";
 import { usePayoVault } from "../vault/payo-vault";
 import {
@@ -53,6 +53,7 @@ import {
   revokeEncryptedAgentCapability,
   type AgentCapabilityDirectoryRecord,
 } from "@/lib/client/agent-capabilities";
+import { runProgressiveTasks, type ProgressiveTask } from "@/lib/client/progressive-tasks";
 
 const teamFilters = ["Everyone", "Humans", "Agents"] as const;
 const memberTones = ["coral", "blue", "green", "yellow"] as const;
@@ -128,6 +129,7 @@ export default function TeamPage() {
   const [policyId, setPolicyId] = useState(NET_INVOICE_POLICY_ID);
   const [fxFloorAmount, setFxFloorAmount] = useState("");
   const [directoryLoadedAt] = useState(() => Date.now());
+  const directoryRefreshGeneration = useRef(0);
 
   const classificationAnswers = useMemo<ClassificationFactsAnswers | null>(() => {
     if (Object.values(classificationAnswerDrafts).some((answer) => answer === "")) return null;
@@ -143,45 +145,51 @@ export default function TeamPage() {
   );
 
   const refreshPayees = useCallback(async () => {
+    const generation = directoryRefreshGeneration.current + 1;
+    directoryRefreshGeneration.current = generation;
     if (!vault.client || !vault.session) {
+      setDirectoryLoading(false);
       setPayees([]);
+      setAgreements([]);
       setPrincipals([]);
       setCapabilities([]);
+      setDirectoryError("");
       return;
     }
     setDirectoryLoading(true);
     setDirectoryError("");
     try {
-      const [loadedPayees, loadedAgreements, loadedPrincipals, loadedCapabilities] = await Promise.all([
-        loadEncryptedPayees({
-          client: vault.client,
-          organizationId: vault.session.organizationId,
-          principal: vault.session.principal,
-        }),
-        loadEncryptedPayAgreements({
-          client: vault.client,
-          organizationId: vault.session.organizationId,
-          principal: vault.session.principal,
-        }),
-        loadEncryptedPrincipals({
-          client: vault.client,
-          organizationId: vault.session.organizationId,
-          principal: vault.session.principal,
-        }),
-        loadEncryptedAgentCapabilities({
-          client: vault.client,
-          organizationId: vault.session.organizationId,
-          principal: vault.session.principal,
-        }),
-      ]);
-      setPayees(loadedPayees);
-      setAgreements(loadedAgreements);
-      setPrincipals(loadedPrincipals);
-      setCapabilities(loadedCapabilities);
-    } catch (error) {
-      setDirectoryError(error instanceof Error ? error.message : "The encrypted directory could not be opened.");
+      const client = vault.client;
+      const organizationId = vault.session.organizationId;
+      const principal = vault.session.principal;
+      const current = () => directoryRefreshGeneration.current === generation;
+      const tasks: ProgressiveTask[] = [
+        { label: "Contributors", run: async () => {
+          const loaded = await loadEncryptedPayees({ client, organizationId, principal });
+          if (current()) setPayees(loaded);
+        } },
+        { label: "Agreements", run: async () => {
+          const loaded = await loadEncryptedPayAgreements({ client, organizationId, principal });
+          if (current()) setAgreements(loaded);
+        } },
+        { label: "Principals", run: async () => {
+          const loaded = await loadEncryptedPrincipals({ client, organizationId, principal });
+          if (current()) setPrincipals(loaded);
+        } },
+        { label: "Agent capabilities", run: async () => {
+          const loaded = await loadEncryptedAgentCapabilities({ client, organizationId, principal });
+          if (current()) setCapabilities(loaded);
+        } },
+      ];
+      const results = await runProgressiveTasks(tasks, { concurrency: 2, timeoutMs: 10_000 });
+      if (current()) {
+        const failed = results.filter(({ status }) => status === "rejected");
+        setDirectoryError(failed.length
+          ? `${failed.map(({ label }) => label).join(", ")} could not refresh. Available vault records are still usable.`
+          : "");
+      }
     } finally {
-      setDirectoryLoading(false);
+      if (directoryRefreshGeneration.current === generation) setDirectoryLoading(false);
     }
   }, [vault.client, vault.session]);
 
@@ -235,6 +243,7 @@ export default function TeamPage() {
   const addPayee = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!vault.client || !vault.session) {
+      setDirectoryLoading(false);
       setDirectoryError("Unlock the encrypted workspace before adding a contributor.");
       return;
     }
@@ -296,6 +305,7 @@ export default function TeamPage() {
   const addAgreement = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!vault.client || !vault.session) {
+      setDirectoryLoading(false);
       setDirectoryError("Unlock the encrypted workspace before adding an agreement.");
       return;
     }
