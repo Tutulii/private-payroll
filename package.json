@@ -77,8 +77,6 @@
     "@noble/curves": "2.3.0",
     "@noble/hashes": "2.3.0",
     "@noir-lang/noir_js": "1.0.0-beta.16",
-    "@privy-io/node": "0.30.0",
-    "@privy-io/react-auth": "3.37.4",
     "@starknet-io/get-starknet-discovery": "6.0.2",
     "@starknet-io/get-starknet-wallet-standard": "6.0.2",
     "drizzle-orm": "0.45.2",

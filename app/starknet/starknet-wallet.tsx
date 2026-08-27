@@ -13,6 +13,7 @@ import {
   walletV6,
   type STRK20_ACTION,
   type STRK20_INVOKE_ACTION,
+  type TypedData,
 } from "starknet";
 import {
   createContext,
@@ -211,6 +212,7 @@ type StarknetWalletContextValue = {
   error: string;
   connectWallet: (name: string) => Promise<void>;
   disconnectWallet: () => Promise<void>;
+  signPayoSession: (typedData: TypedData) => Promise<string[]>;
   switchToMainnet: () => Promise<void>;
   refreshPublicBalance: () => Promise<bigint>;
   refreshBalance: () => Promise<void>;
@@ -661,6 +663,18 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
       clearConnection();
     }
   }, [clearConnection, selectedWallet]);
+
+  const signPayoSession = useCallback(async (typedData: TypedData): Promise<string[]> => {
+    if (!walletAccount || !address) throw new Error("Connect Ready wallet first.");
+    if (chainId !== STARKNET_MAINNET_CHAIN_ID) {
+      throw new Error("Switch Ready to Starknet Mainnet before authorizing PAYO.");
+    }
+    const signature = await walletAccount.signMessage(typedData);
+    if (!Array.isArray(signature) || signature.length < 2) {
+      throw new Error("Ready returned an unsupported authentication signature.");
+    }
+    return signature.map((felt) => num.toHex(BigInt(felt)));
+  }, [address, chainId, walletAccount]);
 
   const switchToMainnet = useCallback(async () => {
     if (!walletAccount) throw new Error("Connect Ready wallet first.");
@@ -1711,6 +1725,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     error,
     connectWallet,
     disconnectWallet,
+    signPayoSession,
     switchToMainnet,
     refreshPublicBalance,
     refreshBalance,

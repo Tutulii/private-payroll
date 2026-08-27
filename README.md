@@ -54,7 +54,7 @@ The current Next.js application includes:
 - Payroll (`/payroll`) — live Mainnet shielding and private batch execution.
 - People & Agents (`/team`) — compensation directory and scoped agent access.
 - Activity (`/activity`) — privacy-aware records and selective-disclosure concepts.
-- Wallet (`/wallet`) — Ready discovery, Wallet API version, public and shielded balances, and Privy identity.
+- Wallet (`/wallet`) — Ready discovery, Ready-signed PAYO identity, Wallet API version, and public/shielded balances.
 
 The visual system uses warm paper tones, flat illustration, strong outlines, and restrained 2D animation instead of glass, neon, or sci-fi crypto styling.
 
@@ -181,15 +181,19 @@ Open `http://localhost:3000`.
 Copy `.env.example` to `.env.local` and provide only the values required by the layer being run.
 
 ```bash
-NEXT_PUBLIC_PRIVY_APP_ID=your-privy-app-id
 NEXT_PUBLIC_STARKNET_RPC_URL=https://your-mainnet-rpc
+STARKNET_RPC_URL=https://your-server-side-mainnet-rpc
+PAYO_AUTH_AUDIENCE=http://localhost:3000
 ```
 
-PAYO verifies Privy access tokens against the app's public HTTPS JWKS, so normal
-login and encrypted API access require no App Secret. A secret is required only
-for future privileged Privy server APIs. Never prefix such a secret with
-`NEXT_PUBLIC_`, expose it in client code, or commit it; any exposed secret must
-be rotated.
+Ready signs a five-minute, domain-separated typed-data challenge and PAYO issues
+a revocable session (12 hours by default). Session-token hashes—not bearer tokens
+or wallet keys—are stored in PostgreSQL. A session authenticates encrypted API
+access only; every shield, registry update, and private payroll still requires a
+separate Ready approval. Existing Privy-era workspaces can be linked by importing
+their recovery package: PAYO encrypts a one-time proof to the existing X25519
+vault key before binding the Ready address, so the recovery secret never leaves
+the browser.
 
 ### Verify
 

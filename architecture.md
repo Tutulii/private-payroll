@@ -18,6 +18,9 @@ flowchart LR
     Human[Employer or worker] --> Web[PAYO web client]
     Agent[AI agent runtime] --> MCP[PAYO MCP gateway]
     Web --> Ready[Ready Wallet API]
+    Web --> Auth[Ready session service]
+    Ready -->|typed-data signature| Auth
+    Auth --> Vault[Encrypted data service]
     Web --> Vault[Encrypted data service]
     MCP --> Vault
     Web --> Prover[Local proof worker]
@@ -38,6 +41,7 @@ flowchart LR
 |---|---|---|
 | Web client | Decrypt, calculate, prove, compose wallet actions | Upload plaintext payroll |
 | Ready | Hold human STRK20 keys and request approval | Reveal a recovery phrase or viewing key to PAYO |
+| Ready session service | Verify domain-separated account signatures and issue revocable tenant sessions | Treat an authentication signature as transaction authority or store bearer tokens in plaintext |
 | Encrypted data service | Authorize tenants and store ciphertext/workflow metadata | Decrypt sensitive records |
 | Proof worker | Generate PayrollIntegrity and later SettlementMatch proofs | Log private witnesses |
 | MCP gateway | Offer structured payroll tools and redact responses | Expose arbitrary calls or keys |
@@ -69,6 +73,26 @@ flowchart LR
 Commitments do not make low-entropy values secret by themselves. Every sensitive leaf includes a cryptographically random 32-byte salt before hashing.
 
 ## 4. Client-encrypted vault
+
+### Ready-authenticated access
+
+The connected Mainnet Ready account is the human authentication root. PAYO issues
+a one-time five-minute typed-data challenge bound to the wallet address, Mainnet
+chain ID, deployment audience, nonce, issue time, and expiry. The server verifies
+the account-contract signature on Starknet, consumes the challenge atomically,
+and stores only the SHA-256 hash of the resulting revocable bearer token. Sessions
+expire after 12 hours by default. An authentication signature cannot shield funds,
+change a registry, or approve payroll; each such action remains a separate Ready
+request.
+
+Wallet addresses normally derive a new PAYO principal. To preserve encrypted
+workspaces created under the former identity system, PAYO may link one Ready
+address to an existing principal only through vault recovery. The server encrypts
+a random, expiring challenge to the existing member's X25519 public key; the
+browser decrypts it with the password-protected recovery package and returns the
+challenge. Successful completion is single-use, revokes the pre-link sessions,
+and issues a session mapped to the existing principal. PAYO never receives the
+recovery password, X25519 secret key, organization secret, or decrypted records.
 
 Each sensitive record receives a random 256-bit data-encryption key (DEK). The record is encrypted with XChaCha20-Poly1305 and the DEK is sealed independently to each authorized X25519 principal.
 
@@ -398,6 +422,8 @@ Human approval remains the default. Autonomous execution is enabled per capabili
 | Proof version revoked | Require a newly generated proof |
 | Duplicate run nullifier | Treat as replay/idempotent conflict |
 | Lost vault key | Recover only from the organization recovery package or another authorized principal |
+| Ready session expires | Keep any returned transaction hash in local recovery state; re-authorize Ready and resume idempotent recording without resubmitting payroll |
+| Replayed authentication or recovery challenge | Reject atomically; challenges are single-use and attempt-limited |
 | Agent capability exceeded | Reject before signing and append a redacted audit event |
 
 ## 16. Verification strategy

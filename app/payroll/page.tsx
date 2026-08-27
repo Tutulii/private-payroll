@@ -404,6 +404,11 @@ export default function PayrollPage() {
         return;
       }
 
+      if (payrollBusy) {
+        setObligationRootChecking(false);
+        return;
+      }
+
       setObligationRootChecking(true);
       void preparePayrollObligationRoot({
         organizationId: vault.session.organizationId,
@@ -436,7 +441,7 @@ export default function PayrollPage() {
       stale = true;
       window.clearTimeout(timer);
     };
-  }, [readObligationRootActive, selectedObligations, shieldWalletConnected, shieldWalletMainnet, vault.session]);
+  }, [payrollBusy, readObligationRootActive, selectedObligations, shieldWalletConnected, shieldWalletMainnet, vault.session]);
 
   useEffect(() => {
     let stale = false;
@@ -993,45 +998,55 @@ export default function PayrollPage() {
         <div className={`vault-gate ${vault.session ? "vault-gate--ready" : ""}`}>
           <span className="vault-gate__icon">{vault.session ? <LockKeyhole size={21} /> : <KeyRound size={21} />}</span>
           {!vault.configured ? (
-            <div className="vault-gate__copy"><small>ENCRYPTED WORKSPACE</small><strong>Server identity is not configured</strong><p>Add the Privy server configuration before storing production payroll records.</p></div>
+            <div className="vault-gate__copy"><small>ENCRYPTED WORKSPACE</small><strong>Ready authentication is unavailable</strong><p>Restore the PAYO server and Starknet RPC configuration before storing production payroll records.</p></div>
           ) : !vault.ready || vault.loading ? (
             <div className="vault-gate__copy"><small>ENCRYPTED WORKSPACE</small><strong>Opening the private desk…</strong><p>Keys remain in this browser session.</p></div>
           ) : !vault.authenticated ? (
-            <><div className="vault-gate__copy"><small>ENCRYPTED WORKSPACE</small><strong>Sign in to protect payroll records</strong><p>Privy authenticates access; PAYO encrypts salaries locally before storage.</p></div><button type="button" className="button button--ink" onClick={vault.login}>Sign in</button></>
+            <><div className="vault-gate__copy"><small>ENCRYPTED WORKSPACE</small><strong>{starknet.isConnected ? "Authorize this Ready account" : "Connect Ready to open payroll"}</strong><p>Ready signs a short-lived PAYO session. Salaries are still encrypted locally before storage.</p></div>{starknet.isConnected ? <button type="button" className="button button--ink" disabled={!starknet.isMainnet} onClick={() => void vault.login()}>Authorize with Ready</button> : <Link className="button button--ink" href="/wallet">Connect Ready</Link>}</>
           ) : vault.organizations.length === 0 ? (
             <>
-              <div className="vault-gate__copy"><small>NEW ENCRYPTED WORKSPACE</small><strong>Create your private payroll vault</strong><p>A recovery file downloads once. PAYO cannot reset a lost vault password.</p></div>
+              <div className="vault-gate__copy"><small>{vault.selectedOrganizationId ? "RECOVER EXISTING WORKSPACE" : "NEW ENCRYPTED WORKSPACE"}</small><strong>{vault.selectedOrganizationId ? "Link this Ready account securely" : "Create your private payroll vault"}</strong><p>{vault.selectedOrganizationId ? "The imported recovery key proves access without sending it to PAYO." : "A recovery file downloads once. PAYO cannot reset a lost vault password."}</p></div>
               <div className="vault-gate__form">
-                <input value={workspaceName} maxLength={160} placeholder="Organization name" aria-label="Organization name" onChange={(event) => setWorkspaceName(event.target.value)} />
-                <div className="vault-gate__field">
-                  <input
-                    type="password"
-                    value={recoveryPassword}
-                    minLength={MIN_RECOVERY_PASSWORD_LENGTH}
-                    maxLength={1024}
-                    autoComplete="new-password"
-                    placeholder="Recovery password"
-                    aria-label="New vault recovery password"
-                    aria-describedby="workspace-password-help"
-                    aria-invalid={recoveryPassword.length > 0 && recoveryPassword.length < MIN_RECOVERY_PASSWORD_LENGTH}
-                    onChange={(event) => {
-                      setRecoveryPassword(event.target.value);
-                      setWorkspaceError("");
-                    }}
-                  />
-                  <span
-                    id="workspace-password-help"
-                    className={`vault-gate__hint ${recoveryPassword.length >= MIN_RECOVERY_PASSWORD_LENGTH ? "vault-gate__hint--ready" : ""}`}
-                    aria-live="polite"
-                  >
-                    {recoveryPassword.length === 0
-                      ? "Use at least 12 characters. It cannot be reset."
-                      : recoveryPassword.length < MIN_RECOVERY_PASSWORD_LENGTH
-                        ? `${recoveryPassword.length}/12 characters · add ${MIN_RECOVERY_PASSWORD_LENGTH - recoveryPassword.length} more.`
-                        : `${recoveryPassword.length} characters · ready.`}
-                  </span>
-                </div>
-                <button type="button" className="button button--ink" disabled={vault.loading} onClick={createWorkspace}>Create &amp; download</button>
+                {!vault.selectedOrganizationId ? (
+                  <>
+                    <input value={workspaceName} maxLength={160} placeholder="Organization name" aria-label="Organization name" onChange={(event) => setWorkspaceName(event.target.value)} />
+                    <div className="vault-gate__field">
+                      <input
+                        type="password"
+                        value={recoveryPassword}
+                        minLength={MIN_RECOVERY_PASSWORD_LENGTH}
+                        maxLength={1024}
+                        autoComplete="new-password"
+                        placeholder="Recovery password"
+                        aria-label="New vault recovery password"
+                        aria-describedby="workspace-password-help"
+                        aria-invalid={recoveryPassword.length > 0 && recoveryPassword.length < MIN_RECOVERY_PASSWORD_LENGTH}
+                        onChange={(event) => {
+                          setRecoveryPassword(event.target.value);
+                          setWorkspaceError("");
+                        }}
+                      />
+                      <span id="workspace-password-help" className={`vault-gate__hint ${recoveryPassword.length >= MIN_RECOVERY_PASSWORD_LENGTH ? "vault-gate__hint--ready" : ""}`} aria-live="polite">
+                        {recoveryPassword.length === 0
+                          ? "Use at least 12 characters. It cannot be reset."
+                          : recoveryPassword.length < MIN_RECOVERY_PASSWORD_LENGTH
+                            ? `${recoveryPassword.length}/12 characters · add ${MIN_RECOVERY_PASSWORD_LENGTH - recoveryPassword.length} more.`
+                            : `${recoveryPassword.length} characters · ready.`}
+                      </span>
+                    </div>
+                    <button type="button" className="button button--ink" disabled={vault.loading} onClick={createWorkspace}>Create &amp; download</button>
+                    <span className="label">OR RECOVER AN EXISTING WORKSPACE</span>
+                    <label className="button button--soft vault-gate__import">Import recovery<input type="file" accept="application/json,.json" onChange={(event) => { void importRecoveryPackage(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>
+                  </>
+                ) : (
+                  <>
+                    <span className="label">EXISTING RECOVERY IMPORTED · {vault.selectedOrganizationId.slice(0, 8)}</span>
+                    <p>Enter its password to prove vault-key control and link this Ready account. The password and secret key stay in this browser.</p>
+                    <input type="password" value={recoveryPassword} minLength={12} maxLength={1024} autoComplete="current-password" placeholder="Existing recovery password" aria-label="Existing vault recovery password" onChange={(event) => setRecoveryPassword(event.target.value)} />
+                    <button type="button" className="button button--ink" disabled={recoveryPassword.length < 12 || vault.loading} onClick={unlockWorkspace}>Verify recovery &amp; link Ready</button>
+                    <label className="button button--soft vault-gate__import">Choose another recovery<input type="file" accept="application/json,.json" onChange={(event) => { void importRecoveryPackage(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>
+                  </>
+                )}
                 <span className="label">OR JOIN AS RECOVERY ADMIN</span>
                 <input value={secondAdminOrganizationId} placeholder="Organization UUID" aria-label="Organization ID for recovery-admin request" onChange={(event) => setSecondAdminOrganizationId(event.target.value)} />
                 <input type="password" value={secondAdminPassword} minLength={12} maxLength={1024} autoComplete="new-password" placeholder="Your recovery password · 12+" aria-label="Second administrator recovery password" onChange={(event) => setSecondAdminPassword(event.target.value)} />
@@ -1180,10 +1195,10 @@ export default function PayrollPage() {
                   disabled={!vault.session || !vault.recoveryReady || !starknet.isConnected || !starknet.isMainnet || busy || obligationRootChecking || selectedObligations.length === 0 || (obligationSchedule?.state === "active" && !canRunPayroll)}
                   onClick={obligationSchedule?.state === "active" ? submitPayroll : scheduleSelectedObligationRoot}
                 >
-                  {obligationRootChecking
-                    ? <><LoaderCircle className="spin" size={17} /> Checking authorization</>
-                    : payrollStage && payrollStage !== "queued"
+                  {payrollStage && payrollStage !== "queued"
                     ? <><LoaderCircle className="spin" size={17} /> {payrollStageLabel[payrollStage]}</>
+                    : obligationRootChecking
+                    ? <><LoaderCircle className="spin" size={17} /> Checking authorization</>
                     : starknet.transaction?.kind === "registry" && busy
                       ? <><LoaderCircle className="spin" size={17} /> {starknet.transaction.stage === "wallet" ? "Approve authorization in Ready" : "Confirming authorization"}</>
                       : starknet.transaction?.kind === "payroll" && busy

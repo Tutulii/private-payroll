@@ -23,6 +23,8 @@ import type { SignedCapability } from "@/lib/domain/capability";
 import { decodeRemoteProofResponse, type RemoteProofRequest } from "@/lib/proof/remote-prover";
 import type { ProofWorkerSuccess } from "@/lib/proof/protocol";
 import type { SerializedPayrollIntegrityBuildRequest } from "@/lib/proof/input-builder";
+import type { ReadySessionPayload } from "@/lib/auth/ready-session";
+import type { TypedData } from "starknet";
 
 type AccessTokenProvider = () => Promise<string | null>;
 
@@ -211,6 +213,69 @@ export class PayoClient {
       );
     }
     return body as T;
+  }
+
+  private async unauthenticatedRequest<T>(path: string, init: RequestInit): Promise<T> {
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      ...init,
+      headers: {
+        accept: "application/json",
+        ...(init.body ? { "content-type": "application/json" } : {}),
+        ...init.headers,
+      },
+    });
+    const body = await response.json();
+    if (!response.ok) {
+      throw new PayoApiError(
+        body?.error?.message ?? "PAYO authentication failed.",
+        body?.error?.code ?? "AUTH_ERROR",
+        response.status,
+      );
+    }
+    return body as T;
+  }
+
+  async createReadyAuthenticationChallenge(input: { walletAddress: string; chainId: string }) {
+    return this.unauthenticatedRequest<{
+      challenge: { challengeId: string; expiresAt: string; typedData: TypedData };
+    }>("/api/v1/auth/challenge", { method: "POST", body: JSON.stringify(input) });
+  }
+
+  async verifyReadyAuthentication(input: { challengeId: string; signature: string[] }) {
+    return this.unauthenticatedRequest<{ session: ReadySessionPayload }>(
+      "/api/v1/auth/verify",
+      { method: "POST", body: JSON.stringify(input) },
+    );
+  }
+
+  async revokeReadyAuthentication(): Promise<void> {
+    const accessToken = await this.getAccessToken();
+    if (!accessToken) return;
+    const response = await fetch(`${this.baseUrl}/api/v1/auth/session`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok && response.status !== 401) {
+      const body = await response.json();
+      throw new PayoApiError(
+        body?.error?.message ?? "PAYO session revocation failed.",
+        body?.error?.code ?? "AUTH_ERROR",
+        response.status,
+      );
+    }
+  }
+
+  async createReadyRecoveryLink(input: { organizationId: string; legacyPrincipalId: string }) {
+    return this.request<{
+      recoveryLink: { challengeId: string; expiresAt: string; envelope: EncryptedVaultRecord };
+    }>("/api/v1/auth/recovery-link", { method: "POST", body: JSON.stringify(input) });
+  }
+
+  async completeReadyRecoveryLink(input: { challengeId: string; proof: string }) {
+    return this.request<{ session: ReadySessionPayload }>(
+      "/api/v1/auth/recovery-link",
+      { method: "PATCH", body: JSON.stringify(input) },
+    );
   }
 
   async createOrganization(input: {

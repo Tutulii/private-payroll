@@ -74,6 +74,83 @@ export const organizationMembers = pgTable(
   ],
 );
 
+export const readyAuthChallenges = pgTable(
+  "ready_auth_challenges",
+  {
+    id: text("id").primaryKey(),
+    walletAddress: text("wallet_address").notNull(),
+    chainId: text("chain_id").notNull(),
+    audience: text("audience").notNull(),
+    nonce: text("nonce").notNull(),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    attempts: integer("attempts").default(0).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("ready_auth_challenges_wallet_idx").on(table.chainId, table.walletAddress, table.expiresAt),
+    index("ready_auth_challenges_expiry_idx").on(table.expiresAt),
+  ],
+);
+
+export const readyPrincipalLinks = pgTable(
+  "ready_principal_links",
+  {
+    chainId: text("chain_id").notNull(),
+    walletAddress: text("wallet_address").notNull(),
+    principalId: text("principal_id").notNull(),
+    linkMethod: text("link_method").default("vault_recovery").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.chainId, table.walletAddress] }),
+    index("ready_principal_links_principal_idx").on(table.principalId),
+  ],
+);
+
+export const readyAuthSessions = pgTable(
+  "ready_auth_sessions",
+  {
+    id: text("id").primaryKey(),
+    tokenHash: text("token_hash").notNull(),
+    walletAddress: text("wallet_address").notNull(),
+    chainId: text("chain_id").notNull(),
+    principalId: text("principal_id").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("ready_auth_sessions_token_hash_idx").on(table.tokenHash),
+    index("ready_auth_sessions_wallet_idx").on(table.chainId, table.walletAddress, table.expiresAt),
+    index("ready_auth_sessions_principal_idx").on(table.principalId, table.expiresAt),
+  ],
+);
+
+export const readyRecoveryLinkChallenges = pgTable(
+  "ready_recovery_link_challenges",
+  {
+    id: text("id").primaryKey(),
+    walletAddress: text("wallet_address").notNull(),
+    chainId: text("chain_id").notNull(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    legacyPrincipalId: text("legacy_principal_id").notNull(),
+    proofHash: text("proof_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    attempts: integer("attempts").default(0).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("ready_recovery_link_wallet_idx").on(table.chainId, table.walletAddress, table.expiresAt),
+    index("ready_recovery_link_expiry_idx").on(table.expiresAt),
+  ],
+);
+
 export const vaultRecords = pgTable(
   "vault_records",
   {

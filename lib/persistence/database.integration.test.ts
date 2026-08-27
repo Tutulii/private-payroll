@@ -29,7 +29,14 @@ import {
   hashProofCalldata,
   parsePayrollPublicInputsFromGaragaCalldata,
 } from "@/lib/proof/starknet-calldata";
-import { ApiError, type AuthenticatedPrincipal } from "@/lib/server/auth";
+import { ApiError, requirePrincipal, type AuthenticatedPrincipal } from "@/lib/server/auth";
+import { READY_AUTH_CHAIN_ID } from "@/lib/auth/ready-session";
+import {
+  completeReadyRecoveryLink,
+  createReadyAuthenticationChallenge,
+  createReadyRecoveryLink,
+  verifyReadyAuthenticationChallenge,
+} from "@/lib/server/ready-auth";
 import {
   reserveCapabilityPayment,
   transitionCapabilityReservation,
@@ -115,6 +122,10 @@ async function resetDatabase() {
       indexed_chain_blocks,
       chain_cursors,
       idempotency_requests,
+      ready_recovery_link_challenges,
+      ready_auth_sessions,
+      ready_principal_links,
+      ready_auth_challenges,
       proof_verification_jobs,
       confirmation_jobs,
       settlements,
@@ -1583,5 +1594,56 @@ databaseSuite("PostgreSQL durability integration", () => {
 
   it("surfaces typed database errors rather than mislabelling conflicts", async () => {
     expect(new ApiError(409, "conflict", "CONFLICT")).toMatchObject({ status: 409, code: "CONFLICT" });
+  });
+
+  it("issues one-time Ready sessions and links a legacy encrypted workspace by recovery-key proof", async () => {
+    const walletAddress = "0x0126a7a572cf8935d069af937e9f7b27a24949e271e1fbccfe4de0c0d8dc8ea9";
+    const request = new Request("https://payo.test/api/v1/auth/challenge");
+    const challenge = await createReadyAuthenticationChallenge(request, {
+      walletAddress,
+      chainId: READY_AUTH_CHAIN_ID,
+    });
+    const firstSession = await verifyReadyAuthenticationChallenge({
+      challengeId: challenge.challengeId,
+      signature: ["0x1", "0x2"],
+    }, async ({ walletAddress: verifiedWallet }) => verifiedWallet === walletAddress);
+    const authenticatedRequest = new Request("https://payo.test/api", {
+      headers: { authorization: `Bearer ${firstSession.accessToken}` },
+    });
+    const walletPrincipal = await requirePrincipal(authenticatedRequest);
+    expect(walletPrincipal.principalId).toMatch(/^starknet:/);
+    await expect(verifyReadyAuthenticationChallenge({
+      challengeId: challenge.challengeId,
+      signature: ["0x1", "0x2"],
+    }, async () => true)).rejects.toMatchObject({ code: "AUTH_CHALLENGE_INVALID" });
+
+    const organizationId = await seedOrganization(admin);
+    const legacyVaultPrincipal = generateVaultPrincipal(admin.principalId);
+    await getDatabase().update(organizationMembers)
+      .set({ vaultPublicKey: legacyVaultPrincipal.publicKey })
+      .where(sql`${organizationMembers.organizationId} = ${organizationId} and ${organizationMembers.principalId} = ${admin.principalId}`);
+    const recoveryLink = await createReadyRecoveryLink(walletPrincipal, {
+      organizationId,
+      legacyPrincipalId: admin.principalId,
+    });
+    const recovered = decryptVaultRecord<{ proof: string }>(recoveryLink.envelope, legacyVaultPrincipal);
+    const linkedSession = await completeReadyRecoveryLink(walletPrincipal, {
+      challengeId: recoveryLink.challengeId,
+      proof: recovered.proof,
+    });
+    expect(linkedSession.principalId).toBe(admin.principalId);
+    await expect(requirePrincipal(authenticatedRequest)).rejects.toMatchObject({ code: "AUTH_INVALID" });
+    await expect(requirePrincipal(new Request("https://payo.test/api", {
+      headers: { authorization: `Bearer ${linkedSession.accessToken}` },
+    }))).resolves.toMatchObject({ principalId: admin.principalId, walletAddress });
+
+    const nextChallenge = await createReadyAuthenticationChallenge(request, {
+      walletAddress,
+      chainId: READY_AUTH_CHAIN_ID,
+    });
+    await expect(verifyReadyAuthenticationChallenge({
+      challengeId: nextChallenge.challengeId,
+      signature: ["0x3", "0x4"],
+    }, async () => true)).resolves.toMatchObject({ principalId: admin.principalId });
   });
 });

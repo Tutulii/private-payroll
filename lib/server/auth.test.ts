@@ -1,68 +1,68 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { verifyAccessTokenMock } = vi.hoisted(() => ({
-  verifyAccessTokenMock: vi.fn(),
+const { getDatabaseMock, limitMock } = vi.hoisted(() => ({
+  getDatabaseMock: vi.fn(),
+  limitMock: vi.fn(),
 }));
 
-vi.mock("@privy-io/node", () => ({
-  verifyAccessToken: verifyAccessTokenMock,
-}));
+vi.mock("@/lib/persistence/db", () => ({ getDatabase: getDatabaseMock }));
 
-import { ApiError, requirePrincipal } from "./auth";
+import { hashReadySessionToken, requirePrincipal } from "./auth";
 
-const originalAppId = process.env.NEXT_PUBLIC_PRIVY_APP_ID;
-const originalVerificationKey = process.env.PRIVY_JWT_VERIFICATION_KEY;
-
-describe("Privy server authentication", () => {
+describe("Ready session authentication", () => {
   beforeEach(() => {
-    process.env.NEXT_PUBLIC_PRIVY_APP_ID = "test-app-id";
-    process.env.PRIVY_JWT_VERIFICATION_KEY = "test-public-verification-key";
-    verifyAccessTokenMock.mockReset();
+    limitMock.mockReset();
+    getDatabaseMock.mockReset();
+    getDatabaseMock.mockReturnValue({
+      select: () => ({
+        from: () => ({
+          where: () => ({ limit: limitMock }),
+        }),
+      }),
+    });
   });
 
-  afterEach(() => {
-    if (originalAppId === undefined) delete process.env.NEXT_PUBLIC_PRIVY_APP_ID;
-    else process.env.NEXT_PUBLIC_PRIVY_APP_ID = originalAppId;
-    if (originalVerificationKey === undefined) delete process.env.PRIVY_JWT_VERIFICATION_KEY;
-    else process.env.PRIVY_JWT_VERIFICATION_KEY = originalVerificationKey;
-  });
-
-  it("requires an access token before initializing verification", async () => {
+  it("requires a bearer token before touching the database", async () => {
     await expect(requirePrincipal(new Request("https://payo.test/api"))).rejects.toMatchObject({
       status: 401,
       code: "AUTH_REQUIRED",
     });
-    expect(verifyAccessTokenMock).not.toHaveBeenCalled();
+    expect(getDatabaseMock).not.toHaveBeenCalled();
   });
 
-  it("fails closed when the public Privy app ID is absent", async () => {
-    delete process.env.NEXT_PUBLIC_PRIVY_APP_ID;
+  it("does not accept the former Privy cookie", async () => {
     await expect(requirePrincipal(new Request("https://payo.test/api", {
-      headers: { authorization: "Bearer token" },
-    }))).rejects.toMatchObject({ status: 503, code: "AUTH_NOT_CONFIGURED" });
+      headers: { cookie: "privy-token=legacy" },
+    }))).rejects.toMatchObject({ status: 401, code: "AUTH_REQUIRED" });
   });
 
-  it("verifies bearer tokens with the app-bound public verification key", async () => {
-    verifyAccessTokenMock.mockResolvedValue({
-      user_id: "did:privy:user",
-      session_id: "session-1",
-    });
+  it("rejects expired, revoked or unknown session tokens", async () => {
+    limitMock.mockResolvedValue([]);
     await expect(requirePrincipal(new Request("https://payo.test/api", {
-      headers: { authorization: "Bearer valid-token" },
-    }))).resolves.toEqual({ principalId: "did:privy:user", sessionId: "session-1" });
-    expect(verifyAccessTokenMock).toHaveBeenCalledWith({
-      access_token: "valid-token",
-      app_id: "test-app-id",
-      verification_key: "test-public-verification-key",
+      headers: { authorization: `Bearer ${"a".repeat(32)}` },
+    }))).rejects.toMatchObject({ status: 401, code: "AUTH_INVALID" });
+  });
+
+  it("maps an active Ready session to its linked PAYO principal", async () => {
+    limitMock.mockResolvedValue([{
+      principalId: "did:legacy:payo-admin",
+      sessionId: "0198-session",
+      walletAddress: "0x0123",
+      chainId: "0x534e5f4d41494e",
+    }]);
+    await expect(requirePrincipal(new Request("https://payo.test/api", {
+      headers: { authorization: `Bearer ${"b".repeat(32)}` },
+    }))).resolves.toEqual({
+      principalId: "did:legacy:payo-admin",
+      sessionId: "0198-session",
+      walletAddress: "0x0123",
+      chainId: "0x534e5f4d41494e",
     });
   });
 
-  it("accepts the Privy cookie and maps verification failures to AUTH_INVALID", async () => {
-    verifyAccessTokenMock.mockRejectedValue(new Error("bad signature"));
-    const failure = requirePrincipal(new Request("https://payo.test/api", {
-      headers: { cookie: "other=x; privy-token=invalid-token" },
-    }));
-    await expect(failure).rejects.toBeInstanceOf(ApiError);
-    await expect(failure).rejects.toMatchObject({ status: 401, code: "AUTH_INVALID" });
+  it("hashes bearer material deterministically without storing it directly", () => {
+    expect(hashReadySessionToken("secret-session-token")).toMatch(/^[0-9a-f]{64}$/);
+    expect(hashReadySessionToken("secret-session-token")).toBe(hashReadySessionToken("secret-session-token"));
+    expect(hashReadySessionToken("other-session-token")).not.toBe(hashReadySessionToken("secret-session-token"));
   });
 });

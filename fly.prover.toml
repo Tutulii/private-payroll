@@ -4,11 +4,7 @@ primary_region = "sin"
 [build]
   dockerfile = "Dockerfile.prover"
 
-[build.args]
-  NEXT_PUBLIC_PRIVY_APP_ID = "cmt5d2tnm00kr0ckwkuunxwnu"
-
 [env]
-  NEXT_PUBLIC_PRIVY_APP_ID = "cmt5d2tnm00kr0ckwkuunxwnu"
   PAYO_PROVER_THREADS = "2"
   PAYO_SELF_HOSTED_PROVER_ENABLED = "true"
   PAYO_PROVER_ALLOWED_ORIGINS = "https://private-payroll.fly.dev,http://localhost:3000,http://127.0.0.1:3000"

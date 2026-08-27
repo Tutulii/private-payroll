@@ -1,6 +1,5 @@
 "use client";
 
-import { useLogin, usePrivy } from "@privy-io/react-auth";
 import {
   createContext,
   useCallback,
@@ -10,7 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { PayoClient } from "@/lib/client/payo-client";
+import { PayoApiError, PayoClient } from "@/lib/client/payo-client";
 import { hashCanonicalJson } from "@/lib/crypto/digest";
 import {
   createVaultWorkspace,
@@ -19,6 +18,7 @@ import {
 import {
   vaultRecoveryPackageSchema,
   vaultSecondAdminEnrollmentSchema,
+  decryptVaultRecord,
   type VaultPrincipalKeyPair,
   type VaultRecoveryPackage,
   type VaultSecondAdminEnrollment,
@@ -30,6 +30,11 @@ import {
 import { createSecondAdminEnrollment } from "@/lib/crypto/vault";
 import type { EncryptedVaultRecord } from "@/lib/crypto/vault";
 import { rotateClientVault } from "@/lib/client/vault-rotation";
+import {
+  readySessionPayloadSchema,
+  type ReadySessionPayload,
+} from "@/lib/auth/ready-session";
+import { useStarknetWallet } from "@/app/starknet/starknet-wallet";
 
 type OrganizationSummary = {
   id: string;
@@ -59,7 +64,9 @@ export type PayoVaultContextValue = {
   loading: boolean;
   error: string;
   client: PayoClient | null;
-  login: () => void;
+  sessionExpiresAt: string;
+  login: () => Promise<void>;
+  logout: () => Promise<void>;
   selectOrganization: (organizationId: string) => void;
   createWorkspace: (organizationName: string, recoveryPassword: string) => Promise<void>;
   unlockWorkspace: (password: string) => Promise<void>;
@@ -83,18 +90,20 @@ const unavailableValue: PayoVaultContextValue = {
   session: null,
   recoveryReady: false,
   loading: false,
-  error: "Privy authentication is not configured.",
+  error: "Ready wallet authentication is not available.",
   client: null,
-  login: () => undefined,
+  sessionExpiresAt: "",
+  login: async () => { throw new Error("Ready wallet authentication is not available."); },
+  logout: async () => undefined,
   selectOrganization: () => undefined,
-  createWorkspace: async () => { throw new Error("Privy authentication is not configured."); },
-  unlockWorkspace: async () => { throw new Error("Privy authentication is not configured."); },
-  importRecoveryPackage: () => { throw new Error("Privy authentication is not configured."); },
-  downloadRecoveryPackage: () => { throw new Error("Privy authentication is not configured."); },
-  confirmRecoverySaved: async () => { throw new Error("Privy authentication is not configured."); },
-  createSecondAdminRequest: async () => { throw new Error("Privy authentication is not configured."); },
-  addSecondAdministrator: async () => { throw new Error("Privy authentication is not configured."); },
-  rotateVault: async () => { throw new Error("Privy authentication is not configured."); },
+  createWorkspace: async () => { throw new Error("Ready wallet authentication is not available."); },
+  unlockWorkspace: async () => { throw new Error("Ready wallet authentication is not available."); },
+  importRecoveryPackage: () => { throw new Error("Ready wallet authentication is not available."); },
+  downloadRecoveryPackage: () => { throw new Error("Ready wallet authentication is not available."); },
+  confirmRecoverySaved: async () => { throw new Error("Ready wallet authentication is not available."); },
+  createSecondAdminRequest: async () => { throw new Error("Ready wallet authentication is not available."); },
+  addSecondAdministrator: async () => { throw new Error("Ready wallet authentication is not available."); },
+  rotateVault: async () => { throw new Error("Ready wallet authentication is not available."); },
   lockWorkspace: () => undefined,
   refreshOrganizations: async () => undefined,
 };
@@ -107,6 +116,10 @@ function recoveryStorageKey(organizationId: string): string {
 
 function enrollmentStorageKey(organizationId: string): string {
   return `payo:vault-enrollment:v1:${organizationId}`;
+}
+
+function readySessionStorageKey(walletAddress: string): string {
+  return `payo:ready-session:v1:${walletAddress.toLowerCase()}`;
 }
 
 function saveRecoveryPackage(pkg: VaultRecoveryPackage): void {
@@ -151,15 +164,121 @@ export function PayoVaultUnavailableProvider({ children }: { children: ReactNode
 }
 
 export function PayoVaultProvider({ children }: { children: ReactNode }) {
-  const { ready, authenticated, user, getAccessToken } = usePrivy();
-  const { login } = useLogin();
-  const principalId = user?.id ?? "";
-  const client = useMemo(() => new PayoClient(getAccessToken), [getAccessToken]);
+  const starknet = useStarknetWallet();
+  const [authSession, setAuthSession] = useState<ReadySessionPayload | null>(null);
+  const accessToken = authSession?.accessToken ?? null;
+  const client = useMemo(() => new PayoClient(async () => accessToken), [accessToken]);
+  const ready = starknet.discoveryReady;
+  const authenticated = Boolean(
+    authSession
+    && starknet.isConnected
+    && starknet.isMainnet
+    && authSession.walletAddress.toLowerCase() === starknet.address.toLowerCase(),
+  );
+  const principalId = authenticated ? authSession?.principalId ?? "" : "";
   const [organizations, setOrganizations] = useState<OrganizationSummary[]>([]);
   const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
   const [session, setSession] = useState<VaultSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  const applyReadySession = useCallback((nextSession: ReadySessionPayload) => {
+    const parsed = readySessionPayloadSchema.parse(nextSession);
+    setAuthSession(parsed);
+    localStorage.setItem(readySessionStorageKey(parsed.walletAddress), JSON.stringify(parsed));
+  }, []);
+
+  const clearReadySession = useCallback((removeStored = false) => {
+    if (removeStored && authSession?.walletAddress) {
+      localStorage.removeItem(readySessionStorageKey(authSession.walletAddress));
+    }
+    setAuthSession(null);
+    setOrganizations([]);
+    setSelectedOrganizationId("");
+    setSession(null);
+  }, [authSession]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (!starknet.isConnected || !starknet.isMainnet || !starknet.address) {
+        setAuthSession(null);
+        setOrganizations([]);
+        setSelectedOrganizationId("");
+        setSession(null);
+        return;
+      }
+      const storageKey = readySessionStorageKey(starknet.address);
+      const serialized = localStorage.getItem(storageKey);
+      if (!serialized) {
+        setAuthSession(null);
+        return;
+      }
+      let parsed;
+      try {
+        parsed = readySessionPayloadSchema.safeParse(JSON.parse(serialized));
+      } catch {
+        localStorage.removeItem(storageKey);
+        setAuthSession(null);
+        return;
+      }
+      if (
+        !parsed.success
+        || parsed.data.walletAddress.toLowerCase() !== starknet.address.toLowerCase()
+        || new Date(parsed.data.expiresAt).getTime() <= Date.now()
+      ) {
+        localStorage.removeItem(storageKey);
+        setAuthSession(null);
+        return;
+      }
+      setAuthSession(parsed.data);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [starknet.address, starknet.isConnected, starknet.isMainnet]);
+
+  useEffect(() => {
+    if (!authSession) return;
+    const remaining = new Date(authSession.expiresAt).getTime() - Date.now();
+    const timer = window.setTimeout(
+      () => clearReadySession(true),
+      Math.max(0, Math.min(remaining, 2_147_000_000)),
+    );
+    return () => window.clearTimeout(timer);
+  }, [authSession, clearReadySession]);
+
+  const login = useCallback(async () => {
+    if (!starknet.isConnected) throw new Error("Connect Ready wallet before authorizing PAYO.");
+    if (!starknet.isMainnet) throw new Error("Switch Ready to Starknet Mainnet first.");
+    setLoading(true);
+    setError("");
+    try {
+      const { challenge } = await client.createReadyAuthenticationChallenge({
+        walletAddress: starknet.address,
+        chainId: starknet.chainId,
+      });
+      const signature = await starknet.signPayoSession(challenge.typedData);
+      const { session: nextSession } = await client.verifyReadyAuthentication({
+        challengeId: challenge.challengeId,
+        signature,
+      });
+      applyReadySession(nextSession);
+    } catch (authenticationError) {
+      const message = authenticationError instanceof Error
+        ? authenticationError.message
+        : "Ready authentication failed.";
+      setError(message);
+      throw new Error(message);
+    } finally {
+      setLoading(false);
+    }
+  }, [applyReadySession, client, starknet]);
+
+  const logout = useCallback(async () => {
+    try {
+      await client.revokeReadyAuthentication();
+    } finally {
+      clearReadySession(true);
+    }
+  }, [clearReadySession, client]);
 
   const refreshOrganizations = useCallback(async () => {
     if (!authenticated) {
@@ -194,13 +313,19 @@ export function PayoVaultProvider({ children }: { children: ReactNode }) {
       setLoading(true);
       setError("");
       void refreshOrganizations()
-        .catch((organizationError) => setError(
-          organizationError instanceof Error ? organizationError.message : "Private workspace loading failed.",
-        ))
+        .catch((organizationError) => {
+          const message = organizationError instanceof Error
+            ? organizationError.message
+            : "Private workspace loading failed.";
+          setError(message);
+          if (organizationError instanceof PayoApiError && organizationError.code === "AUTH_INVALID") {
+            clearReadySession(true);
+          }
+        })
         .finally(() => setLoading(false));
     }, 0);
     return () => window.clearTimeout(synchronizationTimer);
-  }, [authenticated, ready, refreshOrganizations]);
+  }, [authenticated, clearReadySession, ready, refreshOrganizations]);
 
   const selectOrganization = useCallback((organizationId: string) => {
     setSelectedOrganizationId(organizationId);
@@ -255,7 +380,22 @@ export function PayoVaultProvider({ children }: { children: ReactNode }) {
         unlocked = recovered;
       }
       if (unlocked.principal.principalId !== principalId) {
-        throw new Error("This recovery package belongs to a different authenticated principal.");
+        const { recoveryLink } = await client.createReadyRecoveryLink({
+          organizationId: selectedOrganizationId,
+          legacyPrincipalId: unlocked.principal.principalId,
+        });
+        const recoveredChallenge = decryptVaultRecord<{ proof: string }>(
+          recoveryLink.envelope,
+          unlocked.principal,
+        );
+        const { session: linkedSession } = await client.completeReadyRecoveryLink({
+          challengeId: recoveryLink.challengeId,
+          proof: recoveredChallenge.proof,
+        });
+        if (linkedSession.principalId !== unlocked.principal.principalId) {
+          throw new Error("Ready linked an unexpected PAYO principal.");
+        }
+        applyReadySession(linkedSession);
       }
       setSession(unlocked);
     } catch (unlockError) {
@@ -265,7 +405,7 @@ export function PayoVaultProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, [client, principalId, selectedOrganizationId]);
+  }, [applyReadySession, client, principalId, selectedOrganizationId]);
 
   const importRecoveryPackage = useCallback((packageInput: unknown) => {
     const enrollment = vaultSecondAdminEnrollmentSchema.safeParse(packageInput);
@@ -280,14 +420,11 @@ export function PayoVaultProvider({ children }: { children: ReactNode }) {
       return;
     }
     const pkg = vaultRecoveryPackageSchema.parse(packageInput);
-    if (!organizations.some(({ id }) => id === pkg.organizationId)) {
-      throw new Error("This recovery package does not belong to an organization available to this account.");
-    }
     saveRecoveryPackage(pkg);
     setSelectedOrganizationId(pkg.organizationId);
     setSession(null);
     setError("");
-  }, [organizations, principalId]);
+  }, [principalId]);
 
   const createSecondAdminRequest = useCallback(async (organizationId: string, password: string) => {
     if (!authenticated || !principalId) throw new Error("Sign in before creating a recovery-admin request.");
@@ -381,7 +518,7 @@ export function PayoVaultProvider({ children }: { children: ReactNode }) {
   }, [client, organizations, refreshOrganizations, session]);
 
   const selectedOrganization = organizations.find(({ id }) => id === selectedOrganizationId);
-  const recoveryReady = selectedOrganization?.recoveryState !== "required";
+  const recoveryReady = Boolean(selectedOrganization && selectedOrganization.recoveryState !== "required");
 
   const value = useMemo<PayoVaultContextValue>(() => ({
     configured: true,
@@ -395,7 +532,9 @@ export function PayoVaultProvider({ children }: { children: ReactNode }) {
     loading,
     error,
     client,
+    sessionExpiresAt: authSession?.expiresAt ?? "",
     login,
+    logout,
     selectOrganization,
     createWorkspace,
     unlockWorkspace,
@@ -409,6 +548,7 @@ export function PayoVaultProvider({ children }: { children: ReactNode }) {
     refreshOrganizations,
   }), [
     authenticated,
+    authSession?.expiresAt,
     client,
     createWorkspace,
     confirmRecoverySaved,
@@ -419,6 +559,7 @@ export function PayoVaultProvider({ children }: { children: ReactNode }) {
     error,
     loading,
     login,
+    logout,
     organizations,
     principalId,
     ready,
