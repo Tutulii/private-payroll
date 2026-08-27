@@ -134,6 +134,22 @@ function readRecoveryPackage(organizationId: string): VaultRecoveryPackage {
   return vaultRecoveryPackageSchema.parse(JSON.parse(serialized));
 }
 
+function firstStoredRecoveryOrganizationId(): string {
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (!key?.startsWith("payo:vault-recovery:v1:")) continue;
+    const serialized = localStorage.getItem(key);
+    if (!serialized) continue;
+    try {
+      const pkg = vaultRecoveryPackageSchema.parse(JSON.parse(serialized));
+      if (key === recoveryStorageKey(pkg.organizationId)) return pkg.organizationId;
+    } catch {
+      // Ignore unrelated or corrupt local-storage entries; explicit import still reports errors.
+    }
+  }
+  return "";
+}
+
 function readEnrollmentPackage(organizationId: string): VaultSecondAdminEnrollment | null {
   const serialized = localStorage.getItem(enrollmentStorageKey(organizationId));
   return serialized ? vaultSecondAdminEnrollmentSchema.parse(JSON.parse(serialized)) : null;
@@ -296,7 +312,8 @@ export function PayoVaultProvider({ children }: { children: ReactNode }) {
       createdAt: organization.createdAt,
     }));
     setOrganizations(summaries);
-    setSelectedOrganizationId((current) => current || summaries[0]?.id || "");
+    setSelectedOrganizationId((current) =>
+      current || summaries[0]?.id || firstStoredRecoveryOrganizationId());
   }, [authenticated, client]);
 
   useEffect(() => {
