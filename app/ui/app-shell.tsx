@@ -154,12 +154,22 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               },
             });
             window.dispatchEvent(new CustomEvent("payo:payroll-proof-recovered", {
-              detail: { runId, transactionHash: recovered.transactionHash },
+              detail: {
+                runId,
+                transactionHash: recovered.transactionHash,
+                verificationQueued: recovered.verificationQueued,
+                proofDeliveryWarning: recovered.proofDeliveryWarning,
+              },
             }));
             // This releases Ready's browser lock synchronously. Private-balance
             // refresh remains best-effort and must never hold Activity loading.
             void reconcilePayrollTransaction(recovered.transactionHash);
-            if (!cancelled) setToast("Confirmed payroll proof verification queued automatically");
+            if (!recovered.verificationQueued) {
+              window.setTimeout(() => proofRecoveryRunsRef.current.delete(runId), 15_000);
+            }
+            if (!cancelled) setToast(recovered.verificationQueued
+              ? "Confirmed payroll proof verification queued automatically"
+              : "Payroll confirmed; encrypted proof recovery will retry automatically");
           } catch (error) {
             const permanentExpiry = error instanceof Error
               && error.message.includes("missed its on-chain proof-delivery window");

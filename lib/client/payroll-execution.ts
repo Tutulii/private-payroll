@@ -58,6 +58,7 @@ export type PayrollExecutionStage =
   | "persisting"
   | "wallet"
   | "recording"
+  | "recorded"
   | "queued";
 
 export type PendingPayrollSubmission = {
@@ -78,8 +79,12 @@ export type PendingPayrollSubmission = {
 export type PayrollExecutionResult = PendingPayrollSubmission & {
   settlementId: string;
   transactionHash: string;
-  verificationQueued: true;
+  verificationQueued: boolean;
+  proofDeliveryWarning?: string;
 };
+
+const PAYROLL_PROOF_DELIVERY_WARNING =
+  "The private payment is submitted and durably recorded, but its ZK proof was not queued. PAYO will retry from the encrypted vault without another wallet request; use a fresh payroll for claims if the proof window has expired.";
 
 export function buildPayrollExecutionLines(input: {
   organizationId: string;
@@ -391,17 +396,27 @@ export async function resumePendingPayrollSubmission(input: {
       submitted.settlementId,
       submitted.transactionHash,
     ));
-    await retryDurableWrite(() => input.client.enqueueProofVerification({
-      settlementId: submitted.settlementId,
-      proofBundleId: submitted.proofBundleId,
-      shards: submitted.proofShards,
-    }));
   } catch (error) {
     throw new PayrollSubmissionPersistenceError(
       `PAYO could not resume submission recording. Recovery run: ${submitted.runId}.`,
       submitted,
       { cause: error },
     );
+  }
+  try {
+    await retryDurableWrite(() => input.client.enqueueProofVerification({
+      settlementId: submitted.settlementId,
+      proofBundleId: submitted.proofBundleId,
+      shards: submitted.proofShards,
+    }));
+  } catch {
+    input.persistPendingSubmission?.(null);
+    input.onStage?.("recorded");
+    return {
+      ...submitted,
+      verificationQueued: false,
+      proofDeliveryWarning: PAYROLL_PROOF_DELIVERY_WARNING,
+    };
   }
   input.persistPendingSubmission?.(null);
   input.onStage?.("queued");
@@ -524,17 +539,27 @@ export async function recoverSealedProvenPayroll(input: {
       throw new Error("PAYO returned a different settlement identifier during seal recovery.");
     }
     await retryDurableWrite(() => input.client.recordSettlementSubmission(settlementId, recovery.transactionHash));
-    await retryDurableWrite(() => input.client.enqueueProofVerification({
-      settlementId,
-      proofBundleId: recovery.proofBundleId,
-      shards: pending.proofShards,
-    }));
   } catch (error) {
     throw new PayrollSubmissionPersistenceError(
       `The sealed transaction was found, but PAYO could not finish recording it. Recovery run: ${input.runId}.`,
       pending,
       { cause: error },
     );
+  }
+  try {
+    await retryDurableWrite(() => input.client.enqueueProofVerification({
+      settlementId,
+      proofBundleId: recovery.proofBundleId,
+      shards: pending.proofShards,
+    }));
+  } catch {
+    input.persistPendingSubmission?.(null);
+    input.onStage?.("recorded");
+    return {
+      ...pending,
+      verificationQueued: false,
+      proofDeliveryWarning: PAYROLL_PROOF_DELIVERY_WARNING,
+    };
   }
   input.persistPendingSubmission?.(null);
   input.onStage?.("queued");
@@ -921,17 +946,27 @@ export async function executeProofBoundPayroll(
   input.onStage?.("recording");
   try {
     await retryDurableWrite(() => input.client.recordSettlementSubmission(settlementId, transactionHash));
-    await retryDurableWrite(() => input.client.enqueueProofVerification({
-      settlementId,
-      proofBundleId,
-      shards: [proof.shards[0].proofCalldata, proof.shards[1].proofCalldata],
-    }));
   } catch (error) {
     throw new PayrollSubmissionPersistenceError(
       `The private transaction was submitted, but PAYO could not finish recording it. Recovery run: ${runId}.`,
       pendingSubmission,
       { cause: error },
     );
+  }
+  try {
+    await retryDurableWrite(() => input.client.enqueueProofVerification({
+      settlementId,
+      proofBundleId,
+      shards: [proof.shards[0].proofCalldata, proof.shards[1].proofCalldata],
+    }));
+  } catch {
+    input.persistPendingSubmission?.(null);
+    input.onStage?.("recorded");
+    return {
+      ...pendingSubmission,
+      verificationQueued: false,
+      proofDeliveryWarning: PAYROLL_PROOF_DELIVERY_WARNING,
+    };
   }
   input.persistPendingSubmission?.(null);
   input.onStage?.("queued");

@@ -12,7 +12,8 @@ export type ConfirmedPayrollRecoveryResult = {
   settlementId: string;
   proofBundleId: string;
   transactionHash: string;
-  verificationQueued: true;
+  verificationQueued: boolean;
+  proofDeliveryWarning?: string;
 };
 
 /**

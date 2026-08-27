@@ -591,4 +591,62 @@ describe("proof-bound payroll browser orchestration", () => {
     })).rejects.toThrow("missed its on-chain proof-delivery window");
     expect(mockClient.enqueueProofVerification).not.toHaveBeenCalled();
   });
+
+  it("records a submitted payment without leaving stale wallet approval when proof enqueue fails", async () => {
+    const mockClient = client();
+    const input = await executionInput(mockClient);
+    const onStage = vi.fn();
+    mockClient.enqueueProofVerification.mockRejectedValue(new Error("proof service unavailable"));
+
+    const result = await executeProofBoundPayroll({ ...input, onStage });
+
+    expect(result).toMatchObject({
+      transactionHash: "0xfeed",
+      verificationQueued: false,
+      proofDeliveryWarning: expect.stringContaining("durably recorded"),
+    });
+    expect(input.submitPayroll).toHaveBeenCalledTimes(1);
+    expect(mockClient.recordSettlementSubmission).toHaveBeenCalledTimes(1);
+    expect(input.persistPendingSubmission).toHaveBeenLastCalledWith(null);
+    expect(onStage).toHaveBeenLastCalledWith("recorded");
+  });
+
+  it("keeps recovery evidence when durable settlement recording itself fails", async () => {
+    const mockClient = client();
+    const input = await executionInput(mockClient);
+    mockClient.recordSettlementSubmission.mockRejectedValue(new Error("database unavailable"));
+
+    await expect(executeProofBoundPayroll(input)).rejects.toMatchObject({
+      name: "PayrollSubmissionPersistenceError",
+      pendingSubmission: expect.objectContaining({ transactionHash: "0xfeed" }),
+    });
+    expect(input.persistPendingSubmission).toHaveBeenLastCalledWith(
+      expect.objectContaining({ transactionHash: "0xfeed" }),
+    );
+    expect(mockClient.enqueueProofVerification).not.toHaveBeenCalled();
+  });
+
+  it("clears an old local recovery marker once its payment is durable even if proof enqueue fails", async () => {
+    const mockClient = client();
+    const input = await executionInput(mockClient);
+    await executeProofBoundPayroll(input);
+    const pending = input.persistPendingSubmission.mock.calls.find(([value]) => value?.transactionHash)?.[0];
+    expect(pending).toBeTruthy();
+    mockClient.enqueueProofVerification.mockRejectedValue(new Error("historical proof unavailable"));
+    const persist = vi.fn();
+    const onStage = vi.fn();
+
+    await expect(resumePendingPayrollSubmission({
+      client: mockClient as unknown as PayoClient,
+      pending,
+      persistPendingSubmission: persist,
+      onStage,
+    })).resolves.toMatchObject({
+      verificationQueued: false,
+      proofDeliveryWarning: expect.stringContaining("durably recorded"),
+    });
+
+    expect(persist).toHaveBeenLastCalledWith(null);
+    expect(onStage).toHaveBeenLastCalledWith("recorded");
+  });
 });

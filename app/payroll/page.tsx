@@ -128,6 +128,7 @@ export default function PayrollPage() {
   const [revokePrincipalId, setRevokePrincipalId] = useState("");
   const [payrollStage, setPayrollStage] = useState<PayrollExecutionStage | null>(null);
   const [payrollReceipt, setPayrollReceipt] = useState<PayrollExecutionResult | null>(null);
+  const [proofDeliveryNotice, setProofDeliveryNotice] = useState("");
   const [recoverableSubmission, setRecoverableSubmission] = useState<PendingPayrollSubmission | null>(null);
   const [recoveryTransactionHash, setRecoveryTransactionHash] = useState("");
   const [showManualHashRecovery, setShowManualHashRecovery] = useState(false);
@@ -535,10 +536,15 @@ export default function PayrollPage() {
 
   useEffect(() => {
     const recovered = (event: Event) => {
-      const detail = (event as CustomEvent<{ runId?: string }>).detail;
+      const detail = (event as CustomEvent<{
+        runId?: string;
+        verificationQueued?: boolean;
+        proofDeliveryWarning?: string;
+      }>).detail;
       if (!detail?.runId || recoverableSubmission?.runId !== detail.runId) return;
       setRecoverableSubmission(null);
-      setPayrollStage("queued");
+      setPayrollStage(detail.verificationQueued === false ? "recorded" : "queued");
+      setProofDeliveryNotice(detail.proofDeliveryWarning ?? "");
       setFormError("");
       setShowManualHashRecovery(false);
       void refreshPayrollRuns();
@@ -657,6 +663,7 @@ export default function PayrollPage() {
 
   const submitPayroll = async () => {
     setFormError("");
+    setProofDeliveryNotice("");
     setPayrollReceipt(null);
     try {
       if (!vault.session || !vault.client) {
@@ -738,8 +745,11 @@ export default function PayrollPage() {
         },
       });
       setPayrollReceipt(result);
+      setProofDeliveryNotice(result.proofDeliveryWarning ?? "");
       await refreshPayrollRuns();
-      notify(`Proof-bound private payroll submitted · ${result.transactionHash.slice(0, 10)}…`);
+      notify(result.verificationQueued
+        ? `Proof-bound private payroll submitted · ${result.transactionHash.slice(0, 10)}…`
+        : `Private payroll recorded · ${result.transactionHash.slice(0, 10)}…`);
     } catch (payrollError) {
       setPayrollStage(null);
       setFormError(payrollError instanceof Error ? payrollError.message : "Payroll was not submitted.");
@@ -749,6 +759,7 @@ export default function PayrollPage() {
 
   const resumePayrollRecording = async (submittedHash = recoveryTransactionHash) => {
     setFormError("");
+    setProofDeliveryNotice("");
     try {
       if (!vault.client || !recoverableSubmission) throw new Error("No recoverable payroll submission is available.");
       const result = await resumePendingPayrollSubmission({
@@ -759,10 +770,13 @@ export default function PayrollPage() {
         onStage: setPayrollStage,
       });
       setPayrollReceipt(result);
+      setProofDeliveryNotice(result.proofDeliveryWarning ?? "");
       await reconcilePayrollTransaction(result.transactionHash);
       setRecoveryTransactionHash("");
       await refreshPayrollRuns();
-      notify(`Payroll recording recovered · ${result.transactionHash.slice(0, 10)}…`);
+      notify(result.verificationQueued
+        ? `Payroll recording recovered · ${result.transactionHash.slice(0, 10)}…`
+        : `Confirmed payroll recording recovered · ${result.transactionHash.slice(0, 10)}…`);
     } catch (recoveryError) {
       setPayrollStage(null);
       setFormError(recoveryError instanceof Error ? recoveryError.message : "Payroll recovery failed.");
@@ -825,10 +839,13 @@ export default function PayrollPage() {
       onStage: setPayrollStage,
     }).then(async (result) => {
       setPayrollReceipt(result);
+      setProofDeliveryNotice(result.proofDeliveryWarning ?? "");
       await reconcilePayrollTransaction(result.transactionHash);
       setRecoveryTransactionHash("");
       await refreshPayrollRuns();
-      notify(`Payroll confirmed and proof verification queued · ${result.transactionHash.slice(0, 10)}…`);
+      notify(result.verificationQueued
+        ? `Payroll confirmed and proof verification queued · ${result.transactionHash.slice(0, 10)}…`
+        : `Payroll confirmed and recorded · ${result.transactionHash.slice(0, 10)}…`);
     }).catch((recoveryError) => {
       setPayrollStage(null);
       setFormError(recoveryError instanceof Error ? recoveryError.message : "On-chain payroll recovery failed.");
@@ -853,9 +870,12 @@ export default function PayrollPage() {
         onStage: setPayrollStage,
       });
       setPayrollReceipt(result);
+      setProofDeliveryNotice(result.proofDeliveryWarning ?? "");
       await reconcilePayrollTransaction(result.transactionHash);
       await refreshPayrollRuns();
-      notify(`Sealed Ready transaction recovered · ${result.transactionHash.slice(0, 10)}…`);
+      notify(result.verificationQueued
+        ? `Sealed Ready transaction recovered · ${result.transactionHash.slice(0, 10)}…`
+        : `Sealed Ready payment recorded · ${result.transactionHash.slice(0, 10)}…`);
     } catch (recoveryError) {
       setPayrollStage(null);
       setFormError(recoveryError instanceof Error ? recoveryError.message : "The sealed run could not be recovered.");
@@ -901,6 +921,7 @@ export default function PayrollPage() {
     persisting: "Encrypting payroll records",
     wallet: "Approve in Ready",
     recording: "Recording submission",
+    recorded: "Payment recorded",
     queued: "Verification queued",
   };
 
@@ -1309,7 +1330,7 @@ export default function PayrollPage() {
                   disabled={!vault.session || !vault.recoveryReady || !starknet.isConnected || !starknet.isMainnet || busy || Boolean(recoverableSubmission) || selectedObligations.length === 0 || (obligationSchedule?.state === "active" && !canRunPayroll)}
                   onClick={obligationSchedule?.state === "active" ? submitPayroll : scheduleSelectedObligationRoot}
                 >
-                  {payrollStage && payrollStage !== "queued"
+                  {payrollStage && payrollStage !== "queued" && payrollStage !== "recorded"
                     ? <><LoaderCircle className="spin" size={17} /> {payrollStageLabel[payrollStage]}</>
                     : registryTransactionBusy
                       ? <><LoaderCircle className="spin" size={17} /> {starknet.transaction?.stage === "wallet" ? "Approve authorization in Ready" : "Confirming authorization"}</>
@@ -1333,6 +1354,12 @@ export default function PayrollPage() {
             </div>
 
             {formError && <div className="runner-error"><X size={16} /><span>{formError}</span></div>}
+            {proofDeliveryNotice && (
+              <div className="transaction-receipt transaction-receipt--confirmed">
+                <span className="transaction-receipt-icon"><CheckCircle2 size={20} /></span>
+                <span><small>PRIVATE PAYMENT RECORDED</small><strong>Wallet submission recorded</strong><p>{proofDeliveryNotice}</p></span>
+              </div>
+            )}
             {recoverableSubmission && (recoveryMode === "action_required" || recoveryMode === "recording_required") && (
               <div className="runner-error runner-recovery">
                 <Clock3 size={16} />
@@ -1391,9 +1418,9 @@ export default function PayrollPage() {
               </div>
             )}
             {payrollStage && !formError && (
-              <div className={`transaction-receipt transaction-receipt--${payrollStage === "queued" ? "confirmed" : "confirming"}`}>
-                <span className="transaction-receipt-icon">{payrollStage === "queued" ? <CheckCircle2 size={20} /> : <LoaderCircle className="spin" size={19} />}</span>
-                <span><small>PAYROLLINTEGRITY · TWO SHARDS{selfHostedProverUrl ? " · SELF-HOSTED PROVER" : ""}</small><strong>{payrollStageLabel[payrollStage]}</strong><p>{payrollStage === "queued" ? "The settlement is durable; the relayer will verify both proof shards after finality." : selfHostedProverUrl ? "The encrypted request is opened only in your authenticated self-hosted prover's volatile memory; no wallet key is shared." : "Salary inputs stay encrypted while PAYO prepares the proof-bound settlement."}</p></span>
+              <div className={`transaction-receipt transaction-receipt--${payrollStage === "queued" || payrollStage === "recorded" ? "confirmed" : "confirming"}`}>
+                <span className="transaction-receipt-icon">{payrollStage === "queued" || payrollStage === "recorded" ? <CheckCircle2 size={20} /> : <LoaderCircle className="spin" size={19} />}</span>
+                <span><small>PAYROLLINTEGRITY · TWO SHARDS{selfHostedProverUrl ? " · SELF-HOSTED PROVER" : ""}</small><strong>{payrollStageLabel[payrollStage]}</strong><p>{payrollStage === "queued" ? "The settlement is durable; the relayer will verify both proof shards after finality." : payrollStage === "recorded" ? "The wallet payment and settlement record are complete; proof delivery is handled separately and will never request the payment again." : selfHostedProverUrl ? "The encrypted request is opened only in your authenticated self-hosted prover's volatile memory; no wallet key is shared." : "Salary inputs stay encrypted while PAYO prepares the proof-bound settlement."}</p></span>
                 {payrollReceipt && <a href={`${STARKNET_MAINNET_EXPLORER}/tx/${payrollReceipt.transactionHash}`} target="_blank" rel="noreferrer">View receipt <ExternalLink size={13} /></a>}
               </div>
             )}
