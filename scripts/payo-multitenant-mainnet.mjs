@@ -289,6 +289,22 @@ async function verify(plan) {
   const tenant = new Contract({ abi: (await readJson(TENANT_SIERRA)).abi, address: plan.contracts.obligationRegistry.address, providerOrAccount: provider });
   const seal = new Contract({ abi: (await readJson(SEAL_SIERRA)).abi, address: plan.contracts.payrollSeal.address, providerOrAccount: provider });
   const root = BigInt(plan.baselinePolicyRoot);
+  const readVerifierProfile = async (profile) => {
+    const active = await policy.call(
+      "is_verifier_valid",
+      [profile.mode, profile.proofVersion],
+      { blockIdentifier: blockNumber },
+    );
+    if (!active) return [false, 0n];
+    return [
+      true,
+      await policy.call(
+        "get_verifier",
+        [profile.mode, profile.proofVersion],
+        { blockIdentifier: blockNumber },
+      ),
+    ];
+  };
   const [policyAdmin, publisher, tenantAdmin, pool, catalog, obligations, policyValid, ...profiles] = await Promise.all([
     policy.call("get_admin", [], { blockIdentifier: blockNumber }),
     policy.call("get_fx_publisher", [], { blockIdentifier: blockNumber }),
@@ -297,10 +313,7 @@ async function verify(plan) {
     seal.call("get_catalog_registry", [], { blockIdentifier: blockNumber }),
     seal.call("get_obligation_registry", [], { blockIdentifier: blockNumber }),
     policy.call("is_policy_root_valid", [root >> 128n, root & ((1n << 128n) - 1n)], { blockIdentifier: blockNumber }),
-    ...plan.verifierProfiles.map((profile) => Promise.all([
-      policy.call("is_verifier_valid", [profile.mode, profile.proofVersion], { blockIdentifier: blockNumber }),
-      policy.call("get_verifier", [profile.mode, profile.proofVersion], { blockIdentifier: blockNumber }),
-    ])),
+    ...plan.verifierProfiles.map(readVerifierProfile),
   ]);
   const scalar = (value) => BigInt(Array.isArray(value) ? value[0] : value);
   const checks = [
