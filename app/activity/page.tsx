@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAppShell } from "../ui/app-shell";
 import { usePayoVault } from "../vault/payo-vault";
 import { STARKNET_MAINNET_EXPLORER, useStarknetWallet } from "../starknet/starknet-wallet";
@@ -56,6 +56,7 @@ import {
 } from "@/lib/client/exception-execution";
 import type { PayrollExecutionStage } from "@/lib/client/payroll-execution";
 import type { SerializedPayrollIntegrityBuildRequest } from "@/lib/proof/input-builder";
+import { runProgressiveTasks, type ProgressiveTask } from "@/lib/client/progressive-tasks";
 
 type ActivityKind = "Payroll" | "Agent" | "Vault";
 
@@ -237,8 +238,11 @@ export default function ActivityPage() {
   const [provingClaimId, setProvingClaimId] = useState("");
   const [exceptionStage, setExceptionStage] = useState<PayrollExecutionStage | null>(null);
   const [exceptionFeedback, setExceptionFeedback] = useState<ExceptionFeedback | null>(null);
+  const activityRefreshGeneration = useRef(0);
 
   const refreshActivity = useCallback(async () => {
+    const generation = activityRefreshGeneration.current + 1;
+    activityRefreshGeneration.current = generation;
     if (!vault.client || !vault.session) {
       setSettlements([]);
       setAuditEvents([]);
@@ -254,61 +258,73 @@ export default function ActivityPage() {
     setLoading(true);
     setActivityError("");
     try {
-      const [settlementResult, auditResult, receiptResult, agreementResult, payeeResult, runResult, claimResult, remediationResult, disclosureResult] = await Promise.all([
-        vault.client.listSettlements(vault.session.organizationId),
-        vault.client.listAuditEvents(vault.session.organizationId),
-        vault.client.listEncryptedRecords(vault.session.organizationId, "receipt"),
-        loadEncryptedPayAgreements({
-          client: vault.client,
-          organizationId: vault.session.organizationId,
-          principal: vault.session.principal,
-        }),
-        loadEncryptedPayees({
-          client: vault.client,
-          organizationId: vault.session.organizationId,
-          principal: vault.session.principal,
-        }),
-        vault.client.listPayrollRuns(vault.session.organizationId),
-        loadEncryptedClaims({
-          client: vault.client,
-          organizationId: vault.session.organizationId,
-          principal: vault.session.principal,
-        }),
-        loadEncryptedRemediations({
-          client: vault.client,
-          organizationId: vault.session.organizationId,
-          principal: vault.session.principal,
-        }),
-        vault.client.listDisclosureGrants(vault.session.organizationId),
-      ]);
-      setSettlements(settlementResult.settlements);
-      setAuditEvents(auditResult.events);
-      setReceiptCount(receiptResult.records.length);
-      setAgreements(agreementResult);
-      setPayees(payeeResult);
-      setRuns(runResult.runs.flatMap((run) => {
-        if (
-          typeof run.id !== "string"
-          || typeof run.cycleId !== "string"
-          || typeof run.state !== "string"
-          || !(typeof run.dueAt === "string" || run.dueAt instanceof Date)
-          || !(typeof run.updatedAt === "string" || run.updatedAt instanceof Date)
-        ) return [];
-        return [{
-          id: run.id,
-          cycleId: run.cycleId,
-          state: run.state,
-          dueAt: run.dueAt instanceof Date ? run.dueAt.toISOString() : run.dueAt,
-          updatedAt: run.updatedAt instanceof Date ? run.updatedAt.toISOString() : run.updatedAt,
-        }];
-      }));
-      setClaims(claimResult);
-      setRemediations(remediationResult);
-      setDisclosureGrants(disclosureResult.grants);
-    } catch (error) {
-      setActivityError(error instanceof Error ? error.message : "PAYO activity could not be loaded.");
+      const current = () => activityRefreshGeneration.current === generation;
+      const organizationId = vault.session.organizationId;
+      const principal = vault.session.principal;
+      const client = vault.client;
+      const tasks: ProgressiveTask[] = [
+        { label: "Settlements", run: async () => {
+          const result = await client.listSettlements(organizationId);
+          if (current()) setSettlements(result.settlements);
+        } },
+        { label: "Audit events", run: async () => {
+          const result = await client.listAuditEvents(organizationId);
+          if (current()) setAuditEvents(result.events);
+        } },
+        { label: "Receipts", run: async () => {
+          const result = await client.listEncryptedRecords(organizationId, "receipt");
+          if (current()) setReceiptCount(result.records.length);
+        } },
+        { label: "Agreements", run: async () => {
+          const result = await loadEncryptedPayAgreements({ client, organizationId, principal });
+          if (current()) setAgreements(result);
+        } },
+        { label: "Contributors", run: async () => {
+          const result = await loadEncryptedPayees({ client, organizationId, principal });
+          if (current()) setPayees(result);
+        } },
+        { label: "Paydays", run: async () => {
+          const result = await client.listPayrollRuns(organizationId);
+          const normalized = result.runs.flatMap((run) => {
+            if (
+              typeof run.id !== "string"
+              || typeof run.cycleId !== "string"
+              || typeof run.state !== "string"
+              || !(typeof run.dueAt === "string" || run.dueAt instanceof Date)
+              || !(typeof run.updatedAt === "string" || run.updatedAt instanceof Date)
+            ) return [];
+            return [{
+              id: run.id,
+              cycleId: run.cycleId,
+              state: run.state,
+              dueAt: run.dueAt instanceof Date ? run.dueAt.toISOString() : run.dueAt,
+              updatedAt: run.updatedAt instanceof Date ? run.updatedAt.toISOString() : run.updatedAt,
+            }];
+          });
+          if (current()) setRuns(normalized);
+        } },
+        { label: "Claims", run: async () => {
+          const result = await loadEncryptedClaims({ client, organizationId, principal });
+          if (current()) setClaims(result);
+        } },
+        { label: "Remediations", run: async () => {
+          const result = await loadEncryptedRemediations({ client, organizationId, principal });
+          if (current()) setRemediations(result);
+        } },
+        { label: "Disclosure grants", run: async () => {
+          const result = await client.listDisclosureGrants(organizationId);
+          if (current()) setDisclosureGrants(result.grants);
+        } },
+      ];
+      const results = await runProgressiveTasks(tasks, { concurrency: 3, timeoutMs: 12_000 });
+      if (current()) {
+        const failed = results.filter(({ status }) => status === "rejected");
+        setActivityError(failed.length
+          ? `${failed.map(({ label }) => label).join(", ")} could not refresh. Available records are still shown.`
+          : "");
+      }
     } finally {
-      setLoading(false);
+      if (activityRefreshGeneration.current === generation) setLoading(false);
     }
   }, [vault.client, vault.session]);
 

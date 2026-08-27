@@ -23,8 +23,8 @@ import { useStarknetWallet } from "../starknet/starknet-wallet";
 import { usePayoVault } from "../vault/payo-vault";
 import {
   parsePendingPayrollSubmission,
-  recoverConfirmedPayrollVerification,
 } from "@/lib/client/payroll-execution";
+import { recoverConfirmedPayrollFromBrowser } from "@/lib/client/confirmed-payroll-recovery";
 
 const navItems = [
   { label: "Overview", icon: LayoutDashboard, href: "/" },
@@ -121,34 +121,43 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           if (
             typeof run.id !== "string"
             || run.state !== "confirmed"
+            || typeof run.transactionHash !== "string"
             || proofRecoveryRunsRef.current.has(run.id)
           ) return [];
-          return [run.id];
+          return [{ runId: run.id, transactionHash: run.transactionHash }];
         });
-        for (const runId of candidates) {
+        for (const { runId, transactionHash } of candidates) {
           if (cancelled) return;
           proofRecoveryRunsRef.current.add(runId);
           try {
-            const recovered = await recoverConfirmedPayrollVerification({
+            const storageKey = `payo:pending-settlement:v1:${session.organizationId}`;
+            const serialized = window.localStorage.getItem(storageKey);
+            let pending = null;
+            if (serialized) {
+              try {
+                pending = parsePendingPayrollSubmission(JSON.parse(serialized));
+              } catch {
+                // Keep corrupt recovery evidence untouched for explicit support recovery.
+              }
+            }
+            const recovered = await recoverConfirmedPayrollFromBrowser({
               client,
               organizationId: session.organizationId,
               runId,
+              indexedTransactionHash: transactionHash,
               principal: session.principal,
+              pendingSubmission: pending,
+              persistPendingSubmission: (next) => {
+                if (next) window.localStorage.setItem(storageKey, JSON.stringify(next));
+                else window.localStorage.removeItem(storageKey);
+              },
             });
-            const storageKey = `payo:pending-settlement:v1:${session.organizationId}`;
-            const serialized = window.localStorage.getItem(storageKey);
-            if (serialized) {
-              try {
-                const pending = parsePendingPayrollSubmission(JSON.parse(serialized));
-                if (pending.runId === runId) window.localStorage.removeItem(storageKey);
-              } catch {
-                // A corrupt recovery payload is left untouched for explicit support recovery.
-              }
-            }
             window.dispatchEvent(new CustomEvent("payo:payroll-proof-recovered", {
               detail: { runId, transactionHash: recovered.transactionHash },
             }));
-            await reconcilePayrollTransaction(recovered.transactionHash);
+            // This releases Ready's browser lock synchronously. Private-balance
+            // refresh remains best-effort and must never hold Activity loading.
+            void reconcilePayrollTransaction(recovered.transactionHash);
             if (!cancelled) setToast("Confirmed payroll proof verification queued automatically");
           } catch {
             window.setTimeout(() => proofRecoveryRunsRef.current.delete(runId), 15_000);
