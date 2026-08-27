@@ -59,7 +59,10 @@ export async function POST(request: Request) {
       },
       submitter: {
         submit: (call) => withStarknetRelayerSubmissionLock(relayerAddress, async () => {
-          const response = await account.execute(call);
+          // PAYO relays large deterministic verifier payloads. Do not depend on
+          // Starknet.js tip sampling: sparse recent V3 blocks can make that
+          // heuristic fail before the RPC receives an otherwise valid invoke.
+          const response = await account.execute(call, { tip: 0 });
           return { transactionHash: response.transaction_hash };
         }),
       },

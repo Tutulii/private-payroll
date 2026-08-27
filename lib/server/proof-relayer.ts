@@ -133,7 +133,12 @@ function pendingPredecessorStatus(proofVersion: string): number {
 }
 
 function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : "Proof relayer operation failed.";
+  const message = error instanceof Error ? error.message : "Proof relayer operation failed.";
+  if (message.length <= 500) return message;
+  // Starknet.js prefixes RPC failures with the complete transaction payload.
+  // Preserve the actual rejection at the end instead of persisting only proof
+  // calldata from the beginning of the message.
+  return `${message.slice(0, 100)} … ${message.slice(-380)}`;
 }
 
 async function processLeasedJob(input: {
