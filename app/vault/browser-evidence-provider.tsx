@@ -186,6 +186,33 @@ export function PayoBrowserEvidenceProvider({ children }: { children: ReactNode 
     async listPayrollRuns() {
       return { runs: readState().runs };
     },
+    async getPayrollRun(runId: string) {
+      const run = readState().runs.find(({ id }) => id === runId);
+      if (!run) throw new Error("Synthetic payroll run not found.");
+      const lines = Array.isArray(run.lines) ? run.lines : [];
+      const envelope = encryptVaultRecord({
+        claimProofSource: { buildInput: { lines } },
+      }, {
+        schemaVersion: 1,
+        organizationId: ORGANIZATION_ID,
+        recordType: "payroll-run",
+        recordId: runId,
+        revision: 1,
+      }, [SYNTHETIC_PRINCIPAL]);
+      return {
+        run: {
+          id: runId,
+          organizationId: ORGANIZATION_ID,
+          state: run.state,
+          agreementRoot: null,
+          manifestRoot: null,
+          policyRoot: null,
+          fxRoot: null,
+          runNullifier: null,
+          envelope,
+        },
+      };
+    },
     async registerObligationSchedules(input: {
       schedules: BrowserEvidenceState["schedules"];
     }) {

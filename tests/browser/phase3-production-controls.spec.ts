@@ -176,7 +176,7 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
     window.__PAYO_BROWSER_EVIDENCE__?.setRuns([{
       id: runId,
       cycleId: "phase3-browser-exception",
-      state: "disputed",
+      state: "confirmed",
       dueAt: "2026-08-26T00:00:00.000Z",
       lines: [{ agreementId }],
     }]);
@@ -189,11 +189,12 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
   const claimForm = page.locator("form.receipt-disclosure-form").filter({ hasText: "This creates a salted" });
   const agreementSelect = claimForm.getByLabel("Committed agreement");
   const runSelect = claimForm.getByLabel("Payroll run");
+  await runSelect.selectOption(runId);
   await expect(agreementSelect.locator(`option[value="${recurringAgreement.id}"]`))
     .toHaveText(/Agreement \d+ · Recurring worker/);
-  await expect(runSelect.locator(`option[value="${runId}"]`)).toHaveText("Payday 1 · Disputed");
+  await expect(agreementSelect.locator("option")).toHaveCount(2);
+  await expect(runSelect.locator(`option[value="${runId}"]`)).toHaveText("Payday 1 · Confirmed");
   await agreementSelect.selectOption(recurringAgreement.id);
-  await runSelect.selectOption(runId);
   await claimForm.getByLabel("Claim type").selectOption("missing_obligation");
   await claimForm.getByRole("button", { name: "Encrypt claim draft" }).click();
   await expect(page.locator(".private-exception-row").filter({ hasText: "missing obligation" })).toContainText("draft");

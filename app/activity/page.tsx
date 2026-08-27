@@ -25,6 +25,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { useAppShell } from "../ui/app-shell";
 import { usePayoVault } from "../vault/payo-vault";
 import { STARKNET_MAINNET_EXPLORER, useStarknetWallet } from "../starknet/starknet-wallet";
+import { decryptVaultRecord } from "@/lib/crypto/vault";
 import { createEncryptedSettlementReceipt } from "@/lib/client/settlement-receipts";
 import { createProofPackageForSettlement } from "@/lib/client/proof-package-workflow";
 import {
@@ -47,11 +48,13 @@ import {
   activityAgreementOptionLabel,
   activityRunOptionLabel,
 } from "@/lib/client/activity-option-labels";
+import { reportActivityOperationFailure } from "@/lib/client/activity-operation-feedback";
 import {
   executeProofBoundWageClaim,
   executeProofBoundWageRemediation,
 } from "@/lib/client/exception-execution";
 import type { PayrollExecutionStage } from "@/lib/client/payroll-execution";
+import type { SerializedPayrollIntegrityBuildRequest } from "@/lib/proof/input-builder";
 
 type ActivityKind = "Payroll" | "Agent" | "Vault";
 
@@ -97,6 +100,26 @@ type DisclosureGrantSummary = {
   expiresAt: string;
   revokedAt: string | null;
   createdAt: string;
+};
+
+type ExceptionFeedback = {
+  tone: "error" | "success";
+  message: string;
+};
+
+const exceptionStageLabel: Record<PayrollExecutionStage, string> = {
+  fx: "Reading live FX",
+  authorizing: "Authorizing fresh FX",
+  loading: "Loading the encrypted payday",
+  executing: "Building the private claim",
+  proving: "Generating the ZK claim proof",
+  verifying: "Verifying the claim locally",
+  encoding: "Encoding the Starknet proof",
+  preflight: "Checking the on-chain verifier",
+  persisting: "Encrypting the proof records",
+  wallet: "Approve the claim in Ready",
+  recording: "Recording the submission",
+  queued: "On-chain verification queued",
 };
 
 type ActivityEvent = {
@@ -203,10 +226,14 @@ export default function ActivityPage() {
   const [claimKind, setClaimKind] = useState<WageClaimRecord["claimKind"]>("missing_obligation");
   const [claimReferenceValue, setClaimReferenceValue] = useState("");
   const [claimFinalMask, setClaimFinalMask] = useState("0");
+  const [claimRunAgreementIds, setClaimRunAgreementIds] = useState<string[] | null>(null);
+  const [claimSourceLoading, setClaimSourceLoading] = useState(false);
+  const [claimSourceError, setClaimSourceError] = useState("");
   const [remediationClaimId, setRemediationClaimId] = useState("");
   const [remediationAmount, setRemediationAmount] = useState("");
   const [provingClaimId, setProvingClaimId] = useState("");
   const [exceptionStage, setExceptionStage] = useState<PayrollExecutionStage | null>(null);
+  const [exceptionFeedback, setExceptionFeedback] = useState<ExceptionFeedback | null>(null);
 
   const refreshActivity = useCallback(async () => {
     if (!vault.client || !vault.session) {
@@ -285,6 +312,42 @@ export default function ActivityPage() {
     return () => window.clearTimeout(timer);
   }, [refreshActivity]);
 
+  useEffect(() => {
+    let active = true;
+    const client = vault.client;
+    const session = vault.session;
+    if (!claimRunId || !client || !session) {
+      return () => { active = false; };
+    }
+    void (async () => {
+      try {
+        const { run } = await client.getPayrollRun(claimRunId);
+        if (run.organizationId !== session.organizationId || run.state !== "confirmed") {
+          throw new Error("Private claims require a confirmed payday from this workspace.");
+        }
+        const payload = decryptVaultRecord<{
+          claimProofSource?: { buildInput?: SerializedPayrollIntegrityBuildRequest };
+        }>(run.envelope, session.principal);
+        const agreementIds = payload.claimProofSource?.buildInput?.lines
+          .map(({ agreementId }) => agreementId)
+          .filter((agreementId, index, values) => values.indexOf(agreementId) === index) ?? [];
+        if (agreementIds.length === 0) {
+          throw new Error("This payday has no encrypted claim-proof agreements.");
+        }
+        if (active) setClaimRunAgreementIds(agreementIds);
+      } catch (error) {
+        if (active) {
+          setClaimSourceError(error instanceof Error
+            ? error.message
+            : "The matching agreements could not be loaded from this payday.");
+        }
+      } finally {
+        if (active) setClaimSourceLoading(false);
+      }
+    })();
+    return () => { active = false; };
+  }, [claimRunId, vault.client, vault.session]);
+
   const events = useMemo(() => [
     ...settlements.map(settlementEvent),
     ...auditEvents.map(auditEvent),
@@ -301,10 +364,14 @@ export default function ActivityPage() {
     }));
   }, [agreements, payees]);
 
-  const runOptions = useMemo(() => runs.map((run, index) => ({
+  const runOptions = useMemo(() => runs.filter(({ state }) => state === "confirmed").map((run, index) => ({
     run,
     label: activityRunOptionLabel(run, index),
   })), [runs]);
+
+  const claimAgreementOptions = useMemo(() => claimRunAgreementIds
+    ? agreementOptions.filter(({ agreement }) => claimRunAgreementIds.includes(agreement.agreement.id))
+    : [], [agreementOptions, claimRunAgreementIds]);
 
   const visibleEvents = useMemo(() => events.filter((event) => {
     const matchesFilter = filter === "All" || event.kind === filter;
@@ -456,12 +523,15 @@ export default function ActivityPage() {
     if (!vault.client || !vault.session) return;
     const agreement = agreements.find(({ agreement }) => agreement.id === claimAgreementId);
     const run = runs.find(({ id }) => id === claimRunId);
-    if (!agreement || !run) {
-      setActivityError("Choose an agreement and payroll run loaded from this encrypted workspace.");
+    if (!agreement || !run || run.state !== "confirmed" || !claimRunAgreementIds?.includes(agreement.agreement.id)) {
+      const message = "Choose a confirmed payday and one of its matching agreements.";
+      setActivityError(message);
+      setExceptionFeedback({ tone: "error", message });
       return;
     }
     setCreatingException(true);
     setActivityError("");
+    setExceptionFeedback(null);
     try {
       await createEncryptedWageClaimDraft({
         client: vault.client,
@@ -493,6 +563,7 @@ export default function ActivityPage() {
     setProvingClaimId(claim.id);
     setExceptionStage(null);
     setActivityError("");
+    setExceptionFeedback(null);
     try {
       if (!starknet.isConnected || !starknet.isMainnet) {
         throw new Error("Connect Ready on Starknet Mainnet before proving a private claim.");
@@ -527,10 +598,19 @@ export default function ActivityPage() {
           : undefined,
       });
       await refreshActivity();
-      notify(`Private wage claim submitted · ${result.transactionHash.slice(0, 10)}…`);
+      const message = `Private wage claim submitted · ${result.transactionHash.slice(0, 10)}…`;
+      setExceptionFeedback({ tone: "success", message });
+      notify(message);
     } catch (error) {
-      setActivityError(error instanceof Error ? error.message : "The private wage claim could not be submitted.");
-      await refreshActivity();
+      await reportActivityOperationFailure({
+        error,
+        fallback: "The private wage claim could not be submitted.",
+        refresh: refreshActivity,
+        report: (message) => {
+          setActivityError(message);
+          setExceptionFeedback({ tone: "error", message });
+        },
+      });
     } finally {
       setCreatingException(false);
       setProvingClaimId("");
@@ -542,13 +622,16 @@ export default function ActivityPage() {
     if (!vault.client || !vault.session) return;
     const claim = claims.find(({ id }) => id === remediation.claimId);
     if (!claim) {
-      setActivityError("The encrypted wage claim for this remediation is unavailable.");
+      const message = "The encrypted wage claim for this remediation is unavailable.";
+      setActivityError(message);
+      setExceptionFeedback({ tone: "error", message });
       return;
     }
     setCreatingException(true);
     setProvingClaimId(remediation.id);
     setExceptionStage(null);
     setActivityError("");
+    setExceptionFeedback(null);
     try {
       if (!starknet.isConnected || !starknet.isMainnet) {
         throw new Error("Connect Ready on Starknet Mainnet before settling private remediation.");
@@ -580,10 +663,19 @@ export default function ActivityPage() {
           : undefined,
       });
       await refreshActivity();
-      notify(`Private remediation submitted · ${result.transactionHash.slice(0, 10)}…`);
+      const message = `Private remediation submitted · ${result.transactionHash.slice(0, 10)}…`;
+      setExceptionFeedback({ tone: "success", message });
+      notify(message);
     } catch (error) {
-      setActivityError(error instanceof Error ? error.message : "The private remediation could not be submitted.");
-      await refreshActivity();
+      await reportActivityOperationFailure({
+        error,
+        fallback: "The private remediation could not be submitted.",
+        refresh: refreshActivity,
+        report: (message) => {
+          setActivityError(message);
+          setExceptionFeedback({ tone: "error", message });
+        },
+      });
     } finally {
       setCreatingException(false);
       setProvingClaimId("");
@@ -729,10 +821,18 @@ export default function ActivityPage() {
               <span><strong>{claims.length}</strong> claim drafts</span>
               <span><strong>{remediations.length}</strong> remediation drafts</span>
             </div>
-            <button type="button" className="button button--ink button--wide" onClick={() => setShowClaimForm((current) => !current)} disabled={!vault.session || creatingException || agreements.length === 0 || runs.length === 0}><FileText size={16} /> Draft private claim</button>
+            <button type="button" className="button button--ink button--wide" onClick={() => setShowClaimForm((current) => !current)} disabled={!vault.session || creatingException || agreements.length === 0 || runOptions.length === 0}><FileText size={16} /> Draft private claim</button>
             {showClaimForm && <form className="receipt-disclosure-form" onSubmit={createClaimDraft}>
-              <label><span>Committed agreement</span><select value={claimAgreementId} onChange={(event) => setClaimAgreementId(event.target.value)} required><option value="">Choose agreement</option>{agreementOptions.map(({ agreement, label }) => <option value={agreement.agreement.id} key={agreement.id}>{label}</option>)}</select></label>
-              <label><span>Payroll run</span><select value={claimRunId} onChange={(event) => setClaimRunId(event.target.value)} required><option value="">Choose run</option>{runOptions.map(({ run, label }) => <option value={run.id} key={run.id}>{label}</option>)}</select></label>
+              <label><span>Payroll run</span><select value={claimRunId} onChange={(event) => {
+                const runId = event.target.value;
+                setClaimRunId(runId);
+                setClaimAgreementId("");
+                setClaimRunAgreementIds(null);
+                setClaimSourceError("");
+                setClaimSourceLoading(Boolean(runId));
+              }} required><option value="">Choose run</option>{runOptions.map(({ run, label }) => <option value={run.id} key={run.id}>{label}</option>)}</select></label>
+              <label><span>Committed agreement</span><select value={claimAgreementId} onChange={(event) => setClaimAgreementId(event.target.value)} disabled={!claimRunId || claimSourceLoading || Boolean(claimSourceError)} required><option value="">{claimSourceLoading ? "Loading matching agreements…" : claimRunId ? "Choose matching agreement" : "Choose payday first"}</option>{claimAgreementOptions.map(({ agreement, label }) => <option value={agreement.agreement.id} key={agreement.id}>{label}</option>)}</select></label>
+              {claimSourceError && <p className="private-exception-source-error" role="alert">{claimSourceError}</p>}
               <label><span>Claim type</span><select value={claimKind} onChange={(event) => setClaimKind(event.target.value as WageClaimRecord["claimKind"])}><option value="missing_obligation">Missing obligation</option><option value="below_committed_floor">Below committed floor</option><option value="incomplete_final_pay">Incomplete final pay</option></select></label>
               {claimKind === "below_committed_floor" && <label><span>Disputed reference value (6-decimal atomic)</span><input inputMode="numeric" pattern="[0-9]+" value={claimReferenceValue} onChange={(event) => setClaimReferenceValue(event.target.value)} placeholder="900000" required /></label>}
               {claimKind === "incomplete_final_pay" && <label><span>Included final-pay mask (0–31)</span><input type="number" min="0" max="31" step="1" value={claimFinalMask} onChange={(event) => setClaimFinalMask(event.target.value)} required /></label>}
@@ -744,8 +844,9 @@ export default function ActivityPage() {
                 <span><small>{claim.claimKind.replaceAll("_", " ")}</small><strong>{shortId(claim.id)} · {claim.state}</strong></span>
                 {claim.state === "draft" && <button type="button" className="button button--soft" onClick={() => void proveClaim(claim)} disabled={creatingException || !starknet.isConnected}>{provingClaimId === claim.id ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />} Prove &amp; submit</button>}
               </div>)}
-              {exceptionStage && <p>Private claim workflow: {exceptionStage.replaceAll("_", " ")}.</p>}
+              {exceptionStage && <p className="private-exception-feedback private-exception-feedback--progress" role="status" aria-live="polite"><LoaderCircle className="spin" size={14} /> {exceptionStageLabel[exceptionStage]}</p>}
             </div>}
+            {exceptionFeedback && <p className={`private-exception-feedback private-exception-feedback--${exceptionFeedback.tone}`} role={exceptionFeedback.tone === "error" ? "alert" : "status"}><span aria-hidden="true">{exceptionFeedback.tone === "error" ? "!" : "✓"}</span> {exceptionFeedback.message}</p>}
             <button type="button" className="button button--soft button--wide" onClick={() => setShowRemediationForm((current) => !current)} disabled={!vault.session || creatingException || claims.length === 0}><ShieldCheck size={16} /> Draft remediation</button>
             {showRemediationForm && <form className="receipt-disclosure-form" onSubmit={createRemediationDraft}>
               <label><span>Encrypted claim</span><select value={remediationClaimId} onChange={(event) => setRemediationClaimId(event.target.value)} required><option value="">Choose claim</option>{claims.filter((claim) => ["submitted", "accepted"].includes(claim.state)).map((claim) => <option value={claim.id} key={claim.id}>{claim.claimKind.replaceAll("_", " ")} · {shortId(claim.id)}</option>)}</select></label>

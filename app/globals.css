@@ -2555,6 +2555,14 @@ button:focus-visible {
 .private-exception-row small { color: #6d622f; font-size: 7px; font-weight: 850; letter-spacing: .06em; text-transform: uppercase; }
 .private-exception-row strong { overflow: hidden; color: var(--ink); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .private-exception-row .button { flex: 0 0 auto; min-height: 31px; padding: 6px 9px; font-size: 7px; }
+.private-exception-source-error { grid-column: 1 / -1; margin: -3px 0 0; color: #91483b !important; font-size: 7.5px; line-height: 1.45; }
+.private-exception-feedback { margin: 8px 0 12px; padding: 9px 10px; display: flex; align-items: flex-start; gap: 7px; border: 1px solid; border-radius: 9px; font-size: 7.5px; font-weight: 750; line-height: 1.45; }
+.private-exception-feedback > span { width: 15px; height: 15px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; font-size: 8px; font-weight: 950; }
+.private-exception-feedback--progress { color: #67591d !important; background: rgba(255, 253, 248, .78); border-color: #bda853; }
+.private-exception-feedback--error { color: #91483b !important; background: #fff0eb; border-color: #dda091; }
+.private-exception-feedback--error > span { color: #fff; background: #b95d4d; }
+.private-exception-feedback--success { color: #3f6a48 !important; background: #edf8ee; border-color: #8abb91; }
+.private-exception-feedback--success > span { color: #fff; background: #568560; }
 
 .pool-status-card { min-height: 64px; padding: 13px 15px; display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; background: var(--ink); color: var(--white); border-radius: 15px; }
 .pool-pulse { width: 25px; height: 25px; display: grid; place-items: center; background: #344634; border-radius: 50%; }
