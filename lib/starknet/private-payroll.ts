@@ -20,6 +20,8 @@ export type PrivatePayrollRecipient = {
 export type PrivatePayrollActionBundle = {
   actions: STRK20_ACTION[];
   totals: Record<PayrollTokenSymbol, bigint>;
+  /** Wallet-only value needed to assemble an action; it is not payroll value. */
+  operationalReserves: Record<PayrollTokenSymbol, bigint>;
 };
 
 export type PrivateExceptionWorkflow = "wage_claim" | "wage_remediation";
@@ -85,25 +87,46 @@ export function buildPrivatePayrollActions(
     };
   });
   actions.push(payoAction);
-  return { actions, totals };
+  return { actions, totals, operationalReserves: { STRK: 0n, USDC: 0n } };
 }
 
 /**
  * Builds the only two non-payroll actions accepted by the Phase 3 wallet
- * boundary. A claim seals proof state without transferring funds; remediation
- * must privately transfer one proved amount before its REMEDIATE invocation.
+ * boundary. Ready cannot currently assemble a bare external invoke, so a claim
+ * pairs its seal with a one-fri STRK self-transfer. That anchor changes neither
+ * owner nor wage value; remediation must privately transfer one proved amount
+ * before its REMEDIATE invocation.
  */
 export function buildPrivateExceptionActions(
   workflow: PrivateExceptionWorkflow,
   recipients: PrivatePayrollRecipient[],
   payoAction: STRK20_INVOKE_ACTION,
   configuredSeal: string,
+  connectedAddress?: string,
 ): PrivatePayrollActionBundle {
   const expectedMode = workflow === "wage_claim" ? 2 : 3;
   assertProofBoundAction(payoAction, configuredSeal, expectedMode);
   if (workflow === "wage_claim") {
     if (recipients.length !== 0) throw new Error("A wage claim cannot transfer private funds.");
-    return { actions: [payoAction], totals: { STRK: 0n, USDC: 0n } };
+    let selfRecipient: string;
+    try {
+      selfRecipient = validateAndParseAddress(connectedAddress?.trim() ?? "");
+    } catch {
+      throw new Error("A wage claim requires the connected Starknet address for its private execution anchor.");
+    }
+    return {
+      actions: [
+        {
+          type: "transfer",
+          token: PAYROLL_TOKENS.STRK.address,
+          amount: num.toHex(1n),
+          recipient: selfRecipient,
+        },
+        payoAction,
+      ],
+      totals: { STRK: 0n, USDC: 0n },
+      operationalReserves: { STRK: 1n, USDC: 0n },
+    };
   }
   if (recipients.length !== 1) {
     throw new Error("A wage remediation proof must settle exactly one private recipient.");
@@ -114,7 +137,7 @@ export function buildPrivateExceptionActions(
     configuredSeal,
   );
   actions[actions.length - 1] = payoAction;
-  return { actions, totals };
+  return { actions, totals, operationalReserves: { STRK: 0n, USDC: 0n } };
 }
 
 export function requiredPayrollReserves(

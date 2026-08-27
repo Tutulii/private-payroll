@@ -37,4 +37,12 @@ describe("describeWalletError", () => {
     expect(message).toBe("An error occurred: private invoke rejected");
     expect(message).not.toContain("wallet-error.test.ts");
   });
+
+  it("removes stack fields nested in plain Wallet API data", () => {
+    expect(describeWalletError({
+      code: 114,
+      message: "An error occurred",
+      data: { code: "INVALID_REQUEST_PAYLOAD", stack: "extension stack trace" },
+    })).toBe("An error occurred (114): {code: INVALID_REQUEST_PAYLOAD}");
+  });
 });

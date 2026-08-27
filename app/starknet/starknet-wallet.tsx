@@ -318,6 +318,10 @@ function isReadyRequestBusyError(error: unknown) {
   );
 }
 
+function isInvalidRequestPayloadError(error: unknown) {
+  return walletErrorCode(error) === "114" || errorIncludes(error, "INVALID_REQUEST_PAYLOAD");
+}
+
 async function readMainnetPoolRegistration(address: string): Promise<boolean | null> {
   try {
     const result = await mainnetProvider.callContract({
@@ -852,9 +856,12 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
           privateActionKindRef.current = null;
         }
         const notRegistered = isNotRegisteredError(transactionError);
+        const invalidPayload = isInvalidRequestPayloadError(transactionError);
         const message = notRegistered
           ? "Ready returned NOT_REGISTERED (118). Complete the one-time STRK20 registration before shielding."
-          : describeError(transactionError);
+          : invalidPayload
+            ? "Ready rejected the PAYO private action payload (114). No Mainnet transaction was submitted. Refresh PAYO and retry once."
+            : describeError(transactionError);
         if (notRegistered) {
           setShieldedBalance(null);
           setShieldedBalances(emptyTokenBalances());
@@ -1048,14 +1055,15 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
       payoAction: STRK20_INVOKE_ACTION,
     ) => {
       assertPrivateActionAvailable();
+      if (!walletAccount || !address) throw new Error("Connect Ready wallet first.");
       const configuredSeal = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
-      const { actions, totals } = buildPrivateExceptionActions(
+      const { actions, totals, operationalReserves } = buildPrivateExceptionActions(
         workflow,
         recipients,
         payoAction,
         configuredSeal ?? "",
+        address,
       );
-      if (!walletAccount) throw new Error("Connect Ready wallet first.");
       const feeTokens = workflow === "wage_claim"
         ? [PAYROLL_TOKENS.STRK]
         : PAYROLL_TOKEN_LIST.filter((token) => totals[token.symbol] > 0n);
@@ -1067,7 +1075,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
       for (const quote of feeQuotes) feeReserves[quote.token] = quote.walletFee;
       const requiredReserves = requiredPayrollReservesForQuotes(totals, feeReserves);
       for (const token of PAYROLL_TOKEN_LIST) {
-        const required = requiredReserves[token.symbol];
+        const required = requiredReserves[token.symbol] + operationalReserves[token.symbol];
         const balance = currentShieldedBalances[token.symbol];
         if (required > 0n && (balance === null || required > balance)) {
           throw new Error(
@@ -1089,7 +1097,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
         },
       );
     },
-    [assertPrivateActionAvailable, refreshBalanceForAccount, requestPrivateFeeQuote, submitPrivateActions, walletAccount],
+    [address, assertPrivateActionAvailable, refreshBalanceForAccount, requestPrivateFeeQuote, submitPrivateActions, walletAccount],
   );
 
   const reconcilePayrollTransaction = useCallback(async (transactionHash: string) => {

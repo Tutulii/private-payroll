@@ -22,6 +22,7 @@ describe("buildPrivatePayrollActions", () => {
       { address: "0x111", token: "USDC", amount: "2.123456" },
     ], PAYO_ACTION, SEAL);
     expect(result.totals).toEqual({ STRK: 1_250_000_000_000_000_000n, USDC: 2_123_456n });
+    expect(result.operationalReserves).toEqual({ STRK: 0n, USDC: 0n });
     expect(result.actions).toHaveLength(3);
     expect(result.actions[0]).toMatchObject({
       type: "transfer",
@@ -62,18 +63,30 @@ describe("buildPrivatePayrollActions", () => {
     )).toThrow(/unapproved PAYO seal/);
   });
 
-  it("allows invoke-only claims and requires one private remediation transfer", () => {
+  it("anchors claims to the connected wallet and requires one private remediation transfer", () => {
     const claimAction = { ...PAYO_ACTION, calldata: ["0x2", ...PAYO_ACTION.calldata.slice(1)] };
-    expect(buildPrivateExceptionActions("wage_claim", [], claimAction, SEAL)).toEqual({
-      actions: [claimAction],
+    expect(buildPrivateExceptionActions("wage_claim", [], claimAction, SEAL, "0x111")).toEqual({
+      actions: [
+        {
+          type: "transfer",
+          token: PAYROLL_TOKENS.STRK.address,
+          amount: "0x1",
+          recipient: expect.any(String),
+        },
+        claimAction,
+      ],
       totals: { STRK: 0n, USDC: 0n },
+      operationalReserves: { STRK: 1n, USDC: 0n },
     });
     expect(() => buildPrivateExceptionActions(
       "wage_claim",
       [{ address: "0x111", token: "STRK", amount: "1" }],
       claimAction,
       SEAL,
+      "0x111",
     )).toThrow(/cannot transfer/i);
+    expect(() => buildPrivateExceptionActions("wage_claim", [], claimAction, SEAL))
+      .toThrow(/connected Starknet address/i);
 
     const remediationAction = { ...PAYO_ACTION, calldata: ["0x3", ...PAYO_ACTION.calldata.slice(1)] };
     const remediation = buildPrivateExceptionActions(
@@ -83,6 +96,7 @@ describe("buildPrivatePayrollActions", () => {
       SEAL,
     );
     expect(remediation.totals).toEqual({ STRK: 0n, USDC: 2_500_000n });
+    expect(remediation.operationalReserves).toEqual({ STRK: 0n, USDC: 0n });
     expect(remediation.actions.at(-1)).toBe(remediationAction);
     expect(() => buildPrivateExceptionActions("wage_remediation", [], remediationAction, SEAL))
       .toThrow(/exactly one/i);

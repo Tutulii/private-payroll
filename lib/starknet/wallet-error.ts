@@ -29,7 +29,8 @@ function renderDetail(value: unknown, depth: number, seen: WeakSet<object>): str
     return `[${value.map((entry) => renderDetail(entry, depth + 1, seen)).join(", ")}]`;
   }
 
-  const entries = Object.entries(value as Record<string, unknown>);
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([key]) => key.toLowerCase() !== "stack");
   if (entries.length === 0) return "{}";
   return `{${entries
     .map(([key, entry]) => `${key}: ${renderDetail(entry, depth + 1, seen)}`)
