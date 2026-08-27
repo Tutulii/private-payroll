@@ -92,3 +92,43 @@ describe("remote prover failures", () => {
     });
   });
 });
+
+describe("PAYO API response recovery", () => {
+  it("retries a safe FX catalog read after Fly returns an empty successful response", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response("", { status: 200 }))
+      .mockResolvedValueOnce(Response.json({
+        snapshots: [],
+        catalogRoot: `0x${"11".repeat(32)}`,
+        publicationWindow: { observedAt: 1, maximumAgeSeconds: 60, expiresAt: 61 },
+        publicationTicket: "ticket",
+        sourceBlocks: { protected: null, median: 1 },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PayoClient(async () => "a".repeat(64));
+
+    const result = await client.getPayrollFxCatalog({
+      organizationId: "0198ddf0-9c00-7000-8000-000000000002",
+      medianTokens: ["STRK"],
+      protectedTokens: [],
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.catalogRoot).toBe(`0x${"11".repeat(32)}`);
+  });
+
+  it("reports an actionable typed error instead of exposing a JSON parser failure", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => new Response("", { status: 200 })));
+    const client = new PayoClient(async () => "a".repeat(64));
+
+    await expect(client.getPayrollFxCatalog({
+      organizationId: "0198ddf0-9c00-7000-8000-000000000002",
+      medianTokens: ["STRK"],
+      protectedTokens: [],
+    })).rejects.toMatchObject({
+      code: "PAYO_API_EMPTY_RESPONSE",
+      status: 502,
+      message: expect.stringContaining("safe to retry"),
+    });
+  });
+});

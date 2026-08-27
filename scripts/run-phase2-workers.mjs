@@ -1,4 +1,7 @@
-const baseUrl = (process.env.PAYO_API_URL ?? "http://127.0.0.1:3000").replace(/\/$/, "");
+// Keep co-located worker traffic off Fly's public proxy. PAYO_API_URL is the
+// browser/authentication origin and must not make the machine call itself over
+// the public network for every poll.
+const baseUrl = (process.env.PAYO_WORKER_API_URL ?? "http://127.0.0.1:3000").replace(/\/$/, "");
 const workerSecret = process.env.PAYO_WORKER_SECRET;
 
 if (!workerSecret || workerSecret.length < 32) {

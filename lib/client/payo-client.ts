@@ -38,6 +38,42 @@ export class PayoApiError extends Error {
   }
 }
 
+async function parseApiResponse(
+  response: Response,
+  fallbackMessage: string,
+  fallbackCode: string,
+): Promise<unknown> {
+  const rawBody = await response.text();
+  if (!rawBody.trim()) {
+    throw new PayoApiError(
+      response.ok
+        ? "PAYO received an empty response from the service. The request is safe to retry."
+        : `${fallbackMessage} The service returned an empty response.`,
+      `${fallbackCode}_EMPTY_RESPONSE`,
+      response.ok ? 502 : response.status,
+    );
+  }
+  try {
+    return JSON.parse(rawBody) as unknown;
+  } catch {
+    throw new PayoApiError(
+      `${fallbackMessage} The service returned an invalid response.`,
+      `${fallbackCode}_INVALID_RESPONSE`,
+      response.ok ? 502 : response.status,
+    );
+  }
+}
+
+function retryableApiRead(error: unknown): boolean {
+  return error instanceof PayoApiError
+    ? error.status === 408 || error.status === 429 || error.status >= 500
+    : error instanceof TypeError;
+}
+
+function retryDelay(attempt: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+}
+
 export type PreparedEncryptedRun = {
   id: string;
   organizationId: string;
@@ -195,24 +231,43 @@ export class PayoClient {
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const accessToken = await this.getAccessToken();
     if (!accessToken) throw new Error("Sign in before accessing the PAYO vault.");
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      ...init,
-      headers: {
-        authorization: `Bearer ${accessToken}`,
-        accept: "application/json",
-        ...(init.body ? { "content-type": "application/json" } : {}),
-        ...init.headers,
-      },
-    });
-    const body = await response.json();
-    if (!response.ok) {
-      throw new PayoApiError(
-        body?.error?.message ?? "PAYO API request failed.",
-        body?.error?.code ?? "PAYO_API_ERROR",
-        response.status,
-      );
+    const method = (init.method ?? "GET").toUpperCase();
+    const maximumAttempts = method === "GET" || method === "HEAD" ? 3 : 1;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < maximumAttempts; attempt += 1) {
+      try {
+        const response = await fetch(`${this.baseUrl}${path}`, {
+          ...init,
+          headers: {
+            authorization: `Bearer ${accessToken}`,
+            accept: "application/json",
+            ...(init.body ? { "content-type": "application/json" } : {}),
+            ...init.headers,
+          },
+        });
+        const body = await parseApiResponse(response, "PAYO API request failed.", "PAYO_API");
+        if (!response.ok) {
+          const apiBody = body as { error?: { message?: string; code?: string } };
+          throw new PayoApiError(
+            apiBody?.error?.message ?? "PAYO API request failed.",
+            apiBody?.error?.code ?? "PAYO_API_ERROR",
+            response.status,
+          );
+        }
+        return body as T;
+      } catch (error) {
+        lastError = error instanceof TypeError
+          ? new PayoApiError(
+              "PAYO could not reach its data service. The request is safe to retry.",
+              "PAYO_API_NETWORK_ERROR",
+              503,
+            )
+          : error;
+        if (attempt + 1 >= maximumAttempts || !retryableApiRead(lastError)) throw lastError;
+        await retryDelay(attempt);
+      }
     }
-    return body as T;
+    throw lastError;
   }
 
   private async unauthenticatedRequest<T>(path: string, init: RequestInit): Promise<T> {
@@ -224,11 +279,12 @@ export class PayoClient {
         ...init.headers,
       },
     });
-    const body = await response.json();
+    const body = await parseApiResponse(response, "PAYO authentication failed.", "AUTH");
     if (!response.ok) {
+      const apiBody = body as { error?: { message?: string; code?: string } };
       throw new PayoApiError(
-        body?.error?.message ?? "PAYO authentication failed.",
-        body?.error?.code ?? "AUTH_ERROR",
+        apiBody?.error?.message ?? "PAYO authentication failed.",
+        apiBody?.error?.code ?? "AUTH_ERROR",
         response.status,
       );
     }
@@ -256,10 +312,11 @@ export class PayoClient {
       headers: { authorization: `Bearer ${accessToken}` },
     });
     if (!response.ok && response.status !== 401) {
-      const body = await response.json();
+      const body = await parseApiResponse(response, "PAYO session revocation failed.", "AUTH");
+      const apiBody = body as { error?: { message?: string; code?: string } };
       throw new PayoApiError(
-        body?.error?.message ?? "PAYO session revocation failed.",
-        body?.error?.code ?? "AUTH_ERROR",
+        apiBody?.error?.message ?? "PAYO session revocation failed.",
+        apiBody?.error?.code ?? "AUTH_ERROR",
         response.status,
       );
     }
@@ -462,11 +519,12 @@ export class PayoClient {
           0,
         );
       }
-      const body = await response.json();
+      const body = await parseApiResponse(response, "The self-hosted prover request failed.", "PROVER");
       if (!response.ok) {
+        const apiBody = body as { error?: { message?: string; code?: string } };
         throw new PayoApiError(
-          body?.error?.message ?? "The self-hosted prover request failed.",
-          body?.error?.code ?? "PROVER_ERROR",
+          apiBody?.error?.message ?? "The self-hosted prover request failed.",
+          apiBody?.error?.code ?? "PROVER_ERROR",
           response.status,
         );
       }
