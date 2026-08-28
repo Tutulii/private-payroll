@@ -290,12 +290,15 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
     const request = route.request().postDataJSON() as {
       id?: number | string;
       method?: string;
-      params?: Array<{ entry_point_selector?: string }>;
+      params?: unknown;
     };
+    const callsProofStatus = JSON.stringify(request.params ?? null)
+      .toLowerCase()
+      .includes(proofStatusSelector.toLowerCase());
     const result = request.method === "starknet_chainId"
       ? "0x1"
       : request.method === "starknet_call"
-        ? [BigInt(request.params?.[0]?.entry_point_selector ?? "0") === BigInt(proofStatusSelector) ? "0x5" : "0x1"]
+        ? [callsProofStatus ? "0x5" : "0x1"]
         : {
           type: "INVOKE",
           transaction_hash: "0x456",
