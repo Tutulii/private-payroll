@@ -36,12 +36,44 @@ function authAudience(request: Request): string {
   return origin;
 }
 
-function authProvider(): RpcProvider {
-  const nodeUrl = process.env.STARKNET_RPC_URL ?? process.env.NEXT_PUBLIC_STARKNET_RPC_URL;
-  if (!nodeUrl) {
+type ReadySignatureProvider = Pick<RpcProvider, "verifyMessageInStarknet">;
+
+function authProviders(): ReadySignatureProvider[] {
+  const nodeUrls = [
+    process.env.STARKNET_RPC_URL,
+    process.env.NEXT_PUBLIC_STARKNET_RPC_URL,
+  ]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+  const uniqueNodeUrls = [...new Set(nodeUrls)];
+  if (uniqueNodeUrls.length === 0) {
     throw new ApiError(503, "The server-side Starknet RPC is not configured.", "AUTH_NOT_CONFIGURED");
   }
-  return new RpcProvider({ nodeUrl });
+  return uniqueNodeUrls.map((nodeUrl) => new RpcProvider({ nodeUrl }));
+}
+
+export async function verifyReadySignatureWithProviders(input: {
+  typedData: ReturnType<typeof buildReadyAuthTypedData>;
+  signature: string[];
+  walletAddress: string;
+}, providers: ReadySignatureProvider[]): Promise<boolean> {
+  if (providers.length === 0) {
+    throw new Error("No Ready signature RPC provider is available.");
+  }
+  let lastError: unknown;
+  for (const provider of providers) {
+    try {
+      // Invalid signatures fail immediately; only provider exceptions fall back.
+      return await provider.verifyMessageInStarknet(
+        input.typedData,
+        input.signature,
+        input.walletAddress,
+      );
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError ?? new Error("Ready signature verification failed without an RPC response.");
 }
 
 function sessionLifetimeMilliseconds(): number {
@@ -145,10 +177,9 @@ export async function verifyReadyAuthenticationChallenge(input: {
   typedData: ReturnType<typeof buildReadyAuthTypedData>;
   signature: string[];
   walletAddress: string;
-}) => Promise<boolean> = async ({ typedData, signature, walletAddress }) => authProvider().verifyMessageInStarknet(
-  typedData,
-  signature,
-  walletAddress,
+}) => Promise<boolean> = async (verificationInput) => verifyReadySignatureWithProviders(
+  verificationInput,
+  authProviders(),
 )): Promise<ReadySessionPayload> {
   const database = getDatabase();
   const now = new Date();
