@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { encryptedVaultRecordSchema } from "@/lib/crypto/vault";
-import { commitmentSchema, uuidV7Schema } from "@/lib/domain/records";
+import { commitmentSchema, uuidV7Schema, vaultPrincipalIdSchema } from "@/lib/domain/records";
 import { createEncryptedReceipt, listEncryptedReceipts } from "@/lib/persistence/receipt-repository";
 import { requirePrincipal } from "@/lib/server/auth";
 import { apiFailure, readJson } from "@/lib/server/http";
@@ -11,7 +11,7 @@ const createReceiptSchema = z.object({
   runId: uuidV7Schema,
   settlementId: uuidV7Schema,
   scope: z.enum(["employer", "worker", "auditor", "tax"]),
-  granteePrincipalId: uuidV7Schema,
+  granteePrincipalId: vaultPrincipalIdSchema,
   packageCommitment: commitmentSchema,
   expiresAt: z.string().datetime().optional(),
   envelope: encryptedVaultRecordSchema,

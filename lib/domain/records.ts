@@ -19,6 +19,15 @@ export const uuidV7Schema = z
     "Expected an RFC 9562 UUIDv7 identifier.",
   );
 
+// Vault wrapping identities predate the canonical record model and may be a
+// Ready `starknet:...` principal, a DID, or a legacy UUID. They are stable
+// cryptographic recipient identifiers, not persistent record IDs.
+export const vaultPrincipalIdSchema = z
+  .string()
+  .min(1)
+  .max(160)
+  .refine((value) => value.trim() === value, "A vault principal ID cannot contain surrounding whitespace.");
+
 export const commitmentSchema = z.string().regex(/^0x[0-9a-fA-F]{64}$/);
 export const starknetAddressSchema = z.string().regex(/^0x[0-9a-fA-F]+$/);
 
@@ -176,7 +185,7 @@ export const receiptRecordSchema = recordHeaderSchema.extend({
   runId: uuidV7Schema,
   settlementId: uuidV7Schema,
   scope: z.enum(["employer", "worker", "auditor", "tax"]),
-  granteePrincipalId: uuidV7Schema,
+  granteePrincipalId: vaultPrincipalIdSchema,
   packageCommitment: commitmentSchema,
   evidence: z.object({
     settlementState: settlementStateSchema,
@@ -196,7 +205,7 @@ export const receiptRecordSchema = recordHeaderSchema.extend({
 
 export const disclosureGrantRecordSchema = recordHeaderSchema.extend({
   runId: uuidV7Schema,
-  granteePrincipalId: uuidV7Schema,
+  granteePrincipalId: vaultPrincipalIdSchema,
   fieldScope: z.array(z.enum([
     "identity",
     "gross",

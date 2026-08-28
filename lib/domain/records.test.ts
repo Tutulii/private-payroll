@@ -3,6 +3,7 @@ import {
   generateUuidV7,
   remediationRecordSchema,
   uuidV7Schema,
+  vaultPrincipalIdSchema,
   vaultRecoveryPackageSchema,
   wageClaimRecordSchema,
 } from "./records";
@@ -19,6 +20,14 @@ describe("canonical record schemas", () => {
 
   it("rejects UUIDv4 identifiers at the persistent-record boundary", () => {
     expect(() => uuidV7Schema.parse("550e8400-e29b-41d4-a716-446655440000")).toThrow();
+  });
+
+  it("accepts legacy and Ready vault identities without treating them as record IDs", () => {
+    expect(vaultPrincipalIdSchema.parse("550e8400-e29b-41d4-a716-446655440000"))
+      .toBe("550e8400-e29b-41d4-a716-446655440000");
+    expect(vaultPrincipalIdSchema.parse("starknet:0x534e5f4d41494e:0x123"))
+      .toBe("starknet:0x534e5f4d41494e:0x123");
+    expect(() => vaultPrincipalIdSchema.parse(" principal-with-spaces ")).toThrow();
   });
 
   it("requires memory-hard encrypted recovery packages", () => {

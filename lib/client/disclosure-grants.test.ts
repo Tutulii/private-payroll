@@ -4,7 +4,7 @@ import { createEncryptedDisclosureGrant } from "./disclosure-grants";
 
 const organizationId = "018f1000-0000-7000-8000-000000000001";
 const runId = "018f1000-0000-7000-8000-000000000002";
-const granteePrincipalId = "018f1000-0000-7000-8000-000000000003";
+const granteePrincipalId = "550e8400-e29b-41d4-a716-446655440000";
 
 describe("encrypted disclosure grants", () => {
   it("wraps the grant to issuer and recipient without uploading the recipient key in plaintext", async () => {

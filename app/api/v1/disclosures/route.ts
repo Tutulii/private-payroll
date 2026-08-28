@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { encryptedVaultRecordSchema } from "@/lib/crypto/vault";
-import { uuidV7Schema } from "@/lib/domain/records";
+import { uuidV7Schema, vaultPrincipalIdSchema } from "@/lib/domain/records";
 import { createDisclosureGrant, listDisclosureGrants, revokeDisclosureGrant } from "@/lib/persistence/receipt-repository";
 import { requirePrincipal } from "@/lib/server/auth";
 import { apiFailure, readJson } from "@/lib/server/http";
@@ -14,7 +14,7 @@ const createDisclosureSchema = z.object({
   id: uuidV7Schema,
   organizationId: uuidV7Schema,
   runId: uuidV7Schema,
-  granteePrincipalId: uuidV7Schema,
+  granteePrincipalId: vaultPrincipalIdSchema,
   fieldScope: fieldScopeSchema,
   validAfter: z.string().datetime(),
   expiresAt: z.string().datetime(),
