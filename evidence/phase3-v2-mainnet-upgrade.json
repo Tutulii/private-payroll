@@ -1,0 +1,153 @@
+{
+  "schemaVersion": 1,
+  "network": "starknet-mainnet",
+  "plan": {
+    "schemaVersion": 1,
+    "generatedAt": "2026-08-28T00:53:27.124Z",
+    "network": "starknet-mainnet",
+    "chainId": "0x534e5f4d41494e",
+    "poolAddress": "0x40337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+    "deployerAddress": "0x126a7a572cf8935d069af937e9f7b27a24949e271e1fbccfe4de0c0d8dc8ea9",
+    "liveTopology": {
+      "policyRegistry": {
+        "classHash": "0x6366141e5ae47f2e170409c6babaa4d6ae220b5b255f8dcbf9b0173f8681cfd",
+        "salt": "0x7061796f2d6d756c746974656e616e742d706f6c6963792d7631",
+        "constructorCalldata": [
+          "0x126a7a572cf8935d069af937e9f7b27a24949e271e1fbccfe4de0c0d8dc8ea9"
+        ],
+        "address": "0x34701f573096b7bab0e5678e1ed2f17a87c8d56eb5f4d70bcf2197bab8e4477"
+      },
+      "obligationRegistry": {
+        "classHash": "0x50ac78b67fd69d7e2a892dc51014159d7e69fe1770c3f4f33add21131aa2a0b",
+        "compiledClassHash": "0x55ca6b5a08b34b53d2626ce238e0e605ee06bbe77b705055e59c6193c8f8f53",
+        "salt": "0x7061796f2d74656e616e742d6f626c69676174696f6e732d7631",
+        "constructorCalldata": [
+          "0x126a7a572cf8935d069af937e9f7b27a24949e271e1fbccfe4de0c0d8dc8ea9"
+        ],
+        "address": "0x44b22f1a17d2710c2f51ed0b37b8b0ff8435262d3c8c0f2f17be07c84ac23b5"
+      },
+      "payrollSeal": {
+        "classHash": "0x1500b1e66ef8c1528f5ea301cbb0420b28a19742d927c5d595ce567b0266148",
+        "salt": "0x7061796f2d6d756c746974656e616e742d7365616c2d7631",
+        "constructorCalldata": [
+          "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+          "0x34701f573096b7bab0e5678e1ed2f17a87c8d56eb5f4d70bcf2197bab8e4477",
+          "0x44b22f1a17d2710c2f51ed0b37b8b0ff8435262d3c8c0f2f17be07c84ac23b5",
+          "0x534e5f4d41494e"
+        ],
+        "address": "0x603c607bf001e279365fd141901ba09b95f72f5a72506742b30f6db32c36ac7"
+      },
+      "previousAdvancedBundle": "0x26b27ef2b9cbfc11782689b3da77a0d42c64050277d77ccffe22907ed64c07a",
+      "claimBundle": "0x7825f82260d4852279e54930ccac1afecf3364c87bf58216e8f4a65e73f414",
+      "remediationBundle": "0x37673733211e16d2ea42ba85eb5eb6bf9913424a96136145834cd9d1d834b71"
+    },
+    "circuit": {
+      "proofVersion": 2,
+      "circuitSha256": "0x755bb9374c9cfc72cbd36b1a3e1d8c5e2792b11b8b08e190d2743dc508ebbe41",
+      "verificationKeySha256": "0x50063de39c922bf1fe1089ff8b5e6839a56387da99e82e9071f067b9f72c90d7",
+      "maximumInvokeCalldataFelts": 5000,
+      "submissionOverheadFelts": 8,
+      "maximumProofCalldataFelts": 4992,
+      "measuredProofCalldataFelts": 3223
+    },
+    "contracts": {
+      "advancedVerifier": {
+        "address": "0x6845068feb530dbac0e730532df5fefb744c5caf4e1769e642bf1aec63ee043",
+        "salt": "0x7061796f2d76322d6d65726765642d76657269666965722d7631",
+        "constructorCalldata": [],
+        "classHash": "0xee7996f9fed69e8cb7248327c4391ca5847faa297926bf33592b7022520ba3",
+        "compiledClassHash": "0x483da4668e950f7b79b45a4dc74fe6df1a5b42cefcf308a466928b191d83148",
+        "sierraSha256": "0b47e04f7d2f3870eae40d0eecbbdebe3790ee93dd93bc2467903d5dd8a1e5b9",
+        "casmSha256": "b64e782f4611ca0a9782d9bea03e296d52fd15733a7f4e0fc79e3979a9a1b142"
+      },
+      "advancedBundle": {
+        "address": "0xeba326f15f73968026bd12007220d88104fdcb322a56ad8c69fbe8a5350e18",
+        "salt": "0x7061796f2d76322d6d65726765642d62756e646c652d7631",
+        "constructorCalldata": [
+          "0x6845068feb530dbac0e730532df5fefb744c5caf4e1769e642bf1aec63ee043"
+        ],
+        "classHash": "0x451e59b2f2e454a5a53914ca317069d84faf504498e1d56609a78fb626da2bc",
+        "compiledClassHash": "0x651e63240fbef02eed4c03ed689e07214814e169416102abf7c034f9ba95a39",
+        "sierraSha256": "db071092f278df0fdcf744b3c50011f7c42a528269c96a4925a0b3662b7a1297",
+        "casmSha256": "64baf5e6233973fadc3c37a89f8664942da4565aa6f22a511bbb98d116669476"
+      }
+    },
+    "source": "circuits/payroll_integrity/target/payo-phase3-v2-upgrade-plan.json"
+  },
+  "declaration": {
+    "transactionHash": "0x5eeb6853c70f575b88d6f7c47d9bbc5f497e0b7fe12f93fc0ae96e3fe0da038",
+    "classHash": "0xee7996f9fed69e8cb7248327c4391ca5847faa297926bf33592b7022520ba3",
+    "simulatedFeeFri": "352482473047483760256",
+    "actualFeeFri": "142419986649573403283",
+    "blockNumber": 13971250
+  },
+  "updatedAt": "2026-08-28T01:22:23.989Z",
+  "deployment": {
+    "names": [
+      "advancedVerifier",
+      "advancedBundle"
+    ],
+    "transactionHash": "0x741cec7856f28e3f93336c0e8bb90c1b0c25cf3f5ef3791e624e203cf496b8f",
+    "simulatedFeeFri": "173553329316456064",
+    "actualFeeFri": "82951309305894383",
+    "blockNumber": 13971292
+  },
+  "proofVerification": {
+    "passed": true,
+    "observedAt": "2026-08-28T01:21:33.086Z",
+    "circuitSha256": "0x755bb9374c9cfc72cbd36b1a3e1d8c5e2792b11b8b08e190d2743dc508ebbe41",
+    "bundleAddress": "0xeba326f15f73968026bd12007220d88104fdcb322a56ad8c69fbe8a5350e18",
+    "checks": [
+      {
+        "shardIndex": 0,
+        "calldataFelts": 3223,
+        "tamperRejected": true
+      },
+      {
+        "shardIndex": 1,
+        "calldataFelts": 3223,
+        "tamperRejected": true
+      }
+    ]
+  },
+  "activation": {
+    "transactionHash": "0x5b60c1ed46ba781cbba0da6d1a9acecd226ebfe822ce2869be124564f555518",
+    "simulatedFeeFri": "95910855330062812",
+    "actualFeeFri": "41960643943093529",
+    "blockNumber": 13971353,
+    "validAfter": 1787880089,
+    "expiresAt": 1819416089,
+    "activeBundle": "0xeba326f15f73968026bd12007220d88104fdcb322a56ad8c69fbe8a5350e18"
+  },
+  "verification": {
+    "passed": true,
+    "observedAt": "2026-08-28T01:22:23.987Z",
+    "status": {
+      "observedAt": "2026-08-28T01:22:17.329Z",
+      "blockNumber": 13971374,
+      "declarationComplete": true,
+      "verifierDeployed": true,
+      "bundleDeployed": true,
+      "activeBundle": "0xeba326f15f73968026bd12007220d88104fdcb322a56ad8c69fbe8a5350e18",
+      "expectedBundleActive": true
+    },
+    "proofVerification": {
+      "passed": true,
+      "observedAt": "2026-08-28T01:22:23.986Z",
+      "circuitSha256": "0x755bb9374c9cfc72cbd36b1a3e1d8c5e2792b11b8b08e190d2743dc508ebbe41",
+      "bundleAddress": "0xeba326f15f73968026bd12007220d88104fdcb322a56ad8c69fbe8a5350e18",
+      "checks": [
+        {
+          "shardIndex": 0,
+          "calldataFelts": 3223,
+          "tamperRejected": true
+        },
+        {
+          "shardIndex": 1,
+          "calldataFelts": 3223,
+          "tamperRejected": true
+        }
+      ]
+    }
+  }
+}

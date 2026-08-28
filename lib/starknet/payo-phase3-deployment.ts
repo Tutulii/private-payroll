@@ -9,8 +9,8 @@ export const PAYO_PHASE3_MAINNET_DEPLOYMENT = Object.freeze({
       name: "Advanced payroll",
       mode: 0,
       proofVersion: 2,
-      bundleAddress: "0x26b27ef2b9cbfc11782689b3da77a0d42c64050277d77ccffe22907ed64c07a",
-      bundleClassHash: "0x4aa085123d4a93f531b112e4928216b58c583373b28db9da3e4d57f97b8259f",
+      bundleAddress: "0xeba326f15f73968026bd12007220d88104fdcb322a56ad8c69fbe8a5350e18",
+      bundleClassHash: "0x451e59b2f2e454a5a53914ca317069d84faf504498e1d56609a78fb626da2bc",
     }),
     Object.freeze({
       name: "Private wage claim",

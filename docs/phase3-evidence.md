@@ -4,12 +4,13 @@ Updated: 2026-08-28
 
 This file records what has been exercised, not what merely exists as source.
 The rendered UI, encryption, proving, Devnet settlement, scoped disclosure, and
-negative-rejection parts of the Phase 3 gate have now been exercised. Phase 3
-is still **not complete** under the strict gate in `MASTER_PLAN.md`. In addition
-to Devnet's missing full transaction-proof mode, the corrected transaction-safe
-v2 verifier has not yet been declared, deployed, activated, and exercised by a
-fresh Mainnet payroll. The exact limitations and evidence that must not be
-overstated are recorded below.
+negative-rejection parts of the Phase 3 gate have now been exercised. The
+transaction-safe merged-v2 verifier is declared, deployed, proof-read-back
+verified, and active on Mainnet. Phase 3 is still **not complete** under the
+strict gate in `MASTER_PLAN.md`: PAYO/Fly must be rolled to this active bundle
+and a fresh advanced payroll must complete through Ready, durable finality, and
+receiver observation. Devnet's missing full transaction-proof mode remains a
+separate limitation.
 
 ## Transaction-safe merged-v2 correction
 
@@ -47,13 +48,22 @@ and browser worker now produce only this proof and reject any raw proof above
   file and 24 tests were intentionally skipped; typecheck and lint passed.
 
 The guarded upgrade plan is separate from the historical deployment planner.
-It reads and verifies the live tenant-aware seal `0x603c…6ac7`, policy registry
-`0x3470…4477`, and tenant obligation registry `0x44b2…23b5`; it deploys
-only the new generated verifier and a generic single-verifier bundle. The
-current live v2 mapping is not modified until the new on-chain verifier accepts
-both proof shards. The latest declaration estimate was 350.273334820055 STRK
-against a deployment-wallet balance of 176.59624815639768 STRK, so no Mainnet
-mutation was attempted.
+It verified the live tenant-aware seal `0x603c…6ac7`, policy registry
+`0x3470…4477`, and tenant obligation registry `0x44b2…23b5`, then deployed
+only the generated verifier and a generic single-verifier bundle. The registry
+was not modified until both committed Mainnet-bound shards passed the deployed
+verifier and deliberate calldata tampering was rejected.
+
+- Declaration: `0x5eeb6853c70f575b88d6f7c47d9bbc5f497e0b7fe12f93fc0ae96e3fe0da038`;
+  class `0xee7996f9fed69e8cb7248327c4391ca5847faa297926bf33592b7022520ba3`.
+- Atomic verifier and bundle deployment:
+  `0x741cec7856f28e3f93336c0e8bb90c1b0c25cf3f5ef3791e624e203cf496b8f`.
+- Verifier `0x6845068feb530dbac0e730532df5fefb744c5caf4e1769e642bf1aec63ee043`;
+  bundle `0xeba326f15f73968026bd12007220d88104fdcb322a56ad8c69fbe8a5350e18`.
+- Registry activation: `0x5b60c1ed46ba781cbba0da6d1a9acecd226ebfe822ce2869be124564f555518`.
+- Independent post-activation read-back passed at block 13,971,374. Exact
+  artifacts, fees, class hashes, proof checks, and validity window are recorded
+  in `evidence/phase3-v2-mainnet-upgrade.json`.
 
 ## Standalone Starknet Devnet evidence
 
@@ -368,10 +378,10 @@ This is why Phase 3 is not reported as complete:
   implement full transaction-proof verification. Running the pool with that
   proof layer disabled is partial evidence under the strict no-mock/no-disabled
   completion rule.
-- The transaction-safe merged-v2 verifier still requires its declaration,
-  two-instance deployment, proof read-back, registry activation, Fly rollout,
-  and a fresh end-to-end advanced payroll. The declaration fee bound currently
-  exceeds the deployment-wallet balance, so this remains an explicit funded
-  Mainnet gate rather than an inferred success.
+- The transaction-safe merged-v2 verifier is active and independently
+  proof-read-back verified on Mainnet. PAYO/Fly still must be rolled to the new
+  bundle and a fresh advanced payroll must reach Ready confirmation, durable
+  finality, both on-chain verifier shards, terminal UI state, and receiver-side
+  private balance observation.
 - Phase 5 still separately requires the final public Mainnet demonstration set,
   release metadata, and video; none of those release claims are inferred here.
