@@ -5,6 +5,7 @@ primary_region = "sin"
   dockerfile = "Dockerfile.prover"
 
 [env]
+  PAYO_AUTH_AUDIENCE = "https://private-payroll.fly.dev"
   PAYO_PROVER_THREADS = "2"
   PAYO_SELF_HOSTED_PROVER_ENABLED = "true"
   PAYO_PROVER_ALLOWED_ORIGINS = "https://private-payroll.fly.dev,http://localhost:3000,http://127.0.0.1:3000"
