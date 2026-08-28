@@ -6,11 +6,11 @@ This file records what has been exercised, not what merely exists as source.
 The rendered UI, encryption, proving, Devnet settlement, scoped disclosure, and
 negative-rejection parts of the Phase 3 gate have now been exercised. The
 transaction-safe merged-v2 verifier is declared, deployed, proof-read-back
-verified, and active on Mainnet. Phase 3 is still **not complete** under the
-strict gate in `MASTER_PLAN.md`: PAYO/Fly must be rolled to this active bundle
-and a fresh advanced payroll must complete through Ready, durable finality, and
-receiver observation. Devnet's missing full transaction-proof mode remains a
-separate limitation.
+verified, active on Mainnet, and wired into the live PAYO/Fly web and prover
+services. Phase 3 is still **not complete** under the strict gate in
+`MASTER_PLAN.md`: a fresh advanced payroll must complete through Ready, durable
+finality, and receiver observation. Devnet's missing full transaction-proof
+mode remains a separate limitation.
 
 ## Transaction-safe merged-v2 correction
 
@@ -64,6 +64,30 @@ verifier and deliberate calldata tampering was rejected.
 - Independent post-activation read-back passed at block 13,971,374. Exact
   artifacts, fees, class hashes, proof checks, and validity window are recorded
   in `evidence/phase3-v2-mainnet-upgrade.json`.
+
+## Hosted v2 rollout evidence
+
+The source containing the active bundle was rolled first to the isolated
+32-GiB prover and then to the PAYO web service on Fly. The prover machine
+reached Fly's good state and `/api/health` returned `ok`; the web release
+database migration completed successfully, its machine reached good state,
+and `/api/health` returned `ok`. `/payroll` returned HTTP 200.
+
+The served payroll JavaScript was fetched independently after rollout and
+contained both the expected prover origin
+`https://private-payroll-prover.fly.dev` and active v2 bundle
+`0xeba326f15f73968026bd12007220d88104fdcb322a56ad8c69fbe8a5350e18`.
+The prover's browser preflight returned HTTP 204 with that PAYO origin as the
+sole allowed origin, and an unauthenticated job read returned `AUTH_REQUIRED`,
+showing that the endpoint is enabled but remains session protected. Commit
+`b41401b` passed typecheck, tests, rendered production Phase 3 controls,
+UI-to-proof evidence verification, lint, roadmap status verification, and the
+production build in
+[GitHub Actions run 33133713879](https://github.com/Tutulii/private-payroll/actions/runs/33133713879).
+
+This proves deployment and runtime wiring, not the remaining Ready-signed
+advanced payroll. That fresh private transaction, durable verifier finality,
+and receiver balance observation remain the completion gate.
 
 ## Standalone Starknet Devnet evidence
 
