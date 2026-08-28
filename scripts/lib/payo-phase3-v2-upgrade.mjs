@@ -87,6 +87,8 @@ export function buildPayoPhase3V2UpgradePlan({
       proofVersion: 2,
       circuitSha256: "0x755bb9374c9cfc72cbd36b1a3e1d8c5e2792b11b8b08e190d2743dc508ebbe41",
       verificationKeySha256: "0x50063de39c922bf1fe1089ff8b5e6839a56387da99e82e9071f067b9f72c90d7",
+      maximumInvokeCalldataFelts: 5000,
+      submissionOverheadFelts: 8,
       maximumProofCalldataFelts: 4992,
       measuredProofCalldataFelts: 3223,
     },
@@ -129,7 +131,11 @@ export function assertPayoPhase3V2UpgradePlan(plan, {
   ) {
     throw new Error("The v2 upgrade must deploy a new verifier topology.");
   }
-  if (plan.circuit.measuredProofCalldataFelts > plan.circuit.maximumProofCalldataFelts) {
+  if (
+    plan.circuit.maximumProofCalldataFelts + plan.circuit.submissionOverheadFelts
+      !== plan.circuit.maximumInvokeCalldataFelts
+    || plan.circuit.measuredProofCalldataFelts > plan.circuit.maximumProofCalldataFelts
+  ) {
     throw new Error("The reviewed v2 proof exceeds the Mainnet calldata budget.");
   }
 }
@@ -172,7 +178,10 @@ export function assertV2UpgradeProofSummary(plan, summary) {
     if (
       shard?.shardIndex !== shardIndex
       || shard?.proofCalldataFelts !== plan.circuit.measuredProofCalldataFelts
-      || shard?.resultingInvokeCalldataFelts > 5_000
+      || !Number.isInteger(shard?.resultingInvokeCalldataFelts)
+      || shard.resultingInvokeCalldataFelts
+        !== shard.proofCalldataFelts + plan.circuit.submissionOverheadFelts
+      || shard.resultingInvokeCalldataFelts > plan.circuit.maximumInvokeCalldataFelts
       || BigInt(publicInputs?.chainId ?? 0) !== BigInt(plan.chainId)
       || BigInt(publicInputs?.sealAddress ?? 0) !== BigInt(plan.liveTopology.payrollSeal.address)
       || BigInt(publicInputs?.proofVersion ?? 0) !== 2n

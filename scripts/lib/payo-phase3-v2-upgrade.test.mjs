@@ -117,6 +117,14 @@ describe("Phase 3 merged-v2 Mainnet upgrade plan", () => {
     const wrongSeal = structuredClone(summary);
     wrongSeal.shards[1].publicInputs.sealAddress = "0x999";
     expect(() => assertV2UpgradeProofSummary(plan, wrongSeal)).toThrow(/deployment binding/);
+
+    const missingInvokeSize = structuredClone(summary);
+    delete missingInvokeSize.shards[0].resultingInvokeCalldataFelts;
+    expect(() => assertV2UpgradeProofSummary(plan, missingInvokeSize)).toThrow(/calldata budget/);
+
+    const inconsistentInvokeSize = structuredClone(summary);
+    inconsistentInvokeSize.shards[1].resultingInvokeCalldataFelts = 3_232;
+    expect(() => assertV2UpgradeProofSummary(plan, inconsistentInvokeSize)).toThrow(/calldata budget/);
   });
 
 });
