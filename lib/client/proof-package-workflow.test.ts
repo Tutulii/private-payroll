@@ -293,6 +293,32 @@ describe("proof package workflow", () => {
     });
   });
 
+  it("creates and decrypts an auditor package when the issuer is also the recipient", async () => {
+    const { issuer, client, createDisclosureGrant } = await fixture();
+    const result = await createProofPackageForSettlement({
+      client: client as never,
+      organizationId,
+      settlementId,
+      issuerPrincipal: issuer,
+      grantee: issuer,
+      scope: "auditor",
+      expiresAt: "2026-08-27T12:00:00.000Z",
+      now,
+    });
+
+    const grantRequest = createDisclosureGrant.mock.calls[0]?.[0];
+    expect(grantRequest.envelope.wrappedKeys).toHaveLength(1);
+    await expect(verifyRecipientProofPackageOffline({
+      encryptedPackage: result.encryptedPackage,
+      recipient: issuer,
+      currentGrant: result.grant,
+      at: now,
+    })).resolves.toMatchObject({
+      scope: "auditor",
+      fileNames: expect.arrayContaining(["journal.csv", "verification.json"]),
+    });
+  });
+
   it("refuses to disclose before both on-chain verifier shards complete", async () => {
     const { issuer, grantee, client, createDisclosureGrant } = await fixture("pending");
     await expect(createProofPackageForSettlement({

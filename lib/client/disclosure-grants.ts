@@ -26,6 +26,10 @@ export async function createEncryptedDisclosureGrant(input: {
     principalId: input.granteePrincipalId,
     publicKey: input.granteePublicKey,
   };
+  const samePrincipal = grantee.principalId === input.issuerPrincipal.principalId;
+  if (samePrincipal && grantee.publicKey !== input.issuerPrincipal.publicKey) {
+    throw new Error("The recipient public key does not match this PAYO principal.");
+  }
   const record = disclosureGrantRecordSchema.parse({
     schemaVersion: 1,
     id,
@@ -47,7 +51,7 @@ export async function createEncryptedDisclosureGrant(input: {
     organizationId: input.organizationId,
     recordType: "disclosure-grant",
     record,
-    principals: [input.issuerPrincipal, grantee],
+    principals: samePrincipal ? [input.issuerPrincipal] : [input.issuerPrincipal, grantee],
   });
   await input.client.createDisclosureGrant({
     id: record.id,

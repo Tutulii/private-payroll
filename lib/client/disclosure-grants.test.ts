@@ -42,4 +42,41 @@ describe("encrypted disclosure grants", () => {
     })).rejects.toThrow();
     expect(createDisclosureGrant).not.toHaveBeenCalled();
   });
+
+  it("wraps a self-recipient grant once instead of duplicating the issuer principal", async () => {
+    const issuer = generateVaultPrincipal("550e8400-e29b-41d4-a716-446655440000");
+    const createDisclosureGrant = vi.fn().mockResolvedValue({ grant: {} });
+    const result = await createEncryptedDisclosureGrant({
+      client: { createDisclosureGrant } as never,
+      organizationId,
+      runId,
+      granteePrincipalId: issuer.principalId,
+      granteePublicKey: issuer.publicKey,
+      issuerPrincipal: issuer,
+      expiresAt: "2026-08-25T12:00:00.000Z",
+      now: new Date("2026-08-24T12:00:00.000Z"),
+    });
+
+    expect(result.envelope.wrappedKeys).toHaveLength(1);
+    expect(result.envelope.wrappedKeys[0]?.principalId).toBe(issuer.principalId);
+    expect(createDisclosureGrant).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a conflicting public key for the issuer principal", async () => {
+    const issuer = generateVaultPrincipal("550e8400-e29b-41d4-a716-446655440000");
+    const conflicting = generateVaultPrincipal(issuer.principalId);
+    const createDisclosureGrant = vi.fn();
+
+    await expect(createEncryptedDisclosureGrant({
+      client: { createDisclosureGrant } as never,
+      organizationId,
+      runId,
+      granteePrincipalId: issuer.principalId,
+      granteePublicKey: conflicting.publicKey,
+      issuerPrincipal: issuer,
+      expiresAt: "2026-08-25T12:00:00.000Z",
+      now: new Date("2026-08-24T12:00:00.000Z"),
+    })).rejects.toThrow(/public key does not match/i);
+    expect(createDisclosureGrant).not.toHaveBeenCalled();
+  });
 });
