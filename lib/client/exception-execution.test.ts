@@ -18,6 +18,7 @@ import {
   executeProofBoundWageClaim,
   executeProofBoundWageRemediation,
   resumeProofBoundWageClaim,
+  resumeProofBoundWageRemediation,
 } from "./exception-execution";
 import { prepareEncryptedPayrollIntegrityBundle } from "./proof-bundle";
 
@@ -583,5 +584,182 @@ describe("proof-bound wage-claim execution", () => {
       subjectRecordId: remediationId,
     }));
     expect(storeEncryptedRecord).toHaveBeenCalledTimes(2);
+  });
+
+  it("resumes a timed-out remediation from its saved proof and settlement", async () => {
+    const principal = generateVaultPrincipal("employer:remediation-resume");
+    const buildInput = sourceRequest();
+    const payroll = await buildPayrollIntegrityInputsFromSerialized(buildInput);
+    const claimSalt = `0x${"61".repeat(32)}` as const;
+    const remediationSalt = `0x${"62".repeat(32)}` as const;
+    const claimInput = await buildWageClaimInputs({
+      payroll,
+      agreementId,
+      claimKind: "missing_obligation",
+      claimSalt,
+      validityStart: nowUnix - 30n,
+      validityExpiry: nowUnix + 3_570n,
+    });
+    const remediationInput = await buildWageRemediationInputs({
+      claim: claimInput,
+      amountAtomic: claimInput.shortfallAtomic,
+      token: claimInput.token,
+      remediationSalt,
+      validityStart: nowUnix - 30n,
+      validityExpiry: nowUnix + 3_570n,
+    });
+    const proofCalldata = ["0x71", "0x72", "0x73"];
+    const proof: ProofWorkerSuccess = {
+      version: 1,
+      type: "proof-complete",
+      requestId: "remediation-resume-proof",
+      scheme: "ultra_keccak_zk_honk",
+      circuitSha256: WAGE_REMEDIATION_CIRCUIT_SHA256,
+      provingTimeMs: 100,
+      shards: [0, 1].map((shardIndex) => ({
+        shardIndex: shardIndex as 0 | 1,
+        proof: new Uint8Array([4, shardIndex + 1]),
+        proofCalldata,
+        calldataHash: hashProofCalldata(proofCalldata),
+        publicInputs: remediationInput.publicInputs[shardIndex],
+      })) as ProofWorkerSuccess["shards"],
+    };
+    const remediationId = "0198f300-0000-7000-8000-000000000007";
+    const proofBundleId = "0198f300-0000-7000-8000-000000000008";
+    const settlementId = "0198f300-0000-7000-8000-000000000011";
+    const bundle = prepareEncryptedPayrollIntegrityBundle({
+      id: proofBundleId,
+      organizationId,
+      runId,
+      revision: 1,
+      proof,
+      subjectRecordId: remediationId,
+      principals: [principal],
+    });
+    const runEnvelope = encryptVaultRecord(
+      { claimProofSource: { buildInput } },
+      {
+        schemaVersion: 1,
+        organizationId,
+        recordType: "payroll-run",
+        recordId: runId,
+        revision: 1,
+      },
+      [principal],
+    );
+    const payrollRecovery = payrollProofRecoveryClient(principal);
+    const recordSettlementSubmission = vi.fn().mockResolvedValue({ settlement: {} });
+    const enqueueProofVerification = vi.fn().mockResolvedValue({ proofVerification: {} });
+    const storeEncryptedRecord = vi.fn().mockResolvedValue({ record: {} });
+    const client = {
+      getSettlement: vi.fn().mockResolvedValue({
+        settlement: {
+          organizationId,
+          runId,
+          workflowType: "wage_remediation",
+          subjectRecordId: remediationId,
+          tokenTotalsCommitment: `0x${"63".repeat(32)}`,
+          transactionHash: null,
+          state: "approval_pending",
+        },
+      }),
+      getEncryptedRecord: vi.fn()
+        .mockResolvedValueOnce({ record: { envelope: bundle.envelope, revision: 1 } })
+        .mockResolvedValueOnce({ record: { envelope: payrollRecovery.payrollRecoveryEnvelope, revision: 1 } }),
+      getPayrollRun: vi.fn().mockResolvedValue({
+        run: {
+          id: runId,
+          organizationId,
+          state: "disputed",
+          agreementRoot: payroll.agreementRoot,
+          manifestRoot: payroll.manifestRoot,
+          policyRoot: payroll.policyRoot,
+          fxRoot: payroll.fxRoot,
+          runNullifier: payroll.runNullifier,
+          envelope: runEnvelope,
+        },
+      }),
+      getSealedPayrollRecovery: payrollRecovery.getSealedPayrollRecovery,
+      getProofVerification: payrollRecovery.getProofVerification,
+      checkDeploymentReadiness: vi.fn().mockResolvedValue({ readiness: { ready: true, checks: [] } }),
+      recordSettlementSubmission,
+      enqueueProofVerification,
+      storeEncryptedRecord,
+    } as unknown as PayoClient;
+    const claim = {
+      schemaVersion: 1 as const,
+      id: claimId,
+      organizationId,
+      revision: 3,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+      agreementId,
+      runId,
+      claimNullifier: claimInput.claimNullifier,
+      claimSalt,
+      claimKind: "missing_obligation" as const,
+      shortfallAtomic: claimInput.shortfallAtomic,
+      token: claimInput.token,
+      proofBundleId: "0198f300-0000-7000-8000-000000000005",
+      settlementId: "0198f300-0000-7000-8000-000000000006",
+      state: "submitted" as const,
+    };
+    const pending = {
+      version: 1 as const,
+      workflowType: "wage_remediation" as const,
+      organizationId,
+      runId,
+      subjectRecordId: remediationId,
+      proofBundleId,
+      settlementId,
+      walletRequestId: "0198f300-0000-7000-8000-000000000012",
+      idempotencyKey: "remediation-resume-approval",
+      tokenTotalsCommitment: `0x${"63".repeat(32)}` as const,
+      proofShards: [proof.shards[0].proofCalldata, proof.shards[1].proofCalldata] as [string[], string[]],
+      createdAt: now.toISOString(),
+    };
+    const submitException = vi.fn().mockResolvedValue("0xc3a3");
+    const persist = vi.fn();
+
+    const result = await resumeProofBoundWageRemediation({
+      client,
+      organizationId,
+      principal,
+      chainId: "0x1",
+      sealAddress: "0x12345",
+      claim,
+      remediation: {
+        schemaVersion: 1,
+        id: remediationId,
+        organizationId,
+        revision: 2,
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+        claimId,
+        runId,
+        agreementId,
+        claimNullifier: claimInput.claimNullifier,
+        amountAtomic: claimInput.shortfallAtomic,
+        token: claimInput.token,
+        remediationSalt,
+        proofBundleId,
+        state: "proven",
+      },
+      pendingSubmission: pending,
+      submitException,
+      persistPendingSubmission: persist,
+      now: () => now,
+    });
+
+    expect(result).toMatchObject({ workflowType: "wage_remediation", transactionHash: "0xc3a3" });
+    expect(submitException).toHaveBeenCalledWith(
+      "wage_remediation",
+      [{ address: "0x456", amount: "0.0005", token: "USDC" }],
+      expect.any(Object),
+    );
+    expect(recordSettlementSubmission).toHaveBeenCalledWith(settlementId, "0xc3a3");
+    expect(enqueueProofVerification).toHaveBeenCalledWith(expect.objectContaining({ settlementId, proofBundleId }));
+    expect(storeEncryptedRecord).toHaveBeenCalledOnce();
+    expect(persist).toHaveBeenLastCalledWith(null);
   });
 });

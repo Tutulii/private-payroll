@@ -55,6 +55,7 @@ import {
   executeProofBoundWageRemediation,
   parsePendingExceptionSubmission,
   resumeProofBoundWageClaim,
+  resumeProofBoundWageRemediation,
   type PendingExceptionSubmission,
 } from "@/lib/client/exception-execution";
 import type { PayrollExecutionStage } from "@/lib/client/payroll-execution";
@@ -820,6 +821,61 @@ export default function ActivityPage() {
     }
   };
 
+  const resumeRemediationApproval = async (remediation: RemediationRecord) => {
+    if (!vault.client || !vault.session || !pendingException) return;
+    const claim = claims.find(({ id }) => id === remediation.claimId);
+    if (!claim) {
+      const message = "The encrypted wage claim for this remediation is unavailable.";
+      setActivityError(message);
+      setExceptionFeedback({ tone: "error", message });
+      return;
+    }
+    setCreatingException(true);
+    setProvingClaimId(remediation.id);
+    setExceptionStage(null);
+    setActivityError("");
+    setExceptionFeedback(null);
+    try {
+      if (!starknet.isConnected || !starknet.isMainnet) {
+        throw new Error("Connect Ready on Starknet Mainnet before resuming private remediation.");
+      }
+      starknet.assertPrivateActionAvailable();
+      const sealAddress = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
+      if (!sealAddress) throw new Error("The proof-bound PAYO seal is not configured.");
+      const result = await resumeProofBoundWageRemediation({
+        client: vault.client,
+        organizationId: vault.session.organizationId,
+        principal: vault.session.principal,
+        chainId: starknet.chainId,
+        sealAddress,
+        claim,
+        remediation,
+        pendingSubmission: pendingException,
+        submitException: starknet.runProofBoundException,
+        onStage: setExceptionStage,
+        persistPendingSubmission: persistPendingException,
+      });
+      await refreshActivity();
+      const message = `Private remediation submitted · ${result.transactionHash.slice(0, 10)}…`;
+      setExceptionFeedback({ tone: "success", message });
+      notify(message);
+    } catch (error) {
+      await reportActivityOperationFailure({
+        error,
+        fallback: "The saved remediation approval could not be resumed.",
+        refresh: refreshActivity,
+        report: (message) => {
+          setActivityError(message);
+          setExceptionFeedback({ tone: "error", message });
+        },
+      });
+    } finally {
+      setCreatingException(false);
+      setProvingClaimId("");
+      setExceptionStage(null);
+    }
+  };
+
   const createRemediationDraft = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!vault.client || !vault.session) return;
@@ -998,6 +1054,7 @@ export default function ActivityPage() {
                 return <div key={remediation.id} className="private-exception-row">
                   <span><small>remediation</small><strong>{shortId(remediation.id)} · {remediation.state}</strong></span>
                   {remediation.state === "draft" && <button type="button" className="button button--soft" onClick={() => void settleRemediation(remediation)} disabled={creatingException || !starknet.isConnected || !runDisputed}>{provingClaimId === remediation.id ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />} Prove &amp; settle</button>}
+                  {remediation.state === "proven" && pendingException?.workflowType === "wage_remediation" && pendingException.subjectRecordId === remediation.id && <button type="button" className="button button--soft" onClick={() => void resumeRemediationApproval(remediation)} disabled={creatingException || !starknet.isConnected || !runDisputed}>{provingClaimId === remediation.id ? <LoaderCircle className="spin" size={15} /> : <WalletCards size={15} />} Resume Ready approval</button>}
                 </div>;
               })}
             </div>}

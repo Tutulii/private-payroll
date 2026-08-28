@@ -772,6 +772,8 @@ export async function executeProofBoundWageRemediation(input: {
     || !remediation.claimNullifier
     || !remediation.amountAtomic
     || !remediation.token
+    || !remediation.amountAtomic
+    || !remediation.token
     || BigInt(remediation.claimNullifier) !== BigInt(claim.claimNullifier ?? "0")
   ) {
     throw new Error("The encrypted remediation draft does not match its proved wage claim.");
@@ -1007,6 +1009,192 @@ export async function executeProofBoundWageRemediation(input: {
     },
     principals: [input.principal],
   });
+  input.persistPendingSubmission?.(null);
+  input.onStage?.("queued");
+  return { ...submitted, verificationQueued: true };
+}
+
+export async function resumeProofBoundWageRemediation(input: {
+  client: PayoClient;
+  organizationId: string;
+  principal: VaultPrincipalKeyPair;
+  chainId: string;
+  sealAddress: string;
+  claim: WageClaimRecord;
+  remediation: RemediationRecord;
+  pendingSubmission: PendingExceptionSubmission;
+  submitException: (
+    workflow: "wage_remediation",
+    recipients: Array<{ address: string; amount: string; token: "STRK" | "USDC" }>,
+    action: STRK20_INVOKE_ACTION,
+  ) => Promise<string>;
+  onStage?: (stage: PayrollExecutionStage) => void;
+  persistPendingSubmission?: (submission: PendingExceptionSubmission | null) => void;
+  now?: () => Date;
+}): Promise<WageClaimExecutionResult> {
+  const pending = parsePendingExceptionSubmission(input.pendingSubmission);
+  const claim = wageClaimRecordSchema.parse(input.claim);
+  const remediation = remediationRecordSchema.parse(input.remediation);
+  if (
+    pending.workflowType !== "wage_remediation"
+    || pending.organizationId !== input.organizationId
+    || pending.subjectRecordId !== remediation.id
+    || pending.runId !== remediation.runId
+    || remediation.organizationId !== input.organizationId
+    || remediation.claimId !== claim.id
+    || remediation.runId !== claim.runId
+    || remediation.agreementId !== claim.agreementId
+    || remediation.state !== "proven"
+    || remediation.proofBundleId !== pending.proofBundleId
+    || !remediation.claimNullifier
+    || !remediation.amountAtomic
+    || !remediation.token
+    || !claim.claimNullifier
+    || BigInt(remediation.claimNullifier) !== BigInt(claim.claimNullifier)
+    || !["submitted", "accepted"].includes(claim.state)
+  ) {
+    throw new Error("The saved Ready approval does not match this proven remediation.");
+  }
+  if (!input.sealAddress || BigInt(input.chainId) === 0n || BigInt(input.sealAddress) === 0n) {
+    throw new Error("PAYO remediation recovery requires non-zero chain and seal bindings.");
+  }
+
+  input.onStage?.("loading");
+  const settlementResponse = await input.client.getSettlement(pending.settlementId);
+  const settlement = settlementResponse.settlement as Record<string, unknown>;
+  if (
+    settlement.organizationId !== input.organizationId
+    || settlement.runId !== pending.runId
+    || settlement.workflowType !== "wage_remediation"
+    || settlement.subjectRecordId !== remediation.id
+    || settlement.tokenTotalsCommitment !== pending.tokenTotalsCommitment
+  ) {
+    throw new Error("The durable remediation approval intent does not match the saved proof.");
+  }
+  const serverTransactionHash = typeof settlement.transactionHash === "string"
+    ? settlement.transactionHash
+    : undefined;
+  if (!serverTransactionHash && settlement.state !== "approval_pending") {
+    throw new Error("This remediation approval can no longer be resumed because its settlement is " + String(settlement.state) + ".");
+  }
+
+  const proofResponse = await input.client.getEncryptedRecord({
+    organizationId: input.organizationId,
+    recordId: pending.proofBundleId,
+  }) as { record?: { envelope?: EncryptedVaultRecord } };
+  if (!proofResponse.record?.envelope) {
+    throw new Error("The encrypted remediation proof is unavailable for Ready recovery.");
+  }
+  const proofPayload = resumableExceptionProofSchema.parse(
+    decryptVaultRecord(proofResponse.record.envelope, input.principal),
+  );
+  const shards = proofPayload.shards.map((shard) => ({
+    shardIndex: shard.shardIndex,
+    proof: new Uint8Array(),
+    proofCalldata: shard.proofCalldata,
+    calldataHash: shard.calldataHash,
+    publicInputs: shard.publicInputs as PayrollIntegrityPublicInputs,
+  })) as [PayrollIntegrityShardProof, PayrollIntegrityShardProof];
+  if (
+    JSON.stringify(shards[0].proofCalldata) !== JSON.stringify(pending.proofShards[0])
+    || JSON.stringify(shards[1].proofCalldata) !== JSON.stringify(pending.proofShards[1])
+  ) {
+    throw new Error("The saved remediation proof calldata changed after Ready approval was prepared.");
+  }
+  const proofClaimNullifier = canonicalRoot(
+    shards[0].publicInputs.runNullifierHigh,
+    shards[0].publicInputs.runNullifierLow,
+  );
+  if (BigInt(proofClaimNullifier) !== BigInt(claim.claimNullifier)) {
+    throw new Error("The saved remediation proof is bound to a different wage claim.");
+  }
+
+  const { run } = await input.client.getPayrollRun(claim.runId);
+  if (run.organizationId !== input.organizationId || run.state !== "disputed") {
+    throw new Error("The payroll is no longer eligible for private remediation.");
+  }
+  const privateRun = decryptVaultRecord<{
+    claimProofSource?: { buildInput?: SerializedPayrollIntegrityBuildRequest };
+  }>(run.envelope, input.principal);
+  const buildInput = privateRun.claimProofSource?.buildInput;
+  if (!buildInput) {
+    throw new Error("The encrypted remediation recipient source is unavailable.");
+  }
+  const recipient = buildInput.lines.find(({ agreementId }) => agreementId === claim.agreementId)?.recipientAddress;
+  if (!recipient) throw new Error("The remediation recipient is absent from the encrypted payroll source.");
+
+  let transactionHash = serverTransactionHash ?? pending.transactionHash;
+  if (!transactionHash) {
+    const nowUnix = BigInt(Math.floor((input.now?.() ?? new Date()).getTime() / 1_000));
+    if (BigInt(shards[0].publicInputs.validityExpiry) <= nowUnix + 30n) {
+      throw new Error("The saved remediation proof expired before Ready approval. Create a fresh remediation draft.");
+    }
+    await requireConfirmedPayrollProof({
+      client: input.client,
+      organizationId: input.organizationId,
+      runId: claim.runId,
+      principal: input.principal,
+      onStage: input.onStage,
+    });
+    input.onStage?.("preflight");
+    await requireExceptionDeploymentReady({
+      client: input.client,
+      organizationId: input.organizationId,
+      runId: claim.runId,
+      workflowType: "wage_remediation",
+      chainId: input.chainId,
+      sealAddress: input.sealAddress,
+      mode: PAYO_PROOF_MODE_REMEDIATE,
+      proofVersion: 4,
+      agreementRoot: canonicalRoot(shards[0].publicInputs.agreementRootHigh, shards[0].publicInputs.agreementRootLow),
+      policyRoot: canonicalRoot(shards[0].publicInputs.policyRootHigh, shards[0].publicInputs.policyRootLow),
+      fxRoot: canonicalRoot(shards[0].publicInputs.fxRootHigh, shards[0].publicInputs.fxRootLow),
+    });
+    const token = PAYROLL_TOKENS[remediation.token];
+    const walletRecipients = [{
+      address: recipient,
+      amount: formatTokenAmount(BigInt(remediation.amountAtomic), token, token.decimals),
+      token: remediation.token,
+    }];
+    const sealed = buildPayoSealedAction({
+      sealAddress: input.sealAddress,
+      chainId: input.chainId,
+      shards,
+      mode: PAYO_PROOF_MODE_REMEDIATE,
+      nowUnixSeconds: nowUnix,
+    });
+    input.onStage?.("wallet");
+    transactionHash = await input.submitException("wage_remediation", walletRecipients, sealed.invokeAction);
+    if (!/^0x[0-9a-fA-F]{1,64}$/.test(transactionHash)) {
+      throw new Error("Ready submitted remediation without returning a valid transaction hash.");
+    }
+    input.persistPendingSubmission?.({ ...pending, transactionHash });
+  }
+  if (!/^0x[0-9a-fA-F]{1,64}$/.test(transactionHash)) {
+    throw new Error("The recovered remediation transaction hash is invalid.");
+  }
+
+  input.onStage?.("recording");
+  await retryWrite(() => input.client.recordSettlementSubmission(pending.settlementId, transactionHash!));
+  await retryWrite(() => input.client.enqueueProofVerification({
+    settlementId: pending.settlementId,
+    proofBundleId: pending.proofBundleId,
+    shards: pending.proofShards,
+  }));
+  await storeCanonicalEncryptedRecord({
+    client: input.client,
+    organizationId: input.organizationId,
+    recordType: "remediation",
+    record: {
+      ...remediation,
+      revision: remediation.revision + 1,
+      updatedAt: new Date().toISOString(),
+      settlementId: pending.settlementId,
+      state: "submitted",
+    },
+    principals: [input.principal],
+  });
+  const submitted = { ...pending, transactionHash };
   input.persistPendingSubmission?.(null);
   input.onStage?.("queued");
   return { ...submitted, verificationQueued: true };
