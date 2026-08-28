@@ -385,6 +385,7 @@ export async function createProofPackageForSettlement(input: {
         workflowType,
         subjectRecordId: remediation.id,
         claimId: remediation.claimId,
+        claimKind: claim.claimKind,
         agreementId: remediation.agreementId,
         claimNullifier: remediation.claimNullifier,
         amountAtomic: remediation.amountAtomic,

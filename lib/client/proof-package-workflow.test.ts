@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { encryptVaultRecord, generateVaultPrincipal } from "@/lib/crypto/vault";
 import { buildFxSnapshot } from "@/lib/domain/fx";
-import { verifyRecipientProofPackageOffline } from "@/lib/disclosure/proof-package";
+import {
+  inspectRecipientProofPackageOffline,
+  verifyRecipientProofPackageOffline,
+} from "@/lib/disclosure/proof-package";
 import {
   buildPayrollIntegrityInputsFromSerialized,
   PAYO_NET_INVOICE_POLICY,
@@ -352,15 +355,22 @@ describe("proof package workflow", () => {
       });
       expect(result.grant.fieldScope).toContain("exception");
       expect(JSON.stringify(result.encryptedPackage)).not.toContain("250000");
-      await expect(verifyRecipientProofPackageOffline({
+      const inspection = await inspectRecipientProofPackageOffline({
         encryptedPackage: result.encryptedPackage,
         recipient: grantee,
         currentGrant: result.grant,
         at: now,
-      })).resolves.toMatchObject({
+      });
+      expect(inspection).toMatchObject({
         scope: "worker",
+        publicInputsBinding: "verified",
         fieldScope: expect.arrayContaining(["exception", "settlement"]),
         fileNames: expect.arrayContaining(["line-opening.json", "journal.csv", "disclosure.json"]),
+      });
+      expect(inspection.disclosedFields.exception).toMatchObject({
+        workflowType,
+        claimKind: "missing_obligation",
+        token: "USDC",
       });
     },
   );

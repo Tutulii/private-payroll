@@ -17,6 +17,7 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
+  UserPlus,
   WalletCards,
   type LucideIcon,
 } from "lucide-react";
@@ -26,9 +27,29 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { useAppShell } from "../ui/app-shell";
 import { usePayoVault } from "../vault/payo-vault";
 import { STARKNET_MAINNET_EXPLORER, useStarknetWallet } from "../starknet/starknet-wallet";
-import { decryptVaultRecord } from "@/lib/crypto/vault";
+import { decryptVaultRecord, encryptedVaultRecordSchema } from "@/lib/crypto/vault";
+import { disclosureGrantRecordSchema } from "@/lib/domain/records";
 import { createEncryptedSettlementReceipt } from "@/lib/client/settlement-receipts";
 import { createProofPackageForSettlement } from "@/lib/client/proof-package-workflow";
+import {
+  classifyProofPackageOpenFailure,
+  createPayoPublicIdentity,
+  openPayoProofPackage,
+  parsePayoJsonText,
+  parsePayoProofPackageExport,
+  parsePayoPublicIdentity,
+  proofPackageExportFilename,
+  publicIdentityFilename,
+  serializePayoJson,
+  type PayoProofPackageExport,
+  type ProofPackageOpenFailure,
+  type ReadableProofPackageReport,
+} from "@/lib/client/proof-package-files";
+import {
+  verifyLiveProofTransaction,
+  type LiveProofTransactionEvidence,
+} from "@/lib/client/starknet-proof-evidence";
+import { proofPackageGrantSchema } from "@/lib/disclosure/proof-package";
 import {
   createEncryptedRemediationDraft,
   createEncryptedWageClaimDraft,
@@ -122,6 +143,34 @@ type ExceptionFeedback = {
   tone: "error" | "success";
   message: string;
 };
+
+type CreatedProofPackageResult = {
+  file: PayoProofPackageExport;
+  filename: string;
+  workflowLabel: string;
+};
+
+type OpenProofPackageResult = {
+  report: ReadableProofPackageReport;
+  liveEvidence: LiveProofTransactionEvidence;
+  grantEvidence: "current" | "embedded";
+  filename: string;
+};
+
+const MAX_PROOF_PACKAGE_FILE_BYTES = 24 * 1024 * 1024;
+const MAX_PUBLIC_IDENTITY_FILE_BYTES = 16 * 1024;
+
+function downloadJson(value: unknown, filename: string): void {
+  const blob = new Blob([serializePayoJson(value)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
 
 const exceptionStageLabel: Record<PayrollExecutionStage, string> = {
   fx: "Reading live FX",
@@ -254,7 +303,13 @@ export default function ActivityPage() {
   const [disclosureAgreementId, setDisclosureAgreementId] = useState("");
   const [granteePrincipalId, setGranteePrincipalId] = useState("");
   const [granteePublicKey, setGranteePublicKey] = useState("");
+  const [granteeIdentityFingerprint, setGranteeIdentityFingerprint] = useState("");
   const [disclosureExpiry, setDisclosureExpiry] = useState("");
+  const [createdProofPackage, setCreatedProofPackage] = useState<CreatedProofPackageResult | null>(null);
+  const [openProofPackageResult, setOpenProofPackageResult] = useState<OpenProofPackageResult | null>(null);
+  const [proofPackageFailure, setProofPackageFailure] = useState<ProofPackageOpenFailure | null>(null);
+  const [openingProofPackage, setOpeningProofPackage] = useState(false);
+  const [proofPackageVaultKey, setProofPackageVaultKey] = useState("");
   const [activityError, setActivityError] = useState("");
   const [creatingException, setCreatingException] = useState(false);
   const [showClaimForm, setShowClaimForm] = useState(false);
@@ -275,6 +330,8 @@ export default function ActivityPage() {
   const [pendingException, setPendingException] = useState<PendingExceptionSubmission | null>(null);
   const activityRefreshGeneration = useRef(0);
   const automaticExceptionRecoveryAttempts = useRef(new Map<string, number>());
+  const proofPackageInput = useRef<HTMLInputElement>(null);
+  const publicIdentityInput = useRef<HTMLInputElement>(null);
 
   const persistPendingException = useCallback((submission: PendingExceptionSubmission | null) => {
     const organizationId = vault.session?.organizationId;
@@ -544,13 +601,172 @@ export default function ActivityPage() {
     disclosureSettlements,
     disclosureSettlementId,
   );
+  const createdPackageForCurrentVault = Boolean(
+    createdProofPackage
+    && vault.session
+    && proofPackageVaultKey === `${vault.session.organizationId}:${vault.session.principal.principalId}`
+    && createdProofPackage.file.grant.granteePrincipalId === vault.session.principal.principalId
+    && createdProofPackage.file.grant.recipientEncryptionKey === vault.session.principal.publicKey,
+  );
+  const currentProofPackageVaultKey = vault.session
+    ? `${vault.session.organizationId}:${vault.session.principal.principalId}`
+    : "";
+  const showProofPackageState = Boolean(currentProofPackageVaultKey)
+    && proofPackageVaultKey === currentProofPackageVaultKey;
 
   const fillCurrentDisclosureIdentity = () => {
     if (!vault.session) return;
     const defaults = disclosureFormDefaults(vault.session.principal);
     setGranteePrincipalId(defaults.principalId);
     setGranteePublicKey(defaults.publicKey);
+    setGranteeIdentityFingerprint(createPayoPublicIdentity(vault.session.principal).fingerprint);
     setDisclosureExpiry(defaults.expiresAtInput);
+  };
+
+  const exportCurrentPublicIdentity = () => {
+    if (!vault.session) return;
+    try {
+      const identity = createPayoPublicIdentity(vault.session.principal);
+      downloadJson(identity, publicIdentityFilename(identity));
+      notify("Public PAYO identity downloaded · no secret key included");
+    } catch (error) {
+      setActivityError(error instanceof Error ? error.message : "The public PAYO identity could not be exported.");
+    }
+  };
+
+  const importRecipientPublicIdentity = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setActivityError("");
+    try {
+      if (file.size > MAX_PUBLIC_IDENTITY_FILE_BYTES) throw new Error("The PAYO public identity file is too large.");
+      const identity = parsePayoPublicIdentity(parsePayoJsonText(await file.text(), "The PAYO public identity file"));
+      setGranteePrincipalId(identity.principalId);
+      setGranteePublicKey(identity.publicKey);
+      setGranteeIdentityFingerprint(identity.fingerprint);
+      notify("Recipient PAYO identity file validated and imported");
+    } catch (error) {
+      setActivityError(error instanceof Error ? error.message : "The recipient identity could not be imported.");
+    }
+  };
+
+  const inspectProofPackage = async (input: {
+    value: unknown;
+    filename: string;
+  }) => {
+    const session = vault.session;
+    const client = vault.client;
+    if (!session) throw new Error("Unlock the PAYO vault before opening a proof package.");
+    const inspectionVaultKey = `${session.organizationId}:${session.principal.principalId}`;
+    const file = parsePayoProofPackageExport(input.value);
+    const sameOrganization = file.organizationId === session.organizationId;
+    const currentSummary = sameOrganization
+      ? disclosureGrants.find(({ id }) => id === file.grant.id)
+      : undefined;
+    if (sameOrganization && !currentSummary) {
+      throw new Error("PAYO could not find the current disclosure grant, so revocation cannot be checked safely.");
+    }
+    let resolvedCurrentGrant: ReturnType<typeof proofPackageGrantSchema.parse> | undefined;
+    if (currentSummary) {
+      if (!client) throw new Error("PAYO cannot read the current disclosure grant while the vault service is unavailable.");
+      const { record } = await client.getEncryptedRecord({
+        organizationId: session.organizationId,
+        recordId: currentSummary.id,
+      });
+      const envelope = encryptedVaultRecordSchema.parse(record.envelope);
+      const authoritative = disclosureGrantRecordSchema.parse(
+        decryptVaultRecord(envelope, session.principal),
+      );
+      resolvedCurrentGrant = proofPackageGrantSchema.parse({
+        grantVersion: "payo-proof-package-grant-v1",
+        id: authoritative.id,
+        organizationId: authoritative.organizationId,
+        runId: authoritative.runId,
+        scope: file.grant.scope,
+        granteePrincipalId: authoritative.granteePrincipalId,
+        fieldScope: authoritative.fieldScope,
+        recipientEncryptionKey: authoritative.recipientEncryptionKey,
+        validAfter: authoritative.validAfter,
+        expiresAt: authoritative.expiresAt,
+        ...(currentSummary.revokedAt ? { revokedAt: currentSummary.revokedAt } : {}),
+      });
+    }
+    const opened = await openPayoProofPackage({
+      value: file,
+      recipient: session.principal,
+      ...(resolvedCurrentGrant ? { currentGrant: resolvedCurrentGrant } : {}),
+    });
+    const liveEvidence = await verifyLiveProofTransaction({
+      transactionHash: opened.report.verificationTransactionHash,
+      ...(opened.report.onchainProofState ? { proofState: opened.report.onchainProofState } : {}),
+      ...(process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS
+        ? { expectedSealAddress: process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS }
+        : {}),
+    });
+    setOpenProofPackageResult({
+      report: opened.report,
+      liveEvidence,
+      grantEvidence: resolvedCurrentGrant ? "current" : opened.grantEvidence,
+      filename: input.filename,
+    });
+    setProofPackageVaultKey(inspectionVaultKey);
+    setProofPackageFailure(null);
+    notify(liveEvidence.status === "confirmed" && liveEvidence.proofStateStatus === "verified"
+      ? "Proof package integrity and on-chain PAYO proof state verified"
+      : liveEvidence.status === "confirmed"
+        ? "Package integrity and transaction receipt verified · review proof binding status"
+      : "Package integrity verified · review the live Starknet status");
+  };
+
+  const importProofPackage = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setOpeningProofPackage(true);
+    setProofPackageVaultKey(currentProofPackageVaultKey);
+    setActivityError("");
+    setProofPackageFailure(null);
+    try {
+      if (file.size > MAX_PROOF_PACKAGE_FILE_BYTES) throw new Error("The encrypted proof package is too large.");
+      await inspectProofPackage({
+        value: parsePayoJsonText(await file.text(), "The encrypted proof package"),
+        filename: file.name,
+      });
+    } catch (error) {
+      setOpenProofPackageResult(null);
+      setProofPackageFailure(classifyProofPackageOpenFailure(error));
+    } finally {
+      setOpeningProofPackage(false);
+    }
+  };
+
+  const openCreatedProofPackageLocally = async () => {
+    if (!createdProofPackage || !showProofPackageState) return;
+    setOpeningProofPackage(true);
+    setActivityError("");
+    setProofPackageFailure(null);
+    try {
+      await inspectProofPackage({
+        value: createdProofPackage.file,
+        filename: createdProofPackage.filename,
+      });
+    } catch (error) {
+      setOpenProofPackageResult(null);
+      setProofPackageFailure(classifyProofPackageOpenFailure(error));
+    } finally {
+      setOpeningProofPackage(false);
+    }
+  };
+
+  const copyPackageCommitment = async (commitment: string) => {
+    try {
+      if (!navigator.clipboard) throw new Error("Clipboard access is unavailable.");
+      await navigator.clipboard.writeText(commitment);
+      notify("Package commitment copied");
+    } catch {
+      setActivityError("PAYO could not copy the package commitment. Select it from the report instead.");
+    }
   };
 
   const toggleDisclosureForm = () => {
@@ -615,26 +831,38 @@ export default function ActivityPage() {
           : {}),
         expiresAt: new Date(disclosureExpiry).toISOString(),
       });
-      const exportBody = {
+      const exportBody = parsePayoProofPackageExport({
         format: "payo-encrypted-proof-package-v1",
         organizationId: vault.session.organizationId,
         runId: disclosureSettlement.runId,
         scope: disclosureScope,
         grant: proofPackage.grant,
         encryptedPackage: proofPackage.encryptedPackage,
-      };
-      const blob = new Blob([`${JSON.stringify(exportBody, null, 2)}\n`], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `payo-proof-package-${proofPackage.grant.id}.json`;
-      anchor.click();
-      URL.revokeObjectURL(url);
+      });
+      const filename = proofPackageExportFilename({
+        workflow: disclosureSettlement.workflowType,
+        scope: disclosureScope,
+        validAfter: proofPackage.grant.validAfter,
+      });
+      downloadJson(exportBody, filename);
+      setCreatedProofPackage({
+        file: exportBody,
+        filename,
+        workflowLabel: disclosureSettlement.workflowType === "payroll"
+          ? "Private payroll"
+          : disclosureSettlement.workflowType === "wage_claim"
+            ? "Private wage claim"
+            : "Private wage remediation",
+      });
+      setProofPackageVaultKey(`${vault.session.organizationId}:${vault.session.principal.principalId}`);
+      setOpenProofPackageResult(null);
+      setProofPackageFailure(null);
       setShowDisclosure(false);
       setDisclosureSettlementId("");
       setDisclosureAgreementId("");
       setGranteePrincipalId("");
       setGranteePublicKey("");
+      setGranteeIdentityFingerprint("");
       setDisclosureExpiry("");
       await refreshActivity();
       notify("Recipient-encrypted proof package created and verified");
@@ -1158,19 +1386,70 @@ export default function ActivityPage() {
           <section className="receipts-card">
             <div className="receipt-doodle" aria-hidden="true"><FileText size={28} /><span>✓</span></div><span className="label">ENCRYPTED RECEIPT</span><h3>Keep the evidence.<br />Hide the payroll.</h3><p>Creates a locally encrypted receipt binding the private token totals to the confirmed Starknet transaction and totals commitment. PAYO stores ciphertext only.</p><button type="button" className="button button--ink button--wide" onClick={() => void createReceipt()} disabled={!vault.session || !receiptableSettlement || creatingReceipt}>{creatingReceipt ? <LoaderCircle className="spin" size={16} /> : <ReceiptText size={16} />} {receiptableSettlement ? "Create encrypted receipt" : "Awaiting confirmed settlement"}</button>
             <button type="button" className="button button--soft button--wide" onClick={toggleDisclosureForm} disabled={!vault.session || !disclosureSettlement || creatingReceipt}><KeyRound size={16} /> Create scoped proof package</button>
+            <button type="button" className="button button--soft button--wide" onClick={() => proofPackageInput.current?.click()} disabled={!vault.session || openingProofPackage}><Download size={16} /> {openingProofPackage ? "Opening locally…" : "Open proof package"}</button>
+            <button type="button" className="button button--soft button--wide" onClick={exportCurrentPublicIdentity} disabled={!vault.session}><UserPlus size={16} /> Share my public identity</button>
+            <input ref={proofPackageInput} className="proof-package-file-input" type="file" accept="application/json,.json" onChange={(event) => void importProofPackage(event)} tabIndex={-1} aria-hidden="true" />
             {showDisclosure && <form className="receipt-disclosure-form" onSubmit={createDisclosure}>
               <label><span>Verified workflow</span><select value={disclosureSettlement?.id ?? ""} onChange={(event) => { setDisclosureSettlementId(event.target.value); setDisclosureAgreementId(""); }} required>{disclosureSettlements.map((settlement) => <option value={settlement.id} key={settlement.id}>{settlement.workflowType.replaceAll("_", " ")} · {shortId(settlement.transactionHash)}</option>)}</select></label>
               <label><span>Recipient scope</span><select value={disclosureScope} onChange={(event) => setDisclosureScope(event.target.value as typeof disclosureScope)}><option value="worker">Worker · own line only</option><option value="employer">Employer · full books</option><option value="auditor">Auditor · no identities</option><option value="tax">Tax reviewer · no classification</option></select></label>
               {disclosureScope === "worker" && disclosureSettlement?.workflowType === "payroll" && <label><span>Worker payroll line</span><select value={disclosureAgreementId} onChange={(event) => setDisclosureAgreementId(event.target.value)} required><option value="">Choose a proved agreement</option>{agreementOptions.map(({ agreement, label }) => <option key={agreement.id} value={agreement.agreement.id}>{label} · {agreement.agreement.settlementToken}</option>)}</select></label>}
               {disclosureScope === "worker" && disclosureSettlement?.workflowType !== "payroll" && <p>PAYO derives the claimant or remediation recipient from the encrypted, proof-bound exception record; no other payroll line can be selected.</p>}
-              <button type="button" className="button button--soft button--wide" onClick={fillCurrentDisclosureIdentity}><KeyRound size={16} /> Use my PAYO identity</button>
-              <p>Your unlocked PAYO public identity is filled automatically. Replace both recipient fields only when another recipient gives you their PAYO principal ID and public encryption key.</p>
-              <label><span>Recipient PAYO principal ID</span><input value={granteePrincipalId} onChange={(event) => setGranteePrincipalId(event.target.value)} placeholder="PAYO vault principal ID" required minLength={1} maxLength={160} autoComplete="off" spellCheck={false} /></label>
-              <label><span>Recipient X25519 public key</span><input value={granteePublicKey} onChange={(event) => setGranteePublicKey(event.target.value)} placeholder="Recipient encryption key" required autoComplete="off" spellCheck={false} /></label>
+              <div className="proof-identity-actions">
+                <button type="button" className="button button--soft" onClick={fillCurrentDisclosureIdentity}><KeyRound size={16} /> Use mine</button>
+                <button type="button" className="button button--soft" onClick={() => publicIdentityInput.current?.click()}><UserPlus size={16} /> Import recipient</button>
+                <button type="button" className="button button--soft" onClick={exportCurrentPublicIdentity}><Download size={16} /> Share mine</button>
+              </div>
+              <input ref={publicIdentityInput} className="proof-package-file-input" type="file" accept="application/json,.json" onChange={(event) => void importRecipientPublicIdentity(event)} tabIndex={-1} aria-hidden="true" />
+              <p>Use a public PAYO identity file instead of copying key fields. It contains only the principal ID, X25519 public key and fingerprint—never a vault secret or recovery value.</p>
+              {granteeIdentityFingerprint && <p className="proof-identity-fingerprint"><ShieldCheck size={13} /> Validated identity file · {shortId(granteeIdentityFingerprint)}</p>}
+              <label><span>Recipient PAYO principal ID</span><input value={granteePrincipalId} onChange={(event) => { setGranteePrincipalId(event.target.value); setGranteeIdentityFingerprint(""); }} placeholder="PAYO vault principal ID" required minLength={1} maxLength={160} autoComplete="off" spellCheck={false} /></label>
+              <label><span>Recipient X25519 public key</span><input value={granteePublicKey} onChange={(event) => { setGranteePublicKey(event.target.value); setGranteeIdentityFingerprint(""); }} placeholder="Recipient encryption key" required autoComplete="off" spellCheck={false} /></label>
               <label><span>Expires</span><input type="datetime-local" value={disclosureExpiry} onChange={(event) => setDisclosureExpiry(event.target.value)} required /><small>Defaults to 24 hours from now.</small></label>
               <p>PAYO rebuilds the exact payroll, claim, or remediation manifest locally, requires both on-chain verifier shards, creates a balanced journal, and encrypts the package only to this recipient. Worker packages contain one workflow-specific Merkle opening; auditor and tax scopes omit restricted fields.</p>
               <button type="submit" className="button button--ink button--wide" disabled={creatingReceipt || !disclosureSettlement || (disclosureScope === "worker" && disclosureSettlement.workflowType === "payroll" && !disclosureAgreementId)}>{creatingReceipt ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />} Verify, encrypt and download</button>
             </form>}
+            {createdProofPackage && showProofPackageState && <div className="proof-package-success" role="status">
+              <div className="proof-package-result-title"><CheckCircle2 size={19} /><span><small>PACKAGE CREATED</small><strong>{createdProofPackage.workflowLabel}</strong></span></div>
+              <dl>
+                <div><dt>State</dt><dd>Verified &amp; encrypted</dd></div>
+                <div><dt>Scope</dt><dd>{createdProofPackage.file.scope}</dd></div>
+                <div><dt>Expires</dt><dd>{new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(createdProofPackage.file.grant.expiresAt))}</dd></div>
+                <div><dt>Commitment</dt><dd>{shortId(createdProofPackage.file.encryptedPackage.packageCommitment)}</dd></div>
+                <div><dt>File</dt><dd>{createdProofPackage.filename}</dd></div>
+              </dl>
+              <div className="proof-package-result-actions">
+                <button type="button" onClick={() => void openCreatedProofPackageLocally()} disabled={openingProofPackage || !createdPackageForCurrentVault}><Eye size={14} /> Open package</button>
+                <button type="button" onClick={() => downloadJson(createdProofPackage.file, createdProofPackage.filename)}><Download size={14} /> Download</button>
+                <button type="button" onClick={() => void copyPackageCommitment(createdProofPackage.file.encryptedPackage.packageCommitment)}><Copy size={14} /> Copy commitment</button>
+              </div>
+              {!createdPackageForCurrentVault && <p>The package is encrypted to the imported recipient. Send them the JSON; only their matching PAYO vault can open it.</p>}
+            </div>}
+            {openProofPackageResult && showProofPackageState && <div className="proof-package-inspector" aria-live="polite">
+              <div className="proof-package-result-title"><FileText size={19} /><span><small>PROOF PACKAGE INSPECTOR</small><strong>{openProofPackageResult.report.workflowLabel}</strong></span><i className={`proof-evidence-status proof-evidence-status--${openProofPackageResult.liveEvidence.status}`}>{openProofPackageResult.liveEvidence.status === "confirmed" && openProofPackageResult.liveEvidence.proofStateStatus === "verified" ? "On-chain proof verified" : openProofPackageResult.liveEvidence.status === "confirmed" ? "Proof tx confirmed" : openProofPackageResult.liveEvidence.status === "failed" ? "Proof tx failed" : openProofPackageResult.liveEvidence.status === "pending" ? "Proof tx pending" : "Live check unavailable"}</i></div>
+              <p className="proof-package-verdict"><ShieldCheck size={15} /> {openProofPackageResult.report.publicInputsBinding === "verified" ? "Archive integrity, manifest hashes, recipient key, grant window, balanced journal and proof public-input digest verified locally." : "Archive integrity, recipient authorization, grant window and balanced journal verified. This legacy package does not contain a reconstructable proof public-input digest."}</p>
+              {openProofPackageResult.report.publicInputsBinding === "verified" && openProofPackageResult.liveEvidence.status === "confirmed" && openProofPackageResult.liveEvidence.proofStateStatus !== "verified" && <p className="proof-package-live-warning">The transaction receipt is confirmed, but PAYO could not confirm the bound seal state. Do not treat this as an on-chain proof verification yet.</p>}
+              {openProofPackageResult.report.claim && <div className="proof-claim-context">
+                <small>LINKED CLAIM CONTEXT</small>
+                <strong>{openProofPackageResult.report.claim.typeLabel ?? "Private wage exception"}</strong>
+                <span>Claim {shortId(openProofPackageResult.report.claim.id)}{openProofPackageResult.report.claim.amountLabel ? ` · ${openProofPackageResult.report.claim.amountLabel}` : ""}</span>
+                <span>Settlement · {openProofPackageResult.report.claim.settlementState.replaceAll("_", " ")}</span>
+              </div>}
+              <dl>
+                <div><dt>Disclosure</dt><dd>{openProofPackageResult.report.scope} · {openProofPackageResult.report.fieldScope.join(", ")}</dd></div>
+                <div><dt>Grant</dt><dd>{shortId(openProofPackageResult.report.grantId)} · expires {new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(openProofPackageResult.report.expiresAt))}</dd></div>
+                <div><dt>Proof</dt><dd>Version {openProofPackageResult.report.proofVersion} · {shortId(openProofPackageResult.report.verificationTransactionHash)}</dd></div>
+                <div><dt>Commitment</dt><dd>{shortId(openProofPackageResult.report.packageCommitment)}</dd></div>
+                <div><dt>Opened file</dt><dd>{openProofPackageResult.filename}</dd></div>
+              </dl>
+              <div className="proof-package-result-actions">
+                <a href={`${STARKNET_MAINNET_EXPLORER}/tx/${openProofPackageResult.report.verificationTransactionHash}`} target="_blank" rel="noreferrer"><ShieldCheck size={14} /> Verification tx</a>
+                <button type="button" onClick={() => void copyPackageCommitment(openProofPackageResult.report.packageCommitment)}><Copy size={14} /> Copy commitment</button>
+              </div>
+              <p>{openProofPackageResult.grantEvidence === "current" ? "Revocation was checked against this organization’s current grant record." : "This package came from another organization; expiry and embedded grant integrity were checked, but current revocation and issuer identity require a fresh authenticated record from the issuer."}</p>
+            </div>}
+            {proofPackageFailure && showProofPackageState && <div className={`proof-package-failure proof-package-failure--${proofPackageFailure.code}`} role="alert">
+              <span>!</span><div><small>PACKAGE REJECTED</small><strong>{proofPackageFailure.title}</strong><p>{proofPackageFailure.message}</p></div>
+            </div>}
             {disclosureGrants.length > 0 && <div className="disclosure-grant-list">
               <small>SCOPED GRANTS</small>
               {disclosureGrants.slice(0, 4).map((grant) => {

@@ -26,6 +26,8 @@ export default defineConfig({
     env: {
       ...process.env,
       PAYO_BROWSER_EVIDENCE_MODE: "1",
+      NEXT_PUBLIC_STARKNET_RPC_URL: `http://127.0.0.1:${port}/browser-rpc`,
+      NEXT_PUBLIC_PAYO_SEAL_ADDRESS: "0x123",
     },
   },
 });

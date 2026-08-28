@@ -22,6 +22,8 @@ const ORGANIZATION_ID = "018f1000-0000-7000-8000-000000000030";
 const ORGANIZATION_SECRET = `0x${"30".repeat(32)}`;
 const STORAGE_KEY = "payo:phase3-browser-evidence:v1";
 const SYNTHETIC_ROOT = `0x${"42".repeat(32)}`;
+const SYNTHETIC_SETTLEMENT_ID = "018f1000-0000-7000-8000-000000000035";
+const SYNTHETIC_SETTLEMENT_RUN_ID = "018f1000-0000-7000-8000-000000000036";
 
 // This key can only decrypt synthetic records created in the server-gated browser-evidence route.
 // It is deliberately unrelated to any PAYO deployment, user, or funded Starknet account.
@@ -258,7 +260,25 @@ export function PayoBrowserEvidenceProvider({ children }: { children: ReactNode 
       };
     },
     async listSettlements() {
-      return { settlements: [] };
+      return { settlements: [{
+        id: SYNTHETIC_SETTLEMENT_ID,
+        runId: SYNTHETIC_SETTLEMENT_RUN_ID,
+        workflowType: "payroll",
+        subjectRecordId: "",
+        state: "finalized",
+        tokenTotalsCommitment: SYNTHETIC_ROOT,
+        transactionHash: "0x789",
+        submittedAt: "2026-08-26T00:00:00.000Z",
+        confirmedAt: "2026-08-26T00:01:00.000Z",
+        finalizedAt: "2026-08-26T00:02:00.000Z",
+        confirmationDepth: 12,
+        lastErrorCode: null,
+        proofValidityExpiry: null,
+        proofVerificationState: "complete",
+        proofVerificationLastErrorCode: null,
+        createdAt: "2026-08-26T00:00:00.000Z",
+        updatedAt: "2026-08-26T00:02:00.000Z",
+      }] };
     },
     async listAuditEvents() {
       return { events: [] };

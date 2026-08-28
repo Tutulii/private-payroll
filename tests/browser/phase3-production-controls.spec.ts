@@ -1,6 +1,15 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { expect, test, type Page } from "playwright/test";
+import { hash } from "starknet";
+import { createPayoPublicIdentity } from "@/lib/client/proof-package-files";
+import { generateVaultPrincipal, type VaultPrincipal } from "@/lib/crypto/vault";
+import {
+  createRecipientEncryptedProofPackage,
+  proofPackagePublicInputsHash,
+  type ProofPackageGrant,
+  type RecipientProofPackagePayload,
+} from "@/lib/disclosure/proof-package";
 
 const COMMITMENTS = {
   milestone: `0x${"79".repeat(32)}`,
@@ -20,6 +29,99 @@ const workflows = [
   { name: "Statutory worker", plan: "statutory_classification", option: "Recurring payroll", token: "USDC" },
   { name: "FX-floor worker", plan: "fx_floor", option: "Recurring payroll", token: "STRK" },
 ] as const;
+
+const SYNTHETIC_PRINCIPAL: VaultPrincipal = {
+  principalId: "phase3-browser-evidence",
+  publicKey: "KsD1+YKrizU8vEyTJQ2MrSbRreOHGeXtvoaLYUXVoF8=",
+};
+
+function proofPackageBrowserFixture() {
+  const grant: ProofPackageGrant = {
+    grantVersion: "payo-proof-package-grant-v1",
+    id: "browser-proof-grant-0001",
+    organizationId: "external-organization-0001",
+    runId: "external-payroll-run-0001",
+    scope: "employer",
+    granteePrincipalId: SYNTHETIC_PRINCIPAL.principalId,
+    fieldScope: ["exception", "settlement"],
+    recipientEncryptionKey: SYNTHETIC_PRINCIPAL.publicKey,
+    validAfter: "2026-08-26T00:00:00.000Z",
+    expiresAt: "2027-08-26T00:00:00.000Z",
+  };
+  const publicInputs = {
+    chainId: "0x1",
+    sealAddress: "0x123",
+    proofVersion: "4",
+    schemaVersion: "1",
+    agreementRootHigh: "1",
+    agreementRootLow: "2",
+    manifestRootHigh: "3",
+    manifestRootLow: "4",
+    policyRootHigh: "5",
+    policyRootLow: "6",
+    fxRootHigh: "7",
+    fxRootLow: "8",
+    runNullifierHigh: "9",
+    runNullifierLow: "10",
+    validityStart: "11",
+    validityExpiry: "12",
+    manifestRoot: `0x${"55".repeat(32)}`,
+  };
+  const payload: RecipientProofPackagePayload = {
+    packageVersion: "payo-recipient-proof-package-v1",
+    grant,
+    journal: [
+      { date: "2026-08-26", accountCode: "WAGE_REMEDIATION_EXPENSE", debitAtomic: "2500000", creditAtomic: "0", token: "USDC", memo: "Proof-bound private wage remediation" },
+      { date: "2026-08-26", accountCode: "PRIVATE_TREASURY", debitAtomic: "0", creditAtomic: "2500000", token: "USDC", memo: "Private remediation settlement" },
+    ],
+    proofPackage: {
+      packageVersion: "payo-proof-package-v1",
+      runId: grant.runId,
+      organizationId: grant.organizationId,
+      proofType: "wage_remediation",
+      proofVersion: "4",
+      verifier: { chainId: "0x1", contractAddress: "0x123" },
+      publicInputs,
+      proof: "browser-proof-reference",
+      transactionHash: "0x789",
+      createdAt: "2026-08-26T00:02:00.000Z",
+    },
+    verification: {
+      verified: true,
+      verificationState: "onchain_verified",
+      verifierAddress: "0x123",
+      proofVersion: "4",
+      publicInputsHash: proofPackagePublicInputsHash(publicInputs)!,
+      verificationTransactionHash: "0x456",
+      checkedAt: "2026-08-26T00:03:00.000Z",
+    },
+    starknetReceipt: { transactionHash: "0x789", state: "finalized", confirmationDepth: 12 },
+    disclosedFields: {
+      exception: {
+        workflowType: "wage_remediation",
+        subjectRecordId: "browser-remediation-0001",
+        claimId: "browser-claim-0001",
+        claimKind: "missing_obligation",
+        agreementId: "browser-agreement-0001",
+        amountAtomic: "2500000",
+        token: "USDC",
+      },
+      settlement: { transactionHash: "0x789", confirmationDepth: 12 },
+    },
+  };
+  return {
+    format: "payo-encrypted-proof-package-v1" as const,
+    organizationId: grant.organizationId,
+    runId: grant.runId,
+    scope: grant.scope,
+    grant,
+    encryptedPackage: createRecipientEncryptedProofPackage({
+      payload,
+      recipient: SYNTHETIC_PRINCIPAL,
+      at: new Date("2026-08-26T00:04:00.000Z"),
+    }),
+  };
+}
 
 type EvidenceState = {
   organizationId: string;
@@ -183,7 +285,90 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
     }]);
   }, { runId, agreementId: recurringAgreement.id });
 
+  const proofStatusSelector = hash.getSelectorFromName("get_run_status");
+  await page.route("**/browser-rpc", async (route) => {
+    const request = route.request().postDataJSON() as {
+      id?: number | string;
+      method?: string;
+      params?: Array<{ entry_point_selector?: string }>;
+    };
+    const result = request.method === "starknet_chainId"
+      ? "0x1"
+      : request.method === "starknet_call"
+        ? [BigInt(request.params?.[0]?.entry_point_selector ?? "0") === BigInt(proofStatusSelector) ? "0x5" : "0x1"]
+        : {
+          type: "INVOKE",
+          transaction_hash: "0x456",
+          actual_fee: { amount: "0x0", unit: "FRI" },
+          finality_status: "ACCEPTED_ON_L2",
+          execution_status: "SUCCEEDED",
+          messages_sent: [],
+          events: [{
+            from_address: "0x123",
+            keys: [hash.getSelectorFromName("SealedShardVerified"), "0x9", "0xa", "0x1"],
+            data: [],
+          }],
+          execution_resources: {
+            steps: 1,
+            memory_holes: 0,
+            range_check_builtin_applications: 0,
+            pedersen_builtin_applications: 0,
+            poseidon_builtin_applications: 0,
+            ec_op_builtin_applications: 0,
+            ecdsa_builtin_applications: 0,
+            bitwise_builtin_applications: 0,
+            keccak_builtin_applications: 0,
+            segment_arena_builtin: 0,
+          },
+        };
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: request.id ?? 1,
+        result,
+      }),
+    });
+  });
   await page.goto("/payo-browser-evidence/activity");
+
+  const identityDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Share my public identity" }).click();
+  expect((await identityDownload).suggestedFilename()).toMatch(/^payo-public-identity-[0-9a-f]{8}\.json$/);
+
+  await page.getByRole("button", { name: "Create scoped proof package" }).click();
+  const disclosureForm = page.locator("form.receipt-disclosure-form").first();
+  const externalIdentity = createPayoPublicIdentity(generateVaultPrincipal("browser-external-recipient"));
+  await disclosureForm.locator("input.proof-package-file-input").setInputFiles({
+    name: "payo-public-identity.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(`${JSON.stringify(externalIdentity)}\n`),
+  });
+  await expect(disclosureForm.getByLabel("Recipient PAYO principal ID")).toHaveValue(externalIdentity.principalId);
+  await expect(disclosureForm.getByText(/Validated identity file/)).toContainText(externalIdentity.fingerprint.slice(0, 8));
+  await page.getByRole("button", { name: "Create scoped proof package" }).click();
+
+  await page.locator("input.proof-package-file-input").first().setInputFiles({
+    name: "not-a-payo-package.json",
+    mimeType: "application/json",
+    buffer: Buffer.from('{"format":"unsupported"}\n'),
+  });
+  await expect(page.locator(".proof-package-failure")).toContainText("Invalid");
+
+  const encryptedProofPackage = proofPackageBrowserFixture();
+  await page.locator("input.proof-package-file-input").first().setInputFiles({
+    name: "payo-wage-remediation-employer-20260826.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(`${JSON.stringify(encryptedProofPackage)}\n`),
+  });
+  const inspector = page.locator(".proof-package-inspector");
+  await expect(inspector).toBeVisible();
+  await expect(inspector).toContainText("Private wage remediation");
+  await expect(inspector).toContainText("Missing obligation");
+  await expect(inspector).toContainText("2.5 USDC");
+  await expect(inspector).toContainText("On-chain proof verified");
+  await expect(inspector).toContainText("current revocation and issuer identity require a fresh authenticated record");
+
   const claimButton = page.getByRole("button", { name: "Draft private claim" });
   await expect(claimButton).toBeEnabled();
   await claimButton.click();
@@ -243,6 +428,10 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
       productionTeamControls: true,
       productionScheduleRegistration: true,
       productionActivityControls: true,
+      publicIdentityExchange: true,
+      readableProofPackageInspector: true,
+      liveProofReceiptCheck: true,
+      liveProofSealStateCheck: true,
       clientEncryptedRoundTrips: true,
       statutoryFxClassificationProfile: true,
       claimToRemediationBinding: true,

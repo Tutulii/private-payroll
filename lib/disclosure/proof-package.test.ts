@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { generateVaultPrincipal } from "@/lib/crypto/vault";
+import { zipSync } from "fflate";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { encryptVaultRecord, generateVaultPrincipal } from "@/lib/crypto/vault";
+import { toBase64, toHex } from "@/lib/crypto/encoding";
 import { createProofCommitter } from "@/lib/proof/commitments";
 import {
   createRecipientEncryptedProofPackage,
+  inspectRecipientProofPackageOffline,
+  proofPackagePublicInputsHash,
   verifyRecipientProofPackageOffline,
   type ProofPackageGrant,
   type RecipientProofPackagePayload,
@@ -71,6 +76,29 @@ async function fixture(scope: ProofPackageGrant["scope"] = "worker") {
   return { recipient, grant, payload };
 }
 
+function encryptedArchiveFixture(input: {
+  archive: Uint8Array;
+  grant: ProofPackageGrant;
+  recipient: ReturnType<typeof generateVaultPrincipal>;
+}) {
+  const packageCommitment = toHex(sha256(input.archive));
+  return {
+    packageVersion: "payo-encrypted-proof-package-v1" as const,
+    grantId: input.grant.id,
+    packageCommitment,
+    envelope: encryptVaultRecord({
+      archiveBase64: toBase64(input.archive),
+      packageCommitment,
+    }, {
+      schemaVersion: 1,
+      organizationId: input.grant.organizationId,
+      recordType: "proof-package",
+      recordId: input.grant.id,
+      revision: 1,
+    }, [input.recipient]),
+  };
+}
+
 describe("recipient-encrypted proof packages", () => {
   it("encrypts a worker-scoped package and verifies its proof line opening offline", async () => {
     const { recipient, grant, payload } = await fixture();
@@ -89,6 +117,55 @@ describe("recipient-encrypted proof packages", () => {
     });
   });
 
+  it("binds current packages to canonical public inputs and rejects a changed digest", async () => {
+    const { recipient, grant, payload } = await fixture();
+    const publicInputs = {
+      ...payload.proofPackage.publicInputs,
+      chainId: "0x1",
+      sealAddress: "0x123",
+      proofVersion: "2",
+      schemaVersion: "1",
+      agreementRootHigh: "1",
+      agreementRootLow: "2",
+      manifestRootHigh: "3",
+      manifestRootLow: "4",
+      policyRootHigh: "5",
+      policyRootLow: "6",
+      fxRootHigh: "7",
+      fxRootLow: "8",
+      runNullifierHigh: "9",
+      runNullifierLow: "10",
+      validityStart: "11",
+      validityExpiry: "12",
+    };
+    const publicInputsHash = proofPackagePublicInputsHash(publicInputs);
+    expect(publicInputsHash).toMatch(/^0x[0-9a-f]{64}$/);
+    const boundPayload: RecipientProofPackagePayload = {
+      ...payload,
+      proofPackage: {
+        ...payload.proofPackage,
+        verifier: { ...payload.proofPackage.verifier, chainId: "0x1" },
+        publicInputs,
+      },
+      verification: { ...payload.verification, publicInputsHash: publicInputsHash! },
+    };
+    const encrypted = createRecipientEncryptedProofPackage({ payload: boundPayload, recipient, at: activeAt });
+    await expect(inspectRecipientProofPackageOffline({
+      encryptedPackage: encrypted,
+      recipient,
+      currentGrant: grant,
+      at: activeAt,
+    })).resolves.toMatchObject({ publicInputsBinding: "verified" });
+    expect(() => createRecipientEncryptedProofPackage({
+      payload: {
+        ...boundPayload,
+        verification: { ...boundPayload.verification, publicInputsHash: `0x${"ff".repeat(32)}` },
+      },
+      recipient,
+      at: activeAt,
+    })).toThrow(/not bound to the packaged proof public inputs/i);
+  });
+
   it("fails closed for the wrong recipient, expiry, and current revocation", async () => {
     const { recipient, grant, payload } = await fixture();
     const encrypted = createRecipientEncryptedProofPackage({ payload, recipient, at: activeAt });
@@ -101,13 +178,21 @@ describe("recipient-encrypted proof packages", () => {
       recipient,
       currentGrant: grant,
       at: new Date("2026-08-28T00:00:00.000Z"),
-    })).rejects.toThrow(/not active/);
+    })).rejects.toThrow(/expired/);
     await expect(verifyRecipientProofPackageOffline({
       encryptedPackage: encrypted,
       recipient,
       currentGrant: { ...grant, revokedAt: "2026-08-26T11:59:30.000Z" },
       at: activeAt,
     })).rejects.toThrow(/revoked/);
+
+    const wrongKey = generateVaultPrincipal(recipient.principalId);
+    await expect(verifyRecipientProofPackageOffline({
+      encryptedPackage: encrypted,
+      recipient: wrongKey,
+      currentGrant: grant,
+      at: activeAt,
+    })).rejects.toThrow(/public key/);
   });
 
   it("rejects out-of-scope fields and unbalanced journals before encryption", async () => {
@@ -125,5 +210,35 @@ describe("recipient-encrypted proof packages", () => {
       recipient,
       at: activeAt,
     })).toThrow(/not balanced/);
+  });
+
+  it("rejects mismatched envelope metadata and unsafe ZIP contents before extraction", async () => {
+    const { recipient, grant, payload } = await fixture();
+    const encrypted = createRecipientEncryptedProofPackage({ payload, recipient, at: activeAt });
+    await expect(verifyRecipientProofPackageOffline({
+      encryptedPackage: {
+        ...encrypted,
+        envelope: { ...encrypted.envelope, aad: { ...encrypted.envelope.aad, organizationId: "another-organization" } },
+      },
+      recipient,
+      currentGrant: grant,
+      at: activeAt,
+    })).rejects.toThrow(/does not match/);
+
+    const unsupportedArchive = zipSync({ "unexpected.txt": new Uint8Array([1, 2, 3]) });
+    await expect(verifyRecipientProofPackageOffline({
+      encryptedPackage: encryptedArchiveFixture({ archive: unsupportedArchive, grant, recipient }),
+      recipient,
+      currentGrant: grant,
+      at: activeAt,
+    })).rejects.toThrow(/archive.*unsupported/i);
+
+    const oversizedArchive = zipSync({ "proof.json": new Uint8Array(8 * 1024 * 1024 + 1) });
+    await expect(verifyRecipientProofPackageOffline({
+      encryptedPackage: encryptedArchiveFixture({ archive: oversizedArchive, grant, recipient }),
+      recipient,
+      currentGrant: grant,
+      at: activeAt,
+    })).rejects.toThrow(/safe size limit/i);
   });
 });

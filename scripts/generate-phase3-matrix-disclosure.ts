@@ -239,6 +239,7 @@ async function main() {
         checkedAt: matrixEvidence.generatedAt,
       },
       starknetReceipt: {
+        transactionHash: verificationTransaction.transactionHash,
         finalStatus: matrixEvidence.finalStatus,
         sealTransactionHash: matrixEvidence.transactions.privateSettlementAndSeal,
         verificationTransactionHash: verificationTransaction.transactionHash,

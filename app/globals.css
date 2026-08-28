@@ -2523,10 +2523,58 @@ button:focus-visible {
 .receipt-doodle span { position: absolute; right: -7px; bottom: -7px; width: 21px; height: 21px; display: grid; place-items: center; background: var(--green); border: 1px solid var(--ink); border-radius: 50%; font-size: 10px; font-weight: 900; }
 .receipts-card h3 { margin: 8px 65px 8px 0; font-family: Georgia, serif; font-size: 20px; line-height: 1.05; }
 .receipts-card > p { margin: 0 0 15px; color: #765a54; font-size: 8.5px; line-height: 1.55; }
+.receipts-card > .button + .button { margin-top: 8px; }
+.proof-package-file-input { display: none; }
 .receipt-disclosure-form { margin-top: 12px; padding-top: 12px; display: grid; gap: 9px; border-top: 1px dashed #b98376; }
 .receipt-disclosure-form label { display: grid; gap: 4px; color: #765a54; font-size: 8px; font-weight: 850; }
 .receipt-disclosure-form input, .receipt-disclosure-form select { width: 100%; min-width: 0; padding: 9px 10px; color: var(--ink); background: var(--white); border: 1px solid #b98376; border-radius: 9px; font: inherit; }
 .receipt-disclosure-form p { margin: 0; color: #765a54; font-size: 7.5px; line-height: 1.45; }
+.proof-identity-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.proof-identity-actions .button { min-width: 0; padding: 7px 6px; font-size: 6.5px; }
+.proof-identity-fingerprint { padding: 7px 8px; display: flex; align-items: center; gap: 6px; color: #456a4a !important; background: rgba(237,248,238,.86); border: 1px solid #8abb91; border-radius: 8px; font-family: ui-monospace, monospace; }
+.proof-package-success,
+.proof-package-inspector { margin-top: 12px; padding: 12px; display: grid; gap: 10px; background: rgba(255,255,255,.76); border: 1px solid #aa7b70; border-radius: 12px; box-shadow: 2px 2px 0 rgba(101,64,56,.16); }
+.proof-package-inspector { background: #f7fbf4; border-color: #7d9e79; box-shadow: 2px 2px 0 rgba(63,106,72,.15); }
+.proof-package-result-title { display: flex; align-items: center; gap: 8px; color: #47734f; }
+.proof-package-result-title > span { min-width: 0; display: grid; gap: 2px; }
+.proof-package-result-title small { color: #6a826d; font-size: 6px; font-weight: 900; letter-spacing: .09em; }
+.proof-package-result-title strong { overflow: hidden; color: var(--ink); font-family: Georgia, serif; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.proof-package-result-title > i { margin-left: auto; padding: 4px 6px; border-radius: 999px; font-size: 6px; font-style: normal; font-weight: 900; white-space: nowrap; }
+.proof-package-success dl,
+.proof-package-inspector dl { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.proof-package-success dl div,
+.proof-package-inspector dl div { min-width: 0; padding: 7px 8px; display: grid; gap: 2px; background: rgba(255,255,255,.72); border: 1px solid rgba(125,98,91,.28); border-radius: 8px; }
+.proof-package-success dt,
+.proof-package-inspector dt { color: #79655f; font-size: 6px; font-weight: 900; letter-spacing: .05em; text-transform: uppercase; }
+.proof-package-success dd,
+.proof-package-inspector dd { margin: 0; overflow: hidden; color: var(--ink); font-size: 7px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+.proof-package-success > p,
+.proof-package-inspector > p { margin: 0; color: #657061; font-size: 7px; line-height: 1.45; }
+.proof-package-result-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.proof-package-result-actions button,
+.proof-package-result-actions a { min-height: 28px; padding: 6px 8px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; color: var(--ink); background: var(--white); border: 1px solid #8e766f; border-radius: 8px; cursor: pointer; font: inherit; font-size: 6.5px; font-weight: 850; text-decoration: none; }
+.proof-package-result-actions button:disabled { cursor: not-allowed; opacity: .48; }
+.proof-evidence-status--confirmed { color: #3f6a48; background: #dff0df; }
+.proof-evidence-status--pending { color: #715f1b; background: #f6e9ac; }
+.proof-evidence-status--failed { color: #8e4235; background: #f5d2c9; }
+.proof-evidence-status--unavailable { color: #5d6870; background: #e6ebee; }
+.proof-package-verdict { padding: 8px !important; display: flex; align-items: flex-start; gap: 6px; color: #3f6a48 !important; background: #edf8ee; border-radius: 8px; font-weight: 800; }
+.proof-package-verdict svg { flex: 0 0 auto; }
+.proof-package-live-warning { padding: 8px !important; color: #7d5423 !important; background: #fff3d5; border: 1px solid #d1aa5c; border-radius: 8px; font-weight: 800; }
+.proof-package-failure { margin-top: 12px; padding: 11px; display: flex; align-items: flex-start; gap: 9px; color: #873f34; background: #fff0eb; border: 1px solid #c97868; border-radius: 11px; }
+.proof-package-failure > span { width: 22px; height: 22px; flex: 0 0 auto; display: grid; place-items: center; color: var(--white); background: #b95d4d; border-radius: 50%; font-size: 10px; font-weight: 950; }
+.proof-package-failure > div { display: grid; gap: 2px; }
+.proof-package-failure small { font-size: 6px; font-weight: 900; letter-spacing: .08em; }
+.proof-package-failure strong { color: var(--ink); font-family: Georgia, serif; font-size: 13px; }
+.proof-package-failure p { margin: 2px 0 0; font-size: 7px; line-height: 1.45; }
+.proof-package-failure--expired,
+.proof-package-failure--revoked { color: #6d622f; background: #fff6d6; border-color: #bda853; }
+.proof-package-failure--expired > span,
+.proof-package-failure--revoked > span { background: #9b842c; }
+.proof-claim-context { padding: 9px 10px; display: grid; gap: 3px; background: #fff4cc; border: 1px solid #c4aa4b; border-radius: 9px; }
+.proof-claim-context small { color: #776522; font-size: 6px; font-weight: 900; letter-spacing: .08em; }
+.proof-claim-context strong { font-family: Georgia, serif; font-size: 12px; }
+.proof-claim-context span { color: #6d622f; font-size: 7px; }
 .disclosure-grant-list { margin-top: 12px; padding-top: 11px; display: grid; gap: 7px; border-top: 1px dashed #b98376; }
 .disclosure-grant-list > small { color: #765a54; font-size: 6.5px; font-weight: 900; letter-spacing: .08em; }
 .disclosure-grant-row { padding: 8px 9px; display: flex; align-items: center; justify-content: space-between; gap: 9px; background: rgba(255,255,255,.56); border: 1px solid rgba(185,131,118,.6); border-radius: 9px; }
@@ -2705,6 +2753,12 @@ button:focus-visible {
   .timeline-event__value { grid-column: 2; grid-row: 2; display: flex; align-items: center; gap: 8px; text-align: left; }
   .event-kind { margin: 0; }
   .hash-button { grid-column: 2; }
+  .proof-identity-actions { grid-template-columns: 1fr; }
+  .proof-package-result-title { align-items: flex-start; flex-wrap: wrap; }
+  .proof-package-result-title > i { margin-left: 27px; }
+  .proof-package-success dl,
+  .proof-package-inspector dl { grid-template-columns: 1fr; }
+  .proof-package-result-actions { display: grid; grid-template-columns: 1fr; }
 }
 
 /* Wallet connection */
