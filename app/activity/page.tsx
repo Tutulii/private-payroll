@@ -63,6 +63,10 @@ import type { PayrollExecutionStage } from "@/lib/client/payroll-execution";
 import type { SerializedPayrollIntegrityBuildRequest } from "@/lib/proof/input-builder";
 import { runProgressiveTasks, type ProgressiveTask } from "@/lib/client/progressive-tasks";
 import { READY_AUTH_CHAIN_ID } from "@/lib/auth/ready-session";
+import {
+  disclosureFormDefaults,
+  resolveDisclosureSelection,
+} from "@/lib/client/disclosure-form";
 
 type ActivityKind = "Payroll" | "Agent" | "Vault";
 
@@ -536,8 +540,27 @@ export default function ActivityPage() {
     && ["confirmed", "finalized", "reconciled"].includes(state));
   const disclosureSettlements = settlements.filter(({ state, transactionHash }) =>
     Boolean(transactionHash) && ["confirmed", "finalized", "reconciled"].includes(state));
-  const disclosureSettlement = disclosureSettlements.find(({ id }) => id === disclosureSettlementId)
-    ?? disclosureSettlements[0];
+  const disclosureSettlement = resolveDisclosureSelection(
+    disclosureSettlements,
+    disclosureSettlementId,
+  );
+
+  const fillCurrentDisclosureIdentity = () => {
+    if (!vault.session) return;
+    const defaults = disclosureFormDefaults(vault.session.principal);
+    setGranteePrincipalId(defaults.principalId);
+    setGranteePublicKey(defaults.publicKey);
+    setDisclosureExpiry(defaults.expiresAtInput);
+  };
+
+  const toggleDisclosureForm = () => {
+    if (showDisclosure) {
+      setShowDisclosure(false);
+      return;
+    }
+    fillCurrentDisclosureIdentity();
+    setShowDisclosure(true);
+  };
 
   const createReceipt = async () => {
     if (!vault.client || !vault.session || !disclosureSettlement) return;
@@ -575,7 +598,7 @@ export default function ActivityPage() {
 
   const createDisclosure = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!vault.client || !vault.session || !receiptableSettlement) return;
+    if (!vault.client || !vault.session || !disclosureSettlement) return;
     setCreatingReceipt(true);
     setActivityError("");
     try {
@@ -583,7 +606,7 @@ export default function ActivityPage() {
       const proofPackage = await createProofPackageForSettlement({
         client: vault.client,
         organizationId: vault.session.organizationId,
-        settlementId: receiptableSettlement.id,
+        settlementId: disclosureSettlement.id,
         issuerPrincipal: vault.session.principal,
         grantee,
         scope: disclosureScope,
@@ -1134,15 +1157,17 @@ export default function ActivityPage() {
 
           <section className="receipts-card">
             <div className="receipt-doodle" aria-hidden="true"><FileText size={28} /><span>✓</span></div><span className="label">ENCRYPTED RECEIPT</span><h3>Keep the evidence.<br />Hide the payroll.</h3><p>Creates a locally encrypted receipt binding the private token totals to the confirmed Starknet transaction and totals commitment. PAYO stores ciphertext only.</p><button type="button" className="button button--ink button--wide" onClick={() => void createReceipt()} disabled={!vault.session || !receiptableSettlement || creatingReceipt}>{creatingReceipt ? <LoaderCircle className="spin" size={16} /> : <ReceiptText size={16} />} {receiptableSettlement ? "Create encrypted receipt" : "Awaiting confirmed settlement"}</button>
-            <button type="button" className="button button--soft button--wide" onClick={() => setShowDisclosure((current) => !current)} disabled={!vault.session || !disclosureSettlement || creatingReceipt}><KeyRound size={16} /> Create scoped proof package</button>
+            <button type="button" className="button button--soft button--wide" onClick={toggleDisclosureForm} disabled={!vault.session || !disclosureSettlement || creatingReceipt}><KeyRound size={16} /> Create scoped proof package</button>
             {showDisclosure && <form className="receipt-disclosure-form" onSubmit={createDisclosure}>
               <label><span>Verified workflow</span><select value={disclosureSettlement?.id ?? ""} onChange={(event) => { setDisclosureSettlementId(event.target.value); setDisclosureAgreementId(""); }} required>{disclosureSettlements.map((settlement) => <option value={settlement.id} key={settlement.id}>{settlement.workflowType.replaceAll("_", " ")} · {shortId(settlement.transactionHash)}</option>)}</select></label>
               <label><span>Recipient scope</span><select value={disclosureScope} onChange={(event) => setDisclosureScope(event.target.value as typeof disclosureScope)}><option value="worker">Worker · own line only</option><option value="employer">Employer · full books</option><option value="auditor">Auditor · no identities</option><option value="tax">Tax reviewer · no classification</option></select></label>
               {disclosureScope === "worker" && disclosureSettlement?.workflowType === "payroll" && <label><span>Worker payroll line</span><select value={disclosureAgreementId} onChange={(event) => setDisclosureAgreementId(event.target.value)} required><option value="">Choose a proved agreement</option>{agreementOptions.map(({ agreement, label }) => <option key={agreement.id} value={agreement.agreement.id}>{label} · {agreement.agreement.settlementToken}</option>)}</select></label>}
               {disclosureScope === "worker" && disclosureSettlement?.workflowType !== "payroll" && <p>PAYO derives the claimant or remediation recipient from the encrypted, proof-bound exception record; no other payroll line can be selected.</p>}
-              <label><span>Recipient principal UUID</span><input value={granteePrincipalId} onChange={(event) => setGranteePrincipalId(event.target.value)} placeholder="UUIDv7" required pattern="[0-9a-fA-F-]{36}" /></label>
-              <label><span>Recipient X25519 public key</span><input value={granteePublicKey} onChange={(event) => setGranteePublicKey(event.target.value)} placeholder="Recipient encryption key" required /></label>
-              <label><span>Expires</span><input type="datetime-local" value={disclosureExpiry} onChange={(event) => setDisclosureExpiry(event.target.value)} required /></label>
+              <button type="button" className="button button--soft button--wide" onClick={fillCurrentDisclosureIdentity}><KeyRound size={16} /> Use my PAYO identity</button>
+              <p>Your unlocked PAYO public identity is filled automatically. Replace both recipient fields only when another recipient gives you their PAYO UUID and public encryption key.</p>
+              <label><span>Recipient principal UUID</span><input value={granteePrincipalId} onChange={(event) => setGranteePrincipalId(event.target.value)} placeholder="UUIDv7" required pattern="[0-9a-fA-F-]{36}" autoComplete="off" spellCheck={false} /></label>
+              <label><span>Recipient X25519 public key</span><input value={granteePublicKey} onChange={(event) => setGranteePublicKey(event.target.value)} placeholder="Recipient encryption key" required autoComplete="off" spellCheck={false} /></label>
+              <label><span>Expires</span><input type="datetime-local" value={disclosureExpiry} onChange={(event) => setDisclosureExpiry(event.target.value)} required /><small>Defaults to 24 hours from now.</small></label>
               <p>PAYO rebuilds the exact payroll, claim, or remediation manifest locally, requires both on-chain verifier shards, creates a balanced journal, and encrypts the package only to this recipient. Worker packages contain one workflow-specific Merkle opening; auditor and tax scopes omit restricted fields.</p>
               <button type="submit" className="button button--ink button--wide" disabled={creatingReceipt || !disclosureSettlement || (disclosureScope === "worker" && disclosureSettlement.workflowType === "payroll" && !disclosureAgreementId)}>{creatingReceipt ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />} Verify, encrypt and download</button>
             </form>}
