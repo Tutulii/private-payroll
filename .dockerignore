@@ -7,7 +7,7 @@ node_modules
 !.env.example
 circuits/payroll_integrity/target
 contracts/target
-contracts/integrity_verifier/target
+contracts/**/target
 evidence
 test-results
 playwright-report
