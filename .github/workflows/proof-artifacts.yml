@@ -101,6 +101,40 @@ jobs:
             > circuits/payroll_integrity/target/gates.json
           node -e 'const fs=require("fs"); const gates=JSON.parse(fs.readFileSync("circuits/payroll_integrity/target/gates.json")); const size=gates.functions[0].circuit_size; if (size > 1048576) throw new Error(`Circuit ${size} exceeds the 2^20 production domain`); console.log(`PayrollIntegrity circuit size: ${size}`);'
 
+      - name: Reproduce the merged Phase 3 circuit and verification key
+        working-directory: circuits/advanced_obligation
+        run: |
+          nargo test
+          nargo build
+          # Noir includes test/debug source in the artifact hash. The public proving artifact intentionally strips late test-only metadata, so compare every proof-defining field here; the VK comparison below is the cryptographic identity gate.
+          node -e 'const fs=require("fs"); const built=JSON.parse(fs.readFileSync("target/payo_advanced_obligation.json")); const published=JSON.parse(fs.readFileSync("../../public/circuits/advanced_obligation-v2.json")); for (const key of ["noir_version","abi","bytecode","expression_width"]) if (JSON.stringify(built[key]) !== JSON.stringify(published[key])) throw new Error("Published merged Phase 3 circuit "+key+" differs from pinned build");'
+          bb gates --scheme ultra_honk --oracle_hash keccak \
+            -b target/payo_advanced_obligation.json \
+            > target/ci-gates.json
+          node -e 'const fs=require("fs"); const gates=JSON.parse(fs.readFileSync("target/ci-gates.json")); const size=gates.functions[0].circuit_size; if (size > 2097152) throw new Error("Merged Phase 3 circuit "+size+" exceeds the 2^21 production domain"); console.log("Merged Phase 3 circuit size: "+size);'
+          mkdir -p target/ci-vk
+          bb write_vk --scheme ultra_honk --oracle_hash keccak \
+            -b target/payo_advanced_obligation.json \
+            -o target/ci-vk
+          node -e 'const fs=require("fs"); const hex=fs.readFileSync("../../public/circuits/advanced_obligation-v2.vk.hex","utf8").replace(/\s/g,""); if (!/^[0-9a-f]+$/i.test(hex) || hex.length % 2 !== 0) throw new Error("Committed merged Phase 3 VK is malformed"); fs.writeFileSync("target/committed-vk",Buffer.from(hex,"hex"));'
+          cmp target/ci-vk/vk target/committed-vk
+
+      - name: Reproduce the merged Phase 3 Garaga verifier
+        run: |
+          mkdir -p /tmp/payo-advanced-garaga
+          cd /tmp/payo-advanced-garaga
+          garaga gen \
+            --system ultra_keccak_zk_honk \
+            --vk "$GITHUB_WORKSPACE/circuits/advanced_obligation/target/ci-vk/vk" \
+            --project-name advanced_verifier
+          sed -i \
+            's/mod UltraKeccakZKHonkVerifier {/mod PayoAdvancedObligationVerifier {/' \
+            advanced_verifier/src/honk_verifier.cairo
+          (cd advanced_verifier && scarb fmt)
+          diff -ruB \
+            "$GITHUB_WORKSPACE/contracts/advanced_verifier/src" \
+            advanced_verifier/src
+
       - name: Generate synthetic deployment-bound shard inputs
         env:
           PAYO_WRITE_BROWSER_PROOF_FIXTURE: "true"
