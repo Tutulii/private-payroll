@@ -28,6 +28,7 @@ import type { PayoClient } from "./payo-client";
 import { storeCanonicalEncryptedRecord } from "./encrypted-records";
 import type { RemediationRecord, WageClaimRecord } from "./claim-workflows";
 import { recoverConfirmedPayrollVerification, type PayrollExecutionStage } from "./payroll-execution";
+import { awaitWalletOrRecoveredTransaction, readRecoveredSettlementTransactionHash } from "./wallet-submission-recovery";
 
 type ProveException = (input: {
   encryptedWitness: Parameters<typeof proveEncryptedPayroll>[0]["encryptedWitness"];
@@ -529,10 +530,18 @@ export async function executeProofBoundWageClaim(input: {
     tokenTotalsCommitment,
     envelope: settlementEnvelope,
   }));
+  await retryWrite(() => input.client.enqueueProofVerification({
+    settlementId,
+    proofBundleId,
+    shards: pending.proofShards,
+  }));
   input.persistPendingSubmission?.(pending);
 
   input.onStage?.("wallet");
-  const transactionHash = await input.submitException("wage_claim", [], sealed.invokeAction);
+  const transactionHash = await awaitWalletOrRecoveredTransaction({
+    submit: () => input.submitException("wage_claim", [], sealed.invokeAction),
+    readRecoveredTransactionHash: () => readRecoveredSettlementTransactionHash(input.client, settlementId),
+  });
   if (!/^0x[0-9a-fA-F]{1,64}$/.test(transactionHash)) {
     throw new Error("Ready submitted the wage claim without returning a valid transaction hash.");
   }
@@ -540,11 +549,6 @@ export async function executeProofBoundWageClaim(input: {
   input.persistPendingSubmission?.(submitted);
   input.onStage?.("recording");
   await retryWrite(() => input.client.recordSettlementSubmission(settlementId, transactionHash));
-  await retryWrite(() => input.client.enqueueProofVerification({
-    settlementId,
-    proofBundleId,
-    shards: pending.proofShards,
-  }));
   await storeCanonicalEncryptedRecord({
     client: input.client,
     organizationId: input.organizationId,
@@ -789,7 +793,10 @@ export async function resumeProofBoundWageClaim(input: {
       nowUnixSeconds: BigInt(Math.floor((input.now?.() ?? new Date()).getTime() / 1_000)),
     });
     input.onStage?.("wallet");
-    transactionHash = await input.submitException("wage_claim", [], sealed.invokeAction);
+    transactionHash = await awaitWalletOrRecoveredTransaction({
+      submit: () => input.submitException("wage_claim", [], sealed.invokeAction),
+      readRecoveredTransactionHash: () => readRecoveredSettlementTransactionHash(input.client, pending.settlementId),
+    });
     if (!/^0x[0-9a-fA-F]{1,64}$/.test(transactionHash)) {
       throw new Error("Ready submitted the wage claim without returning a valid transaction hash.");
     }
@@ -1085,10 +1092,18 @@ export async function executeProofBoundWageRemediation(input: {
     tokenTotalsCommitment,
     envelope: settlementEnvelope,
   }));
+  await retryWrite(() => input.client.enqueueProofVerification({
+    settlementId,
+    proofBundleId,
+    shards: pending.proofShards,
+  }));
   input.persistPendingSubmission?.(pending);
 
   input.onStage?.("wallet");
-  const transactionHash = await input.submitException("wage_remediation", walletRecipients, sealed.invokeAction);
+  const transactionHash = await awaitWalletOrRecoveredTransaction({
+    submit: () => input.submitException("wage_remediation", walletRecipients, sealed.invokeAction),
+    readRecoveredTransactionHash: () => readRecoveredSettlementTransactionHash(input.client, settlementId),
+  });
   if (!/^0x[0-9a-fA-F]{1,64}$/.test(transactionHash)) {
     throw new Error("Ready submitted remediation without returning a valid transaction hash.");
   }
@@ -1096,11 +1111,6 @@ export async function executeProofBoundWageRemediation(input: {
   input.persistPendingSubmission?.(submitted);
   input.onStage?.("recording");
   await retryWrite(() => input.client.recordSettlementSubmission(settlementId, transactionHash));
-  await retryWrite(() => input.client.enqueueProofVerification({
-    settlementId,
-    proofBundleId,
-    shards: pending.proofShards,
-  }));
   await storeCanonicalEncryptedRecord({
     client: input.client,
     organizationId: input.organizationId,
@@ -1270,7 +1280,10 @@ export async function resumeProofBoundWageRemediation(input: {
       nowUnixSeconds: nowUnix,
     });
     input.onStage?.("wallet");
-    transactionHash = await input.submitException("wage_remediation", walletRecipients, sealed.invokeAction);
+    transactionHash = await awaitWalletOrRecoveredTransaction({
+      submit: () => input.submitException("wage_remediation", walletRecipients, sealed.invokeAction),
+      readRecoveredTransactionHash: () => readRecoveredSettlementTransactionHash(input.client, pending.settlementId),
+    });
     if (!/^0x[0-9a-fA-F]{1,64}$/.test(transactionHash)) {
       throw new Error("Ready submitted remediation without returning a valid transaction hash.");
     }

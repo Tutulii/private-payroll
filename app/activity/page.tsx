@@ -270,6 +270,7 @@ export default function ActivityPage() {
   const [exceptionFeedback, setExceptionFeedback] = useState<ExceptionFeedback | null>(null);
   const [pendingException, setPendingException] = useState<PendingExceptionSubmission | null>(null);
   const activityRefreshGeneration = useRef(0);
+  const automaticExceptionRecoveryAttempts = useRef(new Map<string, number>());
 
   const persistPendingException = useCallback((submission: PendingExceptionSubmission | null) => {
     const organizationId = vault.session?.organizationId;
@@ -733,7 +734,7 @@ export default function ActivityPage() {
     }
   };
 
-  const resumeClaimApproval = async (claim: WageClaimRecord) => {
+  const resumeClaimApproval = useCallback(async (claim: WageClaimRecord) => {
     if (!vault.client || !vault.session) return;
     setCreatingException(true);
     setProvingClaimId(claim.id);
@@ -819,7 +820,16 @@ export default function ActivityPage() {
       setProvingClaimId("");
       setExceptionStage(null);
     }
-  };
+  }, [
+    notify,
+    pendingException,
+    persistPendingException,
+    refreshActivity,
+    settlements,
+    starknet,
+    vault.client,
+    vault.session,
+  ]);
 
   const settleRemediation = async (remediation: RemediationRecord) => {
     if (!vault.client || !vault.session) return;
@@ -883,7 +893,7 @@ export default function ActivityPage() {
     }
   };
 
-  const resumeRemediationApproval = async (remediation: RemediationRecord) => {
+  const resumeRemediationApproval = useCallback(async (remediation: RemediationRecord) => {
     if (!vault.client || !vault.session) return;
     const claim = claims.find(({ id }) => id === remediation.claimId);
     if (!claim) {
@@ -966,7 +976,58 @@ export default function ActivityPage() {
       setProvingClaimId("");
       setExceptionStage(null);
     }
-  };
+  }, [
+    claims,
+    notify,
+    pendingException,
+    persistPendingException,
+    refreshActivity,
+    settlements,
+    starknet,
+    vault.client,
+    vault.session,
+  ]);
+
+  useEffect(() => {
+    if (!vault.client || !vault.session || creatingException || loading) return;
+    const candidates = settlements
+      .filter((settlement) => Boolean(settlement.transactionHash))
+      .map((settlement) => ({
+        settlement,
+        delivery: exceptionProofDeliveryState(settlement),
+      }))
+      .filter(({ delivery }) => delivery === "recoverable" || delivery === "complete")
+      .sort((left, right) => new Date(right.settlement.createdAt).getTime() - new Date(left.settlement.createdAt).getTime());
+    for (const { settlement } of candidates) {
+      const claim = settlement.workflowType === "wage_claim"
+        ? claims.find((record) => record.id === settlement.subjectRecordId && record.state === "proven")
+        : undefined;
+      const remediation = settlement.workflowType === "wage_remediation"
+        ? remediations.find((record) => record.id === settlement.subjectRecordId && record.state === "proven")
+        : undefined;
+      if (!claim && !remediation) continue;
+      const attemptKey = settlement.workflowType + ":" + settlement.id;
+      const now = Date.now();
+      const previousAttempt = automaticExceptionRecoveryAttempts.current.get(attemptKey) ?? 0;
+      if (now - previousAttempt < 30_000) return;
+      automaticExceptionRecoveryAttempts.current.set(attemptKey, now);
+      const timer = window.setTimeout(() => {
+        if (claim) void resumeClaimApproval(claim);
+        else if (remediation) void resumeRemediationApproval(remediation);
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
+  }, [
+    claims,
+    creatingException,
+    loading,
+    remediations,
+    resumeClaimApproval,
+    resumeRemediationApproval,
+    settlements,
+    vault.client,
+    vault.session,
+  ]);
 
   const createRemediationDraft = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

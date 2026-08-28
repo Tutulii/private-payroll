@@ -286,6 +286,9 @@ describe("proof-bound wage-claim execution", () => {
     }));
     expect(recordSettlementSubmission).toHaveBeenCalledWith(result.settlementId, "0xc1a1");
     expect(enqueueProofVerification).toHaveBeenCalledWith(expect.objectContaining({ proofBundleId: result.proofBundleId }));
+    expect(enqueueProofVerification.mock.invocationCallOrder[0]).toBeLessThan(
+      submitException.mock.invocationCallOrder[0],
+    );
     expect(storeEncryptedRecord).toHaveBeenCalledTimes(2);
     expect(pending).toHaveBeenLastCalledWith(null);
   });

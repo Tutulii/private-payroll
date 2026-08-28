@@ -293,6 +293,9 @@ describe("proof-bound payroll browser orchestration", () => {
     const createdSettlementId = mockClient.createSettlementIntent.mock.calls[0][0].id;
     expect(mockClient.recordSettlementSubmission).toHaveBeenCalledWith(createdSettlementId, "0xfeed");
     expect(mockClient.enqueueProofVerification.mock.calls[0][0].shards).toHaveLength(2);
+    expect(mockClient.enqueueProofVerification.mock.invocationCallOrder[0]).toBeLessThan(
+      input.submitPayroll.mock.invocationCallOrder[0],
+    );
     expect(input.persistPendingSubmission).toHaveBeenNthCalledWith(1, expect.not.objectContaining({ transactionHash: expect.anything() }));
     expect(input.persistPendingSubmission).toHaveBeenNthCalledWith(2, expect.objectContaining({ transactionHash: "0xfeed" }));
     expect(input.persistPendingSubmission).toHaveBeenLastCalledWith(null);
@@ -592,23 +595,18 @@ describe("proof-bound payroll browser orchestration", () => {
     expect(mockClient.enqueueProofVerification).not.toHaveBeenCalled();
   });
 
-  it("records a submitted payment without leaving stale wallet approval when proof enqueue fails", async () => {
+  it("does not open Ready unless durable proof delivery is prepared", async () => {
     const mockClient = client();
     const input = await executionInput(mockClient);
-    const onStage = vi.fn();
     mockClient.enqueueProofVerification.mockRejectedValue(new Error("proof service unavailable"));
 
-    const result = await executeProofBoundPayroll({ ...input, onStage });
-
-    expect(result).toMatchObject({
-      transactionHash: "0xfeed",
-      verificationQueued: false,
-      proofDeliveryWarning: expect.stringContaining("durably recorded"),
+    await expect(executeProofBoundPayroll(input)).rejects.toMatchObject({
+      name: "PayrollSubmissionPersistenceError",
+      message: expect.stringContaining("could not prepare approval and proof delivery"),
     });
-    expect(input.submitPayroll).toHaveBeenCalledTimes(1);
-    expect(mockClient.recordSettlementSubmission).toHaveBeenCalledTimes(1);
-    expect(input.persistPendingSubmission).toHaveBeenLastCalledWith(null);
-    expect(onStage).toHaveBeenLastCalledWith("recorded");
+    expect(input.submitPayroll).not.toHaveBeenCalled();
+    expect(mockClient.recordSettlementSubmission).not.toHaveBeenCalled();
+    expect(input.persistPendingSubmission).not.toHaveBeenCalled();
   });
 
   it("keeps recovery evidence when durable settlement recording itself fails", async () => {
@@ -623,7 +621,10 @@ describe("proof-bound payroll browser orchestration", () => {
     expect(input.persistPendingSubmission).toHaveBeenLastCalledWith(
       expect.objectContaining({ transactionHash: "0xfeed" }),
     );
-    expect(mockClient.enqueueProofVerification).not.toHaveBeenCalled();
+    expect(mockClient.enqueueProofVerification).toHaveBeenCalledTimes(1);
+    expect(mockClient.enqueueProofVerification.mock.invocationCallOrder[0]).toBeLessThan(
+      input.submitPayroll.mock.invocationCallOrder[0],
+    );
   });
 
   it("clears an old local recovery marker once its payment is durable even if proof enqueue fails", async () => {

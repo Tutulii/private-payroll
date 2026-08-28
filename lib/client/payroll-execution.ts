@@ -40,6 +40,7 @@ import { PAYO_MAX_PROOF_CALLDATA_FELTS, type ProofWorkerSuccess } from "@/lib/pr
 import { buildPayoSealedPayroll } from "@/lib/starknet/payo-seal";
 import { agreementScheduleCommitment, type PayAgreementDirectoryRecord } from "./agreement-directory";
 import type { PayeeDirectoryRecord } from "./payee-directory";
+import { awaitWalletOrRecoveredTransaction, readRecoveredSettlementTransactionHash } from "./wallet-submission-recovery";
 
 export type PayrollExecutionObligation = {
   agreement: PayAgreementDirectoryRecord;
@@ -901,7 +902,8 @@ export async function executeProofBoundPayroll(
     createdAt: new Date().toISOString(),
   };
 
-  // The approval intent and recovery payload must exist before Ready opens.
+  // The approval intent, proof-delivery job, and recovery payload must exist
+  // before Ready opens.
   // A Wallet API implementation may submit on-chain yet never resolve its
   // request promise; persisting after that promise would strand the run at
   // `proven` with no settlement or safe hash-recovery path.
@@ -921,17 +923,25 @@ export async function executeProofBoundPayroll(
     if (returnedId(settlementResponse.settlement, "settlement") !== settlementId) {
       throw new Error("PAYO returned a different settlement identifier for this payroll.");
     }
+    await retryDurableWrite(() => input.client.enqueueProofVerification({
+      settlementId,
+      proofBundleId,
+      shards: pendingApproval.proofShards,
+    }));
     input.persistPendingSubmission?.(pendingApproval);
   } catch (error) {
     throw new PayrollSubmissionPersistenceError(
-      `PAYO could not persist the approval intent, so Ready was not opened. Recovery run: ${runId}.`,
+      `PAYO could not prepare approval and proof delivery, so Ready was not opened. Recovery run: ${runId}.`,
       pendingApproval,
       { cause: error },
     );
   }
 
   input.onStage?.("wallet");
-  const transactionHash = await input.submitPayroll(walletRecipients, sealed.invokeAction);
+  const transactionHash = await awaitWalletOrRecoveredTransaction({
+    submit: () => input.submitPayroll(walletRecipients, sealed.invokeAction),
+    readRecoveredTransactionHash: () => readRecoveredSettlementTransactionHash(input.client, settlementId),
+  });
   if (!/^0x[0-9a-fA-F]{1,64}$/.test(transactionHash)) {
     throw new PayrollSubmissionPersistenceError(
       `Ready submitted payroll without returning a valid transaction hash. Recovery run: ${runId}.`,
@@ -952,21 +962,6 @@ export async function executeProofBoundPayroll(
       pendingSubmission,
       { cause: error },
     );
-  }
-  try {
-    await retryDurableWrite(() => input.client.enqueueProofVerification({
-      settlementId,
-      proofBundleId,
-      shards: [proof.shards[0].proofCalldata, proof.shards[1].proofCalldata],
-    }));
-  } catch {
-    input.persistPendingSubmission?.(null);
-    input.onStage?.("recorded");
-    return {
-      ...pendingSubmission,
-      verificationQueued: false,
-      proofDeliveryWarning: PAYROLL_PROOF_DELIVERY_WARNING,
-    };
   }
   input.persistPendingSubmission?.(null);
   input.onStage?.("queued");

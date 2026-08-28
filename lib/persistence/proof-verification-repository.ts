@@ -79,10 +79,13 @@ export async function enqueueProofVerification(input: {
     if (!membership || !["admin", "operator"].includes(membership.role)) {
       throw new ApiError(403, "You cannot relay proofs for this settlement.", "ORG_FORBIDDEN");
     }
-    if (!settlement.transactionHash || !["submitted", "confirmed", "finalized"].includes(settlement.state)) {
+    const awaitingReadyApproval = settlement.state === "approval_pending" && !settlement.transactionHash;
+    const submitted = Boolean(settlement.transactionHash)
+      && ["submitted", "confirmed", "finalized"].includes(settlement.state);
+    if (!awaitingReadyApproval && !submitted) {
       throw new ApiError(
         409,
-        "Submit the STRK20 settlement before scheduling proof verification.",
+        "Proof delivery requires a pending Ready approval or a submitted STRK20 settlement.",
         "SETTLEMENT_NOT_SUBMITTED",
       );
     }
@@ -170,7 +173,9 @@ export async function enqueueProofVerification(input: {
       id: generateUuidV7(),
       organizationId: settlement.organizationId,
       actorId: input.principal.principalId,
-      action: "proof_verification.queued",
+      action: awaitingReadyApproval
+        ? "proof_verification.prepared"
+        : "proof_verification.queued",
       subjectId: id,
       metadata: {
         settlementId: settlement.id,

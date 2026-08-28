@@ -746,6 +746,18 @@ databaseSuite("PostgreSQL durability integration", () => {
       blockHash: "0x321",
     }, new Date("2099-08-25T12:00:01Z"));
     expect((await getDatabase().select().from(payrollRuns))[0].state).toBe("confirmed");
+
+    const replay = await recordSettlementSubmission({
+      settlementId,
+      transactionHash: "0xc1a1",
+      principal: admin,
+    });
+    expect(replay).toMatchObject({
+      state: "finalized",
+      blockNumber: "321",
+      replayed: true,
+    });
+    expect(() => JSON.stringify({ settlement: replay })).not.toThrow();
   });
 
   it("finalizes a submitted settlement when the first receipt already has final depth", async () => {
@@ -1286,7 +1298,7 @@ databaseSuite("PostgreSQL durability integration", () => {
     expect((await getDatabase().select().from(payrollRuns))[0].state).toBe("submitted");
   });
 
-  it("stores a locally verified proof only as ciphertext and atomically advances its run", async () => {
+  it("prepares encrypted proof delivery before Ready and leases it only after finalization", async () => {
     const organizationId = await seedOrganization();
     const runId = generateUuidV7();
     await getDatabase().insert(payrollRuns).values({
@@ -1389,9 +1401,8 @@ databaseSuite("PostgreSQL durability integration", () => {
       subjectRecordId: runId,
       walletRequestId: "proof-relay-wallet-request",
       idempotencyKey: "proof-relay-idempotency-key",
-      state: "submitted",
+      state: "approval_pending",
       tokenTotalsCommitment: `0x${"22".repeat(32)}`,
-      transactionHash: "0xabc",
     });
     const dateNow = vi.spyOn(Date, "now").mockReturnValue(
       (Number(commonInputs.validityExpiry) - 600) * 1_000,
@@ -1435,6 +1446,8 @@ databaseSuite("PostgreSQL durability integration", () => {
     const [proofJob] = await getDatabase().select().from(proofVerificationJobs);
     expect(proofJob).toMatchObject({ state: "pending", nextShard: 0 });
     expect(proofJob.shard0Calldata).toHaveLength(3_187);
+    expect((await getDatabase().select({ action: auditEvents.action }).from(auditEvents))
+      .map(({ action }) => action)).toContain("proof_verification.prepared");
 
     const modified = [[...shardCalldata[0]], shardCalldata[1]] as [string[], string[]];
     modified[0][100] = "0x1";
@@ -1454,7 +1467,7 @@ databaseSuite("PostgreSQL durability integration", () => {
     )).resolves.toEqual([]);
     await getDatabase()
       .update(settlements)
-      .set({ state: "finalized" })
+      .set({ state: "finalized", transactionHash: "0xabc" })
       .where(sql`${settlements.id} = ${settlementId}`);
 
     const [shardZeroLease] = await leaseProofVerificationJobs(

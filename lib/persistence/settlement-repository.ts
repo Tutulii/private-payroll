@@ -371,7 +371,11 @@ export async function recordSettlementSubmission(input: {
       if (existing.transactionHash.toLowerCase() !== transactionHash) {
         throw new ApiError(409, "Settlement already has a different transaction hash.", "TRANSACTION_HASH_CONFLICT");
       }
-      return { ...existing, replayed: true };
+      return {
+        ...existing,
+        blockNumber: existing.blockNumber === null ? null : existing.blockNumber.toString(),
+        replayed: true,
+      };
     }
     assertSettlementTransition(existing.state, "submitted");
     const [settlement] = await transaction
@@ -400,7 +404,11 @@ export async function recordSettlementSubmission(input: {
       subjectId: input.settlementId,
       metadata: { transactionHash, workflowType: existing.workflowType, subjectRecordId: existing.subjectRecordId },
     });
-    return { ...settlement, replayed: false };
+    return {
+      ...settlement,
+      blockNumber: settlement.blockNumber === null ? null : settlement.blockNumber.toString(),
+      replayed: false,
+    };
   });
 }
 
