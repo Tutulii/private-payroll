@@ -200,8 +200,8 @@ if (action === "deploy") {
   contracts.claimVerifier = await deployContract(declarations.claimVerifier, [], "0x7061796f3303");
   contracts.remediationVerifier = await deployContract(declarations.remediationVerifier, [], "0x7061796f3304");
   contracts.advancedBundle = await deployContract(
-    declarations.advancedBundle,
-    [contracts.baseVerifier.address, contracts.advancedVerifier.address],
+    declarations.integrityBundle,
+    [contracts.advancedVerifier.address],
     "0x7061796f3305",
   );
   contracts.claimBundle = await deployContract(
@@ -299,8 +299,8 @@ function proofFields(summary) {
 async function readProof(profile) {
   const [summary, shard0Source, shard1Source] = await Promise.all([
     readJson(`evidence/phase3-devnet-fixtures/${profile}-proof.json`),
-    readFile(resolve(fixtures, `${profile === "advanced" ? "advanced-packed" : profile}-shard-0.txt`), "utf8"),
-    readFile(resolve(fixtures, `${profile === "advanced" ? "advanced-packed" : profile}-shard-1.txt`), "utf8"),
+    readFile(resolve(fixtures, `${profile === "advanced" ? "advanced" : profile}-shard-0.txt`), "utf8"),
+    readFile(resolve(fixtures, `${profile === "advanced" ? "advanced" : profile}-shard-1.txt`), "utf8"),
   ]);
   const calldata = [shard0Source, shard1Source].map((source) => source.trim().split(/\s+/).filter(Boolean));
   for (const [index, shard] of calldata.entries()) {
@@ -330,7 +330,7 @@ if (action === "verify") {
     advancedBundleArtifact, integrityBundleArtifact] = await Promise.all([
     readProof("advanced"), readProof("claim"), readProof("remediation"),
     readJson(artifacts.policyRegistry.sierra), readJson(artifacts.obligationRegistry.sierra),
-    readJson(artifacts.payrollSeal.sierra), readJson(artifacts.advancedBundle.sierra),
+    readJson(artifacts.payrollSeal.sierra), readJson(artifacts.integrityBundle.sierra),
     readJson(artifacts.integrityBundle.sierra),
   ]);
   const profiles = [advanced, claim, remediation];
@@ -358,8 +358,7 @@ if (action === "verify") {
     pool: normalizeHex(await seal.call("get_pool")),
     policyRegistry: normalizeHex(await seal.call("get_catalog_registry")),
     obligationRegistry: normalizeHex(await seal.call("get_obligation_registry")),
-    advancedBaseVerifier: normalizeHex(await advancedBundle.call("get_base_verifier")),
-    advancedVerifier: normalizeHex(await advancedBundle.call("get_advanced_verifier")),
+    advancedVerifier: normalizeHex(await advancedBundle.call("get_underlying_verifier")),
     claimVerifier: normalizeHex(await claimBundle.call("get_underlying_verifier")),
     remediationVerifier: normalizeHex(await remediationBundle.call("get_underlying_verifier")),
   };
@@ -367,7 +366,6 @@ if (action === "verify") {
     pool: normalizeHex(poolCallerAddress),
     policyRegistry: normalizeHex(deployment.contracts.policyRegistry.address),
     obligationRegistry: normalizeHex(deployment.contracts.obligationRegistry.address),
-    advancedBaseVerifier: normalizeHex(deployment.contracts.baseVerifier.address),
     advancedVerifier: normalizeHex(deployment.contracts.advancedVerifier.address),
     claimVerifier: normalizeHex(deployment.contracts.claimVerifier.address),
     remediationVerifier: normalizeHex(deployment.contracts.remediationVerifier.address),

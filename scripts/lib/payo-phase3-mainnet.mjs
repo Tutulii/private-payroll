@@ -10,7 +10,6 @@ export const phase3DeclarationOrder = Object.freeze([
   "advancedVerifier",
   "claimVerifier",
   "remediationVerifier",
-  "advancedBundle",
   "payrollSeal",
 ]);
 
@@ -144,7 +143,10 @@ export function buildPayoPhase3MainnetPlan({
   const advancedVerifier = add("advancedVerifier", "advancedVerifier", []);
   const claimVerifier = add("claimVerifier", "claimVerifier", []);
   const remediationVerifier = add("remediationVerifier", "remediationVerifier", []);
-  add("advancedBundle", "advancedBundle", [contracts.baseVerifier.address, advancedVerifier]);
+  // Version 2 is one merged PayrollIntegrity + advanced-plan proof. Reuse
+  // the audited single-verifier bundle interface; the legacy two-proof
+  // advanced bundle remains available only for historical evidence.
+  add("advancedBundle", "integrityBundle", [advancedVerifier]);
   add("claimBundle", "integrityBundle", [claimVerifier]);
   add("remediationBundle", "integrityBundle", [remediationVerifier]);
   add("payrollSeal", "payrollSeal", [

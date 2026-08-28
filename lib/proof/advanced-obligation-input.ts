@@ -66,10 +66,10 @@ export type AdvancedObligationInputBuild = {
 };
 
 /**
- * Reuses the exact PayrollIntegrity v1 agreement/manifest leaves and private
- * line preimages, then adds only the encrypted v2 payment-plan witnesses. The
- * AdvancedObligation verifier therefore complements an already-proven run; it
- * cannot bless an unrelated calculator result.
+ * Extends the exact PayrollIntegrity witness with encrypted v2 payment-plan
+ * witnesses. The merged v2 circuit proves the complete calculator and advanced
+ * schedule in one transaction-safe proof; it never relies on an unsubmitted v1
+ * companion proof.
  */
 export function buildAdvancedObligationInputs(input: {
   payroll: PayrollIntegrityInputBuild;
@@ -100,33 +100,15 @@ export function buildAdvancedObligationInputs(input: {
       "chain_id", "seal_address", "schema_version", "agreement_root_high", "agreement_root_low",
       "manifest_root_high", "manifest_root_low", "policy_root_high", "policy_root_low", "fx_root_high",
       "fx_root_low", "run_nullifier_high", "run_nullifier_low", "validity_start", "validity_expiry",
-      "shard_index", "agreement_leaves", "payroll_leaves", "agreements", "lines",
+      "shard_index", "organization_secret", "cycle_id", "cycle_id_len", "revision",
+      "agreement_leaves", "payroll_leaves", "agreements", "lines", "policies", "fx_snapshots",
     ];
     for (const field of required) {
       if (source[field] === undefined) throw new Error(`PayrollIntegrity input is missing ${field}.`);
     }
     return {
-      chain_id: source.chain_id,
-      seal_address: source.seal_address,
+      ...source,
       proof_version: "2",
-      schema_version: source.schema_version,
-      agreement_root_high: source.agreement_root_high,
-      agreement_root_low: source.agreement_root_low,
-      manifest_root_high: source.manifest_root_high,
-      manifest_root_low: source.manifest_root_low,
-      policy_root_high: source.policy_root_high,
-      policy_root_low: source.policy_root_low,
-      fx_root_high: source.fx_root_high,
-      fx_root_low: source.fx_root_low,
-      run_nullifier_high: source.run_nullifier_high,
-      run_nullifier_low: source.run_nullifier_low,
-      validity_start: source.validity_start,
-      validity_expiry: source.validity_expiry,
-      shard_index: source.shard_index,
-      agreement_leaves: source.agreement_leaves,
-      payroll_leaves: source.payroll_leaves,
-      agreements: source.agreements,
-      lines: source.lines,
       plans: planWitnesses.slice(index === 0 ? 0 : 25, index === 0 ? 25 : 50),
     } as InputMap;
   };

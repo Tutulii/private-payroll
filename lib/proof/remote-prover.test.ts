@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PAYROLL_INTEGRITY_CIRCUIT_SHA256 } from "./protocol";
+import { PAYO_MAX_PROOF_CALLDATA_FELTS, PAYROLL_INTEGRITY_CIRCUIT_SHA256 } from "./protocol";
 import { decodeRemoteProofResponse, remoteProofResponseSchema } from "./remote-prover";
 
 const publicInputs = {
@@ -52,7 +52,11 @@ describe("remote payroll prover response", () => {
     expect(() => remoteProofResponseSchema.parse(responseWithHash("0x01"))).toThrow();
   });
 
-  it("accepts the measured Phase 3 composite calldata size", () => {
-    expect(() => remoteProofResponseSchema.parse(responseWithHash("0x1", 6_339))).not.toThrow();
+  it("accepts the exact Mainnet-safe calldata boundary", () => {
+    expect(() => remoteProofResponseSchema.parse(responseWithHash("0x1", PAYO_MAX_PROOF_CALLDATA_FELTS))).not.toThrow();
+  });
+
+  it("rejects a proof that would exceed the Mainnet invoke limit after wrapper overhead", () => {
+    expect(() => remoteProofResponseSchema.parse(responseWithHash("0x1", PAYO_MAX_PROOF_CALLDATA_FELTS + 1))).toThrow();
   });
 });

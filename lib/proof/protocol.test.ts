@@ -2,11 +2,16 @@ import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
+  ADVANCED_OBLIGATION_CIRCUIT_SHA256,
+  ADVANCED_OBLIGATION_VERIFICATION_KEY_SHA256,
   classifyProofFailure,
   mapPayrollPublicInputs,
   PAYROLL_INTEGRITY_CIRCUIT_SHA256,
   PAYROLL_INTEGRITY_VERIFICATION_KEY_SHA256,
   PAYROLL_MOBILE_WASM_MAXIMUM_PAGES,
+  PAYO_MAX_PROOF_CALLDATA_FELTS,
+  PAYO_PROOF_SUBMISSION_OVERHEAD_FELTS,
+  STARKNET_MAX_INVOKE_CALLDATA_FELTS,
   payrollProverBackendOptions,
   safeProofFailure,
 } from "./protocol";
@@ -46,6 +51,25 @@ describe("proof-worker privacy protocol", () => {
     const digest = `0x${createHash("sha256").update(verificationKey).digest("hex")}`;
     expect(verificationKey).toHaveLength(1_888);
     expect(PAYROLL_INTEGRITY_VERIFICATION_KEY_SHA256).toBe(digest);
+  });
+
+  it("pins the merged v2 circuit and its proof-bound verification key", () => {
+    const circuit = readFileSync(new URL("../../public/circuits/advanced_obligation-v2.json", import.meta.url));
+    const verificationKey = decodeVerificationKeyHex(readFileSync(
+      new URL("../../public/circuits/advanced_obligation-v2.vk.hex", import.meta.url),
+      "utf8",
+    ));
+    expect(`0x${createHash("sha256").update(circuit).digest("hex")}`)
+      .toBe(ADVANCED_OBLIGATION_CIRCUIT_SHA256);
+    expect(`0x${createHash("sha256").update(verificationKey).digest("hex")}`)
+      .toBe(ADVANCED_OBLIGATION_VERIFICATION_KEY_SHA256);
+    expect(verificationKey).toHaveLength(1_888);
+  });
+
+  it("reserves account and PayrollSeal overhead below Starknet's invoke limit", () => {
+    expect(PAYO_MAX_PROOF_CALLDATA_FELTS + PAYO_PROOF_SUBMISSION_OVERHEAD_FELTS)
+      .toBe(STARKNET_MAX_INVOKE_CALLDATA_FELTS);
+    expect(3_223).toBeLessThanOrEqual(PAYO_MAX_PROOF_CALLDATA_FELTS);
   });
 
   it("never reflects prover errors or witness values to the main thread", () => {

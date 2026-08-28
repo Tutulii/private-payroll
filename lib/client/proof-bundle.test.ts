@@ -83,7 +83,7 @@ describe("encrypted PayrollIntegrity proof bundle", () => {
     })).toThrow("calldata hash is invalid");
   });
 
-  it("persists the pinned advanced profile and accepts its real composite calldata size", () => {
+  it("persists the pinned merged-v2 profile at its measured Mainnet-safe calldata size", () => {
     const principal = generateVaultPrincipal("principal-1");
     const result = prepareEncryptedPayrollIntegrityBundle({
       id: BUNDLE_ID,
@@ -93,7 +93,7 @@ describe("encrypted PayrollIntegrity proof bundle", () => {
       proof: proof({
         version: 2,
         circuitSha256: ADVANCED_OBLIGATION_CIRCUIT_SHA256,
-        calldataLength: 6_339,
+        calldataLength: 3_223,
       }),
       principals: [principal],
     });

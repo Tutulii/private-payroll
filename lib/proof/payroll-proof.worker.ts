@@ -17,6 +17,7 @@ import {
   PAYROLL_INTEGRITY_CIRCUIT_URL,
   PAYROLL_INTEGRITY_VERIFICATION_KEY_SHA256,
   PAYROLL_INTEGRITY_VERIFICATION_KEY_URL,
+  PAYO_MAX_PROOF_CALLDATA_FELTS,
   payrollProverBackendOptions,
   safeProofFailure,
   WAGE_CLAIM_CIRCUIT_SHA256,
@@ -38,7 +39,6 @@ import {
   decodeVerificationKeyHex,
   hashProofCalldata,
   normalizeGaragaProofCalldata,
-  orderedPayrollPublicInputs,
   serializePayrollPublicInputs,
 } from "./starknet-calldata";
 
@@ -171,6 +171,9 @@ async function proveLinkedCircuit(input: {
         serializePayrollPublicInputs(proofData.publicInputs),
         input.assets.verificationKey,
       ));
+      if (proofCalldata.length > PAYO_MAX_PROOF_CALLDATA_FELTS) {
+        throw new WorkerProofError("CALLDATA_LIMIT_EXCEEDED");
+      }
       shards.push({
         shardIndex,
         proof: proofData.proof,
@@ -189,44 +192,6 @@ async function proveLinkedCircuit(input: {
     input.circuitInputs[1] = {};
     await backend.destroy();
   }
-}
-
-function joinProofBytes(base: Uint8Array, advanced: Uint8Array): Uint8Array {
-  const result = new Uint8Array(4 + base.length + advanced.length);
-  new DataView(result.buffer).setUint32(0, base.length, false);
-  result.set(base, 4);
-  result.set(advanced, 4 + base.length);
-  return result;
-}
-
-function combineAdvancedProofs(
-  baseShards: [PayrollIntegrityShardProof, PayrollIntegrityShardProof],
-  advancedShards: [PayrollIntegrityShardProof, PayrollIntegrityShardProof],
-): [PayrollIntegrityShardProof, PayrollIntegrityShardProof] {
-  return baseShards.map((base, shardIndex) => {
-    const advanced = advancedShards[shardIndex];
-    if (BigInt(base.publicInputs.proofVersion) !== 1n || BigInt(advanced.publicInputs.proofVersion) !== 2n) {
-      throw new WorkerProofError("SELF_VERIFY_FAILED");
-    }
-    const baseValues = orderedPayrollPublicInputs(base.publicInputs);
-    const advancedValues = orderedPayrollPublicInputs(advanced.publicInputs);
-    for (let field = 0; field < baseValues.length; field += 1) {
-      if (field !== 2 && BigInt(baseValues[field]) !== BigInt(advancedValues[field])) {
-        throw new WorkerProofError("SELF_VERIFY_FAILED");
-      }
-    }
-    const proofCalldata = [
-      `0x${base.proofCalldata.length.toString(16)}`,
-      ...base.proofCalldata,
-      ...advanced.proofCalldata,
-    ];
-    return {
-      ...advanced,
-      proof: joinProofBytes(base.proof, advanced.proof),
-      proofCalldata,
-      calldataHash: hashProofCalldata(proofCalldata),
-    };
-  }) as [PayrollIntegrityShardProof, PayrollIntegrityShardProof];
 }
 
 scope.addEventListener("message", async (event: MessageEvent<ProofWorkerRequest>) => {
@@ -254,26 +219,21 @@ scope.addEventListener("message", async (event: MessageEvent<ProofWorkerRequest>
       });
       payload = { circuitInputs: [{}, {}] };
       failureCode = "PROVING_FAILED";
-      const baseProof = await proveLinkedCircuit({
-        requestId,
-        assets: await loadBrowserAssets("payroll"),
-        circuitInputs: payroll.witness.circuitInputs,
-        label: "PayrollIntegrity",
-      });
-      const advancedProof = await proveLinkedCircuit({
+      payroll.witness.circuitInputs = [{}, {}];
+      const mergedProof = await proveLinkedCircuit({
         requestId,
         assets: await loadBrowserAssets("advanced"),
         circuitInputs: advanced.witness.circuitInputs,
-        label: "AdvancedObligation",
+        label: "AdvancedPayrollIntegrity",
       });
       proof = {
         version: 1,
         type: "proof-complete",
         requestId,
         scheme: "ultra_keccak_zk_honk",
-        shards: combineAdvancedProofs(baseProof.shards, advancedProof.shards),
+        shards: mergedProof.shards,
         circuitSha256: ADVANCED_OBLIGATION_CIRCUIT_SHA256,
-        provingTimeMs: baseProof.provingTimeMs + advancedProof.provingTimeMs,
+        provingTimeMs: mergedProof.provingTimeMs,
       };
     } else {
       let profile: CircuitProfile = "payroll";

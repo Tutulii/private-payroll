@@ -74,7 +74,17 @@
     "db:migrate:runtime": "node --env-file-if-exists=.env.local scripts/migrate-database.mjs",
     "start:fly": "node scripts/start-fly-runtime.mjs",
     "workers": "node --env-file-if-exists=.env.local scripts/run-phase2-workers.mjs",
-    "mcp": "tsx packages/mcp/src/server.ts"
+    "mcp": "tsx packages/mcp/src/server.ts",
+    "phase3:v2:mainnet:plan": "node --env-file-if-exists=.env.local scripts/payo-phase3-v2-upgrade.mjs plan",
+    "phase3:v2:mainnet:status": "node --env-file-if-exists=.env.local scripts/payo-phase3-v2-upgrade.mjs status",
+    "phase3:v2:mainnet:estimate-declare": "node --env-file-if-exists=.env.local scripts/payo-phase3-v2-upgrade.mjs estimate-declare",
+    "phase3:v2:mainnet:declare": "node --env-file-if-exists=.env.local scripts/payo-phase3-v2-upgrade.mjs declare",
+    "phase3:v2:mainnet:estimate-deploy": "node --env-file-if-exists=.env.local scripts/payo-phase3-v2-upgrade.mjs estimate-deploy",
+    "phase3:v2:mainnet:deploy": "node --env-file-if-exists=.env.local scripts/payo-phase3-v2-upgrade.mjs deploy",
+    "phase3:v2:mainnet:verify-proof": "node --env-file-if-exists=.env.local scripts/payo-phase3-v2-upgrade.mjs verify-proof",
+    "phase3:v2:mainnet:estimate-activate": "node --env-file-if-exists=.env.local scripts/payo-phase3-v2-upgrade.mjs estimate-activate",
+    "phase3:v2:mainnet:activate": "node --env-file-if-exists=.env.local scripts/payo-phase3-v2-upgrade.mjs activate",
+    "phase3:v2:mainnet:verify": "node --env-file-if-exists=.env.local scripts/payo-phase3-v2-upgrade.mjs verify"
   },
   "dependencies": {
     "@aztec/bb.js": "3.0.0-nightly.20251104",

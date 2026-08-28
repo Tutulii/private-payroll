@@ -63,6 +63,13 @@ if (!["plan", "status", "estimate", "estimate-seal", "declare", "reconcile-decla
   );
 }
 
+if (!["status", "verify-verifiers", "verify-proofs"].includes(action)) {
+  throw new Error(
+    "The original Phase 3 Mainnet planner targets the superseded pre-tenant topology and is read-only. "
+      + "Use the guarded phase3:v2:mainnet:* upgrade commands for the merged-v2 verifier.",
+  );
+}
+
 const rpcUrl = process.env.STARKNET_RPC_URL
   ?? process.env.NEXT_PUBLIC_STARKNET_RPC_URL
   ?? DEFAULT_RPC_URL;
@@ -954,12 +961,9 @@ if (action === "verify-verifiers") {
       throw new Error(`${name} is not deployed.`);
     }
   }
-  const [advancedBundleArtifact, integrityBundleArtifact] = await Promise.all([
-    Promise.resolve(artifacts.advancedBundle),
-    Promise.resolve(artifacts.integrityBundle),
-  ]);
+  const integrityBundleArtifact = artifacts.integrityBundle;
   const advanced = new Contract({
-    abi: advancedBundleArtifact.sierra.abi,
+    abi: integrityBundleArtifact.sierra.abi,
     address: plan.contracts.advancedBundle.address,
     providerOrAccount: provider,
   });
@@ -974,13 +978,11 @@ if (action === "verify-verifiers") {
     providerOrAccount: provider,
   });
   const topology = {
-    advancedBaseVerifier: num.toHex(BigInt(await advanced.call("get_base_verifier"))),
-    advancedVerifier: num.toHex(BigInt(await advanced.call("get_advanced_verifier"))),
+    advancedVerifier: num.toHex(BigInt(await advanced.call("get_underlying_verifier"))),
     claimVerifier: num.toHex(BigInt(await claim.call("get_underlying_verifier"))),
     remediationVerifier: num.toHex(BigInt(await remediation.call("get_underlying_verifier"))),
   };
   const expected = {
-    advancedBaseVerifier: plan.contracts.baseVerifier.address,
     advancedVerifier: plan.contracts.advancedVerifier.address,
     claimVerifier: plan.contracts.claimVerifier.address,
     remediationVerifier: plan.contracts.remediationVerifier.address,

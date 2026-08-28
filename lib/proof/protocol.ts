@@ -12,10 +12,10 @@ export const PAYROLL_INTEGRITY_VERIFICATION_KEY_SHA256 =
   "0xd622dff7f86da80f1b9e2fae58d4aee071d2fdec5ae018bcec353a6ce8941d96";
 export const ADVANCED_OBLIGATION_CIRCUIT_URL = "/circuits/advanced_obligation-v2.json";
 export const ADVANCED_OBLIGATION_CIRCUIT_SHA256 =
-  "0x33a1fec50488d5913f6e6664f86b096c68fcf189eec8297f3aab2a6a8926b717";
+  "0x755bb9374c9cfc72cbd36b1a3e1d8c5e2792b11b8b08e190d2743dc508ebbe41";
 export const ADVANCED_OBLIGATION_VERIFICATION_KEY_URL = "/circuits/advanced_obligation-v2.vk.hex";
 export const ADVANCED_OBLIGATION_VERIFICATION_KEY_SHA256 =
-  "0x5546c5d41beec3097b05933af59da36c473d3b1183feda74e8f23a19d22faf5c";
+  "0x50063de39c922bf1fe1089ff8b5e6839a56387da99e82e9071f067b9f72c90d7";
 export const WAGE_CLAIM_CIRCUIT_SHA256 =
   "0x00dc2ef57f65d12d5d7c3ad8c1fefd2835c5474bbef5df9400b9e73d4f940287";
 export const WAGE_CLAIM_CIRCUIT_URL = "/circuits/wage_claim-v3.json";
@@ -29,15 +29,21 @@ export const WAGE_REMEDIATION_VERIFICATION_KEY_URL = "/circuits/wage_remediation
 export const WAGE_REMEDIATION_VERIFICATION_KEY_SHA256 =
   "0x09c496d66bbf803a92b617840e12a403c8036a05e7e6437acd59d01d87910045";
 export const PAYROLL_INTEGRITY_PUBLIC_INPUT_COUNT = 17;
-// A Phase 3 advanced shard packs PayrollIntegrity and AdvancedObligation
-// verifier calldata. The reproducible fixture is 6,339 felts, so retain
-// bounded headroom without accepting unbounded request bodies.
-export const PAYO_MAX_PROOF_CALLDATA_FELTS = 8_000;
+// Starknet Mainnet accepts at most 5,000 invoke calldata felts. PAYO's
+// account + seal wrapper contributes eight felts around each raw Garaga proof,
+// so every generated or accepted proof must fit this fail-closed budget.
+export const STARKNET_MAX_INVOKE_CALLDATA_FELTS = 5_000;
+export const PAYO_PROOF_SUBMISSION_OVERHEAD_FELTS = 8;
+export const PAYO_MAX_PROOF_CALLDATA_FELTS =
+  STARKNET_MAX_INVOKE_CALLDATA_FELTS - PAYO_PROOF_SUBMISSION_OVERHEAD_FELTS;
 // The pinned 2^20-domain circuit peaks below 2 GiB in the one-thread WASM
 // benchmark. Android Chrome can reject bb.js' 4 GiB default reservation even
 // when the circuit never consumes it, so mobile workers use a measured 2.25
 // GiB ceiling with headroom instead.
 export const PAYROLL_MOBILE_WASM_MAXIMUM_PAGES = 36_864;
+// The 32 GiB self-hosted prover can reserve the full WebAssembly address
+// space required by the merged v2 proving key. Do not reuse the mobile cap.
+export const PAYROLL_SERVER_WASM_MAXIMUM_PAGES = 65_536;
 
 export function payrollProverBackendOptions(input: {
   userAgent: string;
@@ -132,7 +138,8 @@ export type ProofWorkerFailure = {
     | "PROVING_FAILED"
     | "PROVING_RESOURCE_EXHAUSTED"
     | "SELF_VERIFY_FAILED"
-    | "CALLDATA_GENERATION_FAILED";
+    | "CALLDATA_GENERATION_FAILED"
+    | "CALLDATA_LIMIT_EXCEEDED";
   message: string;
 };
 
@@ -176,6 +183,7 @@ export function safeProofFailure(
     PROVING_RESOURCE_EXHAUSTED: "This device ran out of browser memory while generating the local proof. Close other tabs and apps, then retry; if it repeats, use a desktop browser with at least 4 GB available.",
     SELF_VERIFY_FAILED: "The generated proof failed local verification.",
     CALLDATA_GENERATION_FAILED: "The verified proof could not be encoded for the Starknet verifier.",
+    CALLDATA_LIMIT_EXCEEDED: "The verified proof exceeds Starknet's transaction calldata limit.",
   };
   return { version: 1, type: "proof-failed", requestId, code, message: messages[code] };
 }

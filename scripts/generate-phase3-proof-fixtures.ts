@@ -1,16 +1,22 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { generateVaultPrincipal, encryptVaultRecord } from "@/lib/crypto/vault";
 import { buildFxSnapshot } from "@/lib/domain/fx";
 import type { EmploymentAgreement } from "@/lib/domain/obligations";
+import { Noir, type CompiledCircuit } from "@noir-lang/noir_js";
+import { buildAdvancedObligationInputs } from "@/lib/proof/advanced-obligation-input";
 import { advancedPlanProofCommitment } from "@/lib/proof/advanced-plan-commitment";
 import {
+  buildPayrollIntegrityInputsFromSerialized,
   PAYO_NET_INVOICE_POLICY,
   serializePayrollIntegrityBuildRequest,
 } from "@/lib/proof/input-builder";
 import { provePayrollOnSelfHostedNode } from "@/lib/proof/server-prover";
 
-const outputDirectory = resolve(process.cwd(), "evidence/phase3-devnet-fixtures");
+const outputDirectory = resolve(
+  process.cwd(),
+  process.env.PAYO_PHASE3_OUTPUT_DIRECTORY ?? "evidence/phase3-devnet-fixtures",
+);
 
 function checkpointAgreement(): Extract<EmploymentAgreement, { agreementVersion: "payo-agreement-v2" }> {
   return {
@@ -68,17 +74,6 @@ function snapshot() {
   });
 }
 
-function unpack(calldata: readonly string[]) {
-  const baseLength = Number(BigInt(calldata[0]));
-  if (!Number.isSafeInteger(baseLength) || baseLength <= 0 || baseLength + 1 >= calldata.length) {
-    throw new Error("The advanced proof returned malformed composite calldata.");
-  }
-  return {
-    base: calldata.slice(1, baseLength + 1),
-    advanced: calldata.slice(baseLength + 1),
-  };
-}
-
 async function main() {
   const agreement = checkpointAgreement();
   const scheduleCommitment = await advancedPlanProofCommitment(agreement);
@@ -110,6 +105,24 @@ async function main() {
       referenceCurrency: "USD",
     }],
   });
+  if (process.env.PAYO_PHASE3_WITNESS_ONLY === "1") {
+    const built = await buildPayrollIntegrityInputsFromSerialized(payroll);
+    const advanced = buildAdvancedObligationInputs({ payroll: built, agreements: [agreement] });
+    const circuit = JSON.parse(await readFile(
+      resolve(process.cwd(), "public/circuits/advanced_obligation-v2.json"),
+      "utf8",
+    )) as CompiledCircuit;
+    const noir = new Noir(circuit);
+    const targetDirectory = resolve(process.cwd(), "circuits/advanced_obligation/target");
+    await mkdir(targetDirectory, { recursive: true });
+    for (const shardIndex of [0, 1] as const) {
+      const { witness } = await noir.execute(advanced.witness.circuitInputs[shardIndex]);
+      await writeFile(resolve(targetDirectory, `witness-v2-checkpoint-shard-${shardIndex}.gz`), witness);
+      witness.fill(0);
+    }
+    console.log(JSON.stringify({ generated: true, profile: "v2-checkpoint" }, null, 2));
+    return;
+  }
   const principal = generateVaultPrincipal("phase3-fixture-prover");
   const encryptedWitness = encryptVaultRecord(
     { advancedBuildInput: { payroll, agreements: [agreement] } },
@@ -136,19 +149,17 @@ async function main() {
       shardIndex: shard.shardIndex,
       calldataHash: shard.calldataHash,
       publicInputs: shard.publicInputs,
-      packedCalldataFelts: shard.proofCalldata.length,
-      baseCalldataFelts: unpack(shard.proofCalldata).base.length,
-      advancedCalldataFelts: unpack(shard.proofCalldata).advanced.length,
+      proofLayout: "single-merged-v2",
+      proofCalldataFelts: shard.proofCalldata.length,
+      resultingInvokeCalldataFelts: shard.proofCalldata.length + 8,
     })),
   };
   await writeFile(resolve(outputDirectory, "advanced-proof.json"), `${JSON.stringify(summary, null, 2)}\n`);
   for (const shard of proof.shards) {
-    const parts = unpack(shard.proofCalldata);
-    await Promise.all([
-      writeFile(resolve(outputDirectory, `advanced-packed-shard-${shard.shardIndex}.txt`), `${shard.proofCalldata.join("\n")}\n`),
-      writeFile(resolve(outputDirectory, `payroll-base-shard-${shard.shardIndex}.txt`), `${parts.base.join("\n")}\n`),
-      writeFile(resolve(outputDirectory, `advanced-only-shard-${shard.shardIndex}.txt`), `${parts.advanced.join("\n")}\n`),
-    ]);
+    await writeFile(
+      resolve(outputDirectory, `advanced-shard-${shard.shardIndex}.txt`),
+      `${shard.proofCalldata.join("\n")}\n`,
+    );
   }
   console.log(JSON.stringify(summary, null, 2));
 }

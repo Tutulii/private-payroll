@@ -1,14 +1,59 @@
 # Phase 3 implementation evidence
 
-Updated: 2026-08-26
+Updated: 2026-08-28
 
 This file records what has been exercised, not what merely exists as source.
 The rendered UI, encryption, proving, Devnet settlement, scoped disclosure, and
 negative-rejection parts of the Phase 3 gate have now been exercised. Phase 3
-is still **not complete** under the strict gate in `MASTER_PLAN.md` because the
-official STRK20 Devnet integration cannot enable full invoke-proof verification:
-the current Devnet rejects that mode as unimplemented. The exact limitation and
-the evidence that must not be overstated are recorded below.
+is still **not complete** under the strict gate in `MASTER_PLAN.md`. In addition
+to Devnet's missing full transaction-proof mode, the corrected transaction-safe
+v2 verifier has not yet been declared, deployed, activated, and exercised by a
+fresh Mainnet payroll. The exact limitations and evidence that must not be
+overstated are recorded below.
+
+## Transaction-safe merged-v2 correction
+
+An August 28 release audit found that the earlier advanced-v2 envelope joined a
+base PayrollIntegrity proof to a separate AdvancedObligation proof. Its 6,339
+raw felts could be read through RPC and exercised in Devnet, but could never be
+submitted as a Starknet Mainnet invoke because the protocol limit is 5,000
+calldata felts. The older deployment and receipts below remain valid historical
+evidence of verifier behavior; they are not evidence of a transaction-viable
+Mainnet v2 payroll.
+
+The replacement `advanced_obligation` circuit is one merged proof system. It
+retains all v1 policy, arithmetic, completeness, uniqueness, FX, classification,
+final-pay, root, nullifier, deployment-binding, and shard-overlap constraints,
+then proves the committed advanced plan in the same witness. The proof server
+and browser worker now produce only this proof and reject any raw proof above
+4,992 felts, reserving eight felts for invoke framing.
+
+- Circuit SHA-256:
+  `0x755bb9374c9cfc72cbd36b1a3e1d8c5e2792b11b8b08e190d2743dc508ebbe41`
+- Proof-bound VK SHA-256:
+  `0x50063de39c922bf1fe1089ff8b5e6839a56387da99e82e9071f067b9f72c90d7`
+- Measured size per shard: 3,223 raw felts and 3,231 framed felts.
+- Application-runtime proving: two self-verified generic shards in 696,368 ms;
+  a second pair bound to `SN_MAIN` and the live tenant-aware seal self-verified
+  in 664,475 ms and is committed under
+  `evidence/phase3-mainnet-v2-fixtures/`.
+- Circuit regression: 50/50 tests, including the inherited PayrollIntegrity
+  failures plus advanced commitment, checkpoint, milestone, and offboarding
+  rejection tests.
+- Real Cairo integration: each direct Garaga proof passed the newly generated
+  verifier, the single-verifier bundle, and `PayoPayrollSeal`; tampered proof
+  paths remain rejected.
+- Repository regression: 76 test files passed, 328 active tests passed, one
+  file and 24 tests were intentionally skipped; typecheck and lint passed.
+
+The guarded upgrade plan is separate from the historical deployment planner.
+It reads and verifies the live tenant-aware seal `0x603c…6ac7`, policy registry
+`0x3470…4477`, and tenant obligation registry `0x44b2…23b5`; it deploys
+only the new generated verifier and a generic single-verifier bundle. The
+current live v2 mapping is not modified until the new on-chain verifier accepts
+both proof shards. The latest declaration estimate was 350.273334820055 STRK
+against a deployment-wallet balance of 176.59624815639768 STRK, so no Mainnet
+mutation was attempted.
 
 ## Standalone Starknet Devnet evidence
 
@@ -269,9 +314,9 @@ synthetic principal and adapter are not an exposed production test route.
 
 ## Passing gates
 
-- 66 unit-test files passed, one skipped; 265 tests passed and 20 were skipped.
-- Fresh pinned Noir runs passed all 60 relevant tests: PayrollIntegrity 45/45,
-  AdvancedObligation 5/5, WageClaim 5/5, and WageRemediation 5/5.
+- 76 unit-test files passed, one skipped; 328 tests passed and 24 were skipped.
+- Fresh pinned Noir runs passed PayrollIntegrity 45/45, merged advanced-v2
+  50/50, WageClaim 5/5, and WageRemediation 5/5.
 - PostgreSQL durability integration: 20/20 passed, including the opaque
   recurring scheduler's concurrency and revision lifecycle.
 - TypeScript typecheck passed.
@@ -321,5 +366,10 @@ This is why Phase 3 is not reported as complete:
   implement full transaction-proof verification. Running the pool with that
   proof layer disabled is partial evidence under the strict no-mock/no-disabled
   completion rule.
-Mainnet deployment and demonstrations belong to Phase 5 and are not counted as
-Phase 3 completion evidence.
+- The transaction-safe merged-v2 verifier still requires its declaration,
+  two-instance deployment, proof read-back, registry activation, Fly rollout,
+  and a fresh end-to-end advanced payroll. The declaration fee bound currently
+  exceeds the deployment-wallet balance, so this remains an explicit funded
+  Mainnet gate rather than an inferred success.
+- Phase 5 still separately requires the final public Mainnet demonstration set,
+  release metadata, and video; none of those release claims are inferred here.

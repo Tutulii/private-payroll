@@ -40,15 +40,8 @@ fn deploy_bundle(verifier: ContractAddress) -> ContractAddress {
     address
 }
 
-fn deploy_advanced_bundle(
-    base_verifier: ContractAddress, advanced_verifier: ContractAddress,
-) -> ContractAddress {
-    let class = declare("PayoAdvancedBundleVerifier").unwrap().contract_class();
-    let mut calldata = array![];
-    base_verifier.serialize(ref calldata);
-    advanced_verifier.serialize(ref calldata);
-    let (address, _) = class.deploy(@calldata).unwrap();
-    address
+fn deploy_advanced_bundle(advanced_verifier: ContractAddress) -> ContractAddress {
+    deploy_bundle(advanced_verifier)
 }
 
 fn deploy_topology(
@@ -152,11 +145,10 @@ fn seal_then_verify(
 
 #[test]
 fn real_phase3_proofs_verify_and_drive_advanced_claim_and_remediation_states() {
-    let base = declare_deploy("UltraKeccakZKHonkVerifier");
     let advanced = declare_deploy("PayoAdvancedObligationVerifier");
     let claim = declare_deploy("PayoWageClaimVerifier");
     let remediation = declare_deploy("PayoWageRemediationVerifier");
-    let advanced_bundle = deploy_advanced_bundle(base, advanced);
+    let advanced_bundle = deploy_advanced_bundle(advanced);
     let claim_bundle = deploy_bundle(claim);
     let remediation_bundle = deploy_bundle(remediation);
     let (seal, _catalog, obligations, admin, pool) =
@@ -179,8 +171,8 @@ fn real_phase3_proofs_verify_and_drive_advanced_claim_and_remediation_states() {
         0x218453d003921047a33bfd2e20a6559e,
         0x8c43d493dde16ceb80a2be21de81aebe,
         0x2248845c4ba40c0a4695b12796964cd2,
-        read_fixture("tests/advanced-packed-shard-0.txt"),
-        read_fixture("tests/advanced-packed-shard-1.txt"),
+        read_fixture("tests/advanced-shard-0.txt"),
+        read_fixture("tests/advanced-shard-1.txt"),
         2,
     );
 

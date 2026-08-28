@@ -182,6 +182,25 @@ async function main() {
     payroll: fixture.payroll,
     agreements: fixture.entries.map(({ agreement }) => agreement),
   });
+  if (process.env.PAYO_PHASE3_MATRIX_WITNESS_ONLY === "1") {
+    const circuit = JSON.parse(await readFile(
+      resolve(process.cwd(), "public/circuits/advanced_obligation-v2.json"),
+      "utf8",
+    )) as CompiledCircuit;
+    const noir = new Noir(circuit);
+    const targetDirectory = resolve(process.cwd(), "circuits/advanced_obligation/target");
+    await mkdir(targetDirectory, { recursive: true });
+    const witnesses: string[] = [];
+    for (const shardIndex of [0, 1] as const) {
+      const { witness } = await noir.execute(advanced.witness.circuitInputs[shardIndex]);
+      const witnessPath = resolve(targetDirectory, `witness-v2-merged-shard-${shardIndex}.gz`);
+      await writeFile(witnessPath, witness);
+      witnesses.push(witnessPath);
+      witness.fill(0);
+    }
+    console.log(JSON.stringify({ generated: true, witnesses }, null, 2));
+    return;
+  }
   if (process.env.PAYO_PHASE3_MATRIX_VALIDATE_ONLY === "1") {
     await validateCircuit("public/circuits/payroll_integrity-v1.json", fixture.payroll.witness.circuitInputs);
     await validateCircuit("public/circuits/advanced_obligation-v2.json", advanced.witness.circuitInputs);

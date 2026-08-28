@@ -204,7 +204,7 @@ Hash and proof-root values crossing into Cairo are represented as two big-endian
 
 ### Public inputs
 
-The deployment-bound `v1` circuit uses two linked proofs against the same circuit and verification key. Each shard exposes exactly 17 fields:
+PAYO has two deployment-bound payroll profiles. `v1` proves the base calculator. `v2` is one merged circuit that retains every v1 policy, FX, completeness, classification, final-pay, and nullifier constraint and additionally proves the committed advanced payment plan. Each profile uses two linked shards against one profile-specific circuit and verification key. Every shard exposes exactly 17 fields:
 
 - chain ID, Payroll Seal address, proof version, and schema version;
 - authoritative agreement, payroll-manifest, policy-catalog, and FX-snapshot roots, each as two big-endian `u128` limbs;
@@ -212,7 +212,7 @@ The deployment-bound `v1` circuit uses two linked proofs against the same circui
 - validity start and expiry, with a maximum one-hour window; and
 - a shard index, required to be `0` for the first proof and `1` for the second.
 
-The first 16 public inputs must be identical across both proofs. Shard 0 authenticates agreement leaves 0–25 and payroll leaves 0–24; shard 1 authenticates agreement leaves 24–49 and payroll leaves 25–49. The agreement overlap binds the private global sorting boundary. `PayoPayrollSeal` accepts only the ordered 34-input bundle, so neither shard is independently sufficient to mark a run proven.
+The first 16 public inputs must be identical across both proofs. Shard 0 authenticates agreement leaves 0–25 and payroll leaves 0–24; shard 1 authenticates agreement leaves 24–49 and payroll leaves 25–49. The agreement overlap binds the private global sorting boundary. `PayoPayrollSeal` accepts only the ordered 34-input bundle, so neither shard is independently sufficient to mark a run proven. A v2 shard is a single Garaga proof, not a concatenated v1+v2 envelope: the earlier 6,339-felt composite exceeded Starknet Mainnet's 5,000-felt invoke limit and is retained only as legacy parsing compatibility.
 
 The agreement root is not a list of opaque IDs. Each leaf canonically commits the agreement ID commitment, recipient commitment, earnings components, token, compiled policy commitment, schedule, due/expiry timestamps, classification inputs, final-pay requirements, FX floor/currency, and a random agreement salt. The circuit recomputes these leaves and requires each due payroll line to equal its authoritative private terms.
 
@@ -297,11 +297,11 @@ Modes:
 
 The contract verifies `get_caller_address()` equals the immutable STRK20 pool address. Replay, unknown proof versions, expired policy roots, and mismatched public inputs revert.
 
-If proof verification cannot execute within the STRK20 invoke resource limits, `PRECOMMIT` stores a proof hash as `sealed`; a second transaction verifies it and transitions to `proven`. The intermediate state is never displayed as verified.
+If proof verification cannot execute within the STRK20 invoke resource limits, `PRECOMMIT` stores a proof hash as `sealed`; a second transaction verifies it and transitions to `proven`. The intermediate state is never displayed as verified. Starknet permits at most 5,000 invoke-calldata felts; PAYO reserves eight felts for account and seal framing and rejects any raw proof above 4,992 felts before persistence or submission. The measured merged-v2 proof is 3,223 raw felts (3,231 framed) per shard.
 
 ### PayoIntegrityVerifier
 
-A Garaga-generated, version-pinned UltraKeccakZKHonk verifier plus `PayoIntegrityBundleVerifier`. The wrapper calls the same proof-bound verifier for both shards and returns shard 0's 17 inputs followed by shard 1's 17 inputs. The seal requires identical deployment fields/roots, ordered shard indices, the proof-bound seal address, and the configured chain ID before it consumes the run nullifier. Generated code, proofs, calldata, and VK artifacts are reproducible build outputs.
+Each active proof version points to a Garaga-generated, version-pinned UltraKeccakZKHonk verifier plus `PayoIntegrityBundleVerifier`. The wrapper calls that one proof-bound verifier for both shards and returns shard 0's 17 inputs followed by shard 1's 17 inputs. Version 2 points to the merged PayrollIntegrity + advanced-plan verifier; it never relies on an unsubmitted v1 companion proof. The seal requires identical deployment fields/roots, ordered shard indices, the proof-bound seal address, and the configured chain ID before it consumes the run nullifier. Generated code, proofs, calldata, and VK artifacts are reproducible build outputs. The old `PayoAdvancedBundleVerifier` remains only for historical composite-proof evidence and is not the active v2 topology.
 
 ### PayoPolicyRegistry
 
@@ -434,7 +434,7 @@ Human approval remains the default. Autonomous execution is enabled per capabili
 
 - TypeScript/Noir/Cairo commitment golden vectors.
 - Circuit negative tests for omission, duplication, wrong arithmetic, stale FX, early vesting, incomplete final pay, invalid shard indices, and shard/witness mismatches.
-- Native proof self-verification for both linked shards and real Cairo verification of each proof.
+- Native and application-runtime proof self-verification for both linked shards, a hard Mainnet calldata-size gate, and real Cairo verification of each proof.
 - An uninterrupted real-proof → Garaga verifier → bundle verifier → Payroll Seal integration test; mocks do not satisfy this gate.
 - Cairo unit and fuzz tests for caller validation, replay, versioning, and state transitions.
 - Encryption tests for tenant isolation, associated-data tampering, revocation, and disclosure scope.

@@ -33,7 +33,7 @@ PAYO labels capabilities according to evidence, not intention.
 | Encrypted persistent payroll vault | Built and tested locally | XChaCha20-Poly1305/X25519 envelopes, authenticated API, PostgreSQL migration |
 | PayrollIntegrity ZK proof core | Phase 1 complete; verifier deployed | [Green Phase 1 evidence](./docs/phase1-evidence.md): 45 Noir tests, two linked native and browser ZK proofs, reproducible Garaga verifier, and real Cairo verifier → bundle → seal checks; the proof-bound generated verifier is deployed on Mainnet |
 | PAYO payroll-seal contract | Deployed and live-proven for STRK, USDC, and mixed batches | The five-contract Mainnet topology is binding-verified. Ready STRK-only, native-USDC-only, and mixed STRK/USDC payrolls reached durable `confirmed`, seal `proven`, and two-shard `onchain_verified` states in [Phase 2 evidence](./docs/phase2-evidence.md) |
-| Advanced obligation engine | Built and tested locally | Bounded policy DSL, multi-source FX snapshots, schedules, vesting, and offboarding tests |
+| Advanced obligation engine | Transaction-safe merged v2 validated; Mainnet upgrade pending funding | One proof retains PayrollIntegrity plus statutory, FX, classification, schedules, vesting, and offboarding constraints; 50 Noir tests, 3,223-felt shards, application-runtime self-verification, and real Cairo verifier → bundle → seal integration are recorded in [Phase 3 evidence](./docs/phase3-evidence.md) |
 | Compliance proof export | Built and tested locally | Balanced journal and verifier-bound ZIP package |
 | MCP policy gateway | Built and tested locally | Signed capabilities and adversarial tests; generic wallet signing is prohibited |
 | SettlementMatch proof | Research dependency | Ready does not expose its viewing key |

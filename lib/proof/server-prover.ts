@@ -15,7 +15,8 @@ import {
   mapPayrollPublicInputs,
   PAYROLL_INTEGRITY_CIRCUIT_SHA256,
   PAYROLL_INTEGRITY_VERIFICATION_KEY_SHA256,
-  PAYROLL_MOBILE_WASM_MAXIMUM_PAGES,
+  PAYROLL_SERVER_WASM_MAXIMUM_PAGES,
+  PAYO_MAX_PROOF_CALLDATA_FELTS,
   WAGE_CLAIM_CIRCUIT_SHA256,
   WAGE_CLAIM_VERIFICATION_KEY_SHA256,
   WAGE_REMEDIATION_CIRCUIT_SHA256,
@@ -28,7 +29,6 @@ import {
   decodeVerificationKeyHex,
   hashProofCalldata,
   normalizeGaragaProofCalldata,
-  orderedPayrollPublicInputs,
   serializePayrollPublicInputs,
 } from "./starknet-calldata";
 import { parseProverThreadCount } from "./prover-runtime";
@@ -101,7 +101,7 @@ async function proveLinkedCircuit(input: {
   const backend = new UltraHonkBackend(input.assets.circuit.bytecode, {
     backend: BackendType.Wasm,
     threads: parseProverThreadCount(process.env.PAYO_PROVER_THREADS),
-    memory: { maximum: PAYROLL_MOBILE_WASM_MAXIMUM_PAGES },
+    memory: { maximum: PAYROLL_SERVER_WASM_MAXIMUM_PAGES },
   });
   const startedAt = performance.now();
   let witnessToErase: Uint8Array | undefined;
@@ -135,6 +135,9 @@ async function proveLinkedCircuit(input: {
         serializePayrollPublicInputs(proofData.publicInputs),
         input.assets.verificationKey,
       ));
+      if (proofCalldata.length > PAYO_MAX_PROOF_CALLDATA_FELTS) {
+        throw new Error(`${input.label} proof shard ${shardIndex} has ${proofCalldata.length} calldata felts; Starknet submissions permit at most ${PAYO_MAX_PROOF_CALLDATA_FELTS}.`);
+      }
       shards.push({
         shardIndex,
         proof: proofData.proof,
@@ -155,44 +158,6 @@ async function proveLinkedCircuit(input: {
   }
 }
 
-function joinProofBytes(base: Uint8Array, advanced: Uint8Array): Uint8Array {
-  const result = new Uint8Array(4 + base.length + advanced.length);
-  new DataView(result.buffer).setUint32(0, base.length, false);
-  result.set(base, 4);
-  result.set(advanced, 4 + base.length);
-  return result;
-}
-
-function combineAdvancedProofs(input: {
-  base: [PayrollIntegrityShardProof, PayrollIntegrityShardProof];
-  advanced: [PayrollIntegrityShardProof, PayrollIntegrityShardProof];
-}): [PayrollIntegrityShardProof, PayrollIntegrityShardProof] {
-  return input.base.map((base, index) => {
-    const advanced = input.advanced[index];
-    if (BigInt(base.publicInputs.proofVersion) !== 1n || BigInt(advanced.publicInputs.proofVersion) !== 2n) {
-      throw new Error("The linked advanced proof versions are invalid.");
-    }
-    const baseValues = orderedPayrollPublicInputs(base.publicInputs);
-    const advancedValues = orderedPayrollPublicInputs(advanced.publicInputs);
-    for (let field = 0; field < baseValues.length; field += 1) {
-      if (field !== 2 && BigInt(baseValues[field]) !== BigInt(advancedValues[field])) {
-        throw new Error(`Advanced proof shard ${index} is not bound to PayrollIntegrity field ${field}.`);
-      }
-    }
-    const proofCalldata = [
-      `0x${base.proofCalldata.length.toString(16)}`,
-      ...base.proofCalldata,
-      ...advanced.proofCalldata,
-    ];
-    return {
-      ...advanced,
-      proof: joinProofBytes(base.proof, advanced.proof),
-      proofCalldata,
-      calldataHash: hashProofCalldata(proofCalldata),
-    };
-  }) as [PayrollIntegrityShardProof, PayrollIntegrityShardProof];
-}
-
 export async function provePayrollOnSelfHostedNode(input: {
   requestId: string;
   encryptedWitness: EncryptedVaultRecord;
@@ -209,28 +174,20 @@ export async function provePayrollOnSelfHostedNode(input: {
       agreements: payload.advancedBuildInput.agreements,
     });
     payload = { circuitInputs: [{}, {}] };
-    const [baseAssets, advancedAssets] = await Promise.all([
-      loadPinnedAssets("payroll"),
-      loadPinnedAssets("advanced"),
-    ]);
-    const baseProof = await proveLinkedCircuit({
-      assets: baseAssets,
-      circuitInputs: payroll.witness.circuitInputs,
-      label: "PayrollIntegrity",
-    });
-    const advancedProof = await proveLinkedCircuit({
-      assets: advancedAssets,
+    payroll.witness.circuitInputs = [{}, {}];
+    const mergedProof = await proveLinkedCircuit({
+      assets: await loadPinnedAssets("advanced"),
       circuitInputs: advanced.witness.circuitInputs,
-      label: "AdvancedObligation",
+      label: "AdvancedPayrollIntegrity",
     });
     return {
       version: 1,
       type: "proof-complete",
       requestId: input.requestId,
       scheme: "ultra_keccak_zk_honk",
-      shards: combineAdvancedProofs({ base: baseProof.shards, advanced: advancedProof.shards }),
+      shards: mergedProof.shards,
       circuitSha256: ADVANCED_OBLIGATION_CIRCUIT_SHA256,
-      provingTimeMs: baseProof.provingTimeMs + advancedProof.provingTimeMs,
+      provingTimeMs: mergedProof.provingTimeMs,
     };
   }
   if ("circuitProfile" in payload) {
