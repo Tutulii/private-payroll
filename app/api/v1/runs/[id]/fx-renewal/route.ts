@@ -13,9 +13,13 @@ import { readProofSealState } from "@/lib/server/proof-relayer";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const requestSchema = z.object({
-  workflowType: z.enum(["wage_claim", "wage_remediation"]),
-}).strict();
+const requestSchema = z.discriminatedUnion("workflowType", [
+  z.object({ workflowType: z.literal("wage_claim") }).strict(),
+  z.object({
+    workflowType: z.literal("wage_remediation"),
+    claimId: uuidV7Schema,
+  }).strict(),
+]);
 
 type FxRenewalContext = { params: Promise<{ id: string }> };
 
@@ -40,10 +44,13 @@ export async function POST(request: Request, context: FxRenewalContext) {
     const principal = await requirePrincipal(request);
     const { id } = await context.params;
     const runId = uuidV7Schema.parse(id);
-    const { workflowType } = requestSchema.parse(await readJson(request));
+    const renewalRequest = requestSchema.parse(await readJson(request));
+    const { workflowType } = renewalRequest;
     const rpcUrl = requireConfiguredPublisher();
     const deployment = getPayoDeploymentConfig();
-    const evidence = await getHistoricalFxRenewalEvidence({ runId, principal });
+    const evidence = await getHistoricalFxRenewalEvidence(workflowType === "wage_remediation"
+      ? { runId, principal, workflowType, claimId: renewalRequest.claimId }
+      : { runId, principal, workflowType });
     const provider = new RpcProvider({ nodeUrl: rpcUrl });
     const [chainId, blockNumber] = await Promise.all([
       provider.getChainId(),
@@ -52,7 +59,7 @@ export async function POST(request: Request, context: FxRenewalContext) {
     if (BigInt(chainId) !== BigInt(deployment.chainId)) {
       throw new ApiError(503, "The FX renewal RPC is on the wrong Starknet chain.", "FX_RENEWAL_CHAIN_MISMATCH");
     }
-    const limbs = rootLimbs(evidence.runNullifier);
+    const limbs = rootLimbs(evidence.authorizationNullifier);
     const [block, sealState] = await Promise.all([
       provider.getBlock(blockNumber),
       readProofSealState({

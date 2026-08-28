@@ -540,7 +540,12 @@ export class PayoClient {
   async renewHistoricalFxRoot(input: {
     organizationId: string;
     runId: string;
-    workflowType: "wage_claim" | "wage_remediation";
+    workflowType: "wage_claim";
+  } | {
+    organizationId: string;
+    runId: string;
+    workflowType: "wage_remediation";
+    claimId: string;
   }) {
     type FxRenewalJob = {
       id: string;
@@ -553,7 +558,12 @@ export class PayoClient {
     };
     const queued = await this.request<{ job: FxRenewalJob }>(
       `/api/v1/runs/${encodeURIComponent(input.runId)}/fx-renewal`,
-      { method: "POST", body: JSON.stringify({ workflowType: input.workflowType }) },
+      {
+        method: "POST",
+        body: JSON.stringify(input.workflowType === "wage_remediation"
+          ? { workflowType: input.workflowType, claimId: input.claimId }
+          : { workflowType: input.workflowType }),
+      },
     );
     let job = queued.job;
     const deadline = Date.now() + 20 * 60_000;
@@ -897,6 +907,9 @@ export class PayoClient {
         blockNumber: string | null;
         confirmationDepth: number;
         lastErrorCode: string | null;
+        proofValidityExpiry: string | null;
+        proofVerificationState: string | null;
+        proofVerificationLastErrorCode: string | null;
         createdAt: string;
         updatedAt: string;
       }>;

@@ -22,6 +22,7 @@ import {
   organizations,
   payrollRuns,
   proofBundles,
+  proofVerificationJobs,
   settlements,
   vaultRecords,
 } from "./schema";
@@ -789,17 +790,36 @@ export async function listSettlements(
       blockNumber: settlements.blockNumber,
       confirmationDepth: settlements.confirmationDepth,
       lastErrorCode: settlements.lastErrorCode,
+      proofPackage: proofBundles.proofPackage,
+      proofVerificationState: proofVerificationJobs.state,
+      proofVerificationLastErrorCode: proofVerificationJobs.lastErrorCode,
       createdAt: settlements.createdAt,
       updatedAt: settlements.updatedAt,
     })
     .from(settlements)
+    .leftJoin(proofBundles, and(
+      eq(proofBundles.organizationId, settlements.organizationId),
+      eq(proofBundles.runId, settlements.runId),
+      eq(proofBundles.subjectRecordId, settlements.subjectRecordId),
+      or(
+        and(eq(settlements.workflowType, "payroll"), eq(proofBundles.proofType, "payroll_integrity")),
+        and(eq(settlements.workflowType, "wage_claim"), eq(proofBundles.proofType, "wage_claim")),
+        and(eq(settlements.workflowType, "wage_remediation"), eq(proofBundles.proofType, "wage_remediation")),
+      ),
+    ))
+    .leftJoin(proofVerificationJobs, eq(proofVerificationJobs.settlementId, settlements.id))
     .where(eq(settlements.organizationId, organizationId))
     .orderBy(desc(settlements.updatedAt))
     .limit(limit);
-  return rows.map((row) => ({
-    ...row,
-    blockNumber: row.blockNumber === null ? null : row.blockNumber.toString(),
-  }));
+  return rows.map(({ proofPackage, ...row }) => {
+    const commonInputs = record(record(proofPackage)?.commonInputs);
+    const validityExpiry = bigintValue(commonInputs?.validityExpiry);
+    return {
+      ...row,
+      blockNumber: row.blockNumber === null ? null : row.blockNumber.toString(),
+      proofValidityExpiry: validityExpiry?.toString() ?? null,
+    };
+  });
 }
 
 export type LeasedConfirmationJob = {

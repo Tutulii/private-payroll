@@ -146,6 +146,15 @@ export async function enqueueProofVerification(input: {
       return { ...existing, shard0Calldata: undefined, shard1Calldata: undefined, replayed: true };
     }
 
+    const nowSeconds = BigInt(Math.floor(Date.now() / 1_000));
+    if (BigInt(metadata.commonInputs.validityExpiry) <= nowSeconds + 120n) {
+      throw new ApiError(
+        409,
+        "The sealed proof has too little validity remaining for safe on-chain verification.",
+        "PROOF_VALIDITY_EXPIRED",
+      );
+    }
+
     const id = generateUuidV7();
     const [job] = await transaction
       .insert(proofVerificationJobs)

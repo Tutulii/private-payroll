@@ -172,8 +172,41 @@ export type HistoricalFxRenewalEvidence = {
   organizationId: string;
   catalogRoot: string;
   runNullifier: string;
+  authorizationNullifier: string;
   transactionHash: string;
 };
+
+function exceptionAuthorizationNullifier(input: {
+  proofPackage: unknown;
+  claimId: string;
+}): string {
+  const proofPackage = input.proofPackage !== null
+    && typeof input.proofPackage === "object"
+    && !Array.isArray(input.proofPackage)
+    ? input.proofPackage as Record<string, unknown>
+    : null;
+  const commonInputs = proofPackage?.commonInputs !== null
+    && typeof proofPackage?.commonInputs === "object"
+    && !Array.isArray(proofPackage.commonInputs)
+    ? proofPackage.commonInputs as Record<string, unknown>
+    : null;
+  if (
+    proofPackage?.proofType !== "wage_claim"
+    || proofPackage.proofVersion !== "3"
+    || proofPackage.subjectRecordId !== input.claimId
+    || commonInputs?.proofVersion !== "3"
+  ) {
+    throw new ApiError(409, "The selected claim proof bindings are invalid.", "FX_RENEWAL_CLAIM_BINDING_INVALID");
+  }
+  try {
+    const high = BigInt(String(commonInputs.runNullifierHigh));
+    const low = BigInt(String(commonInputs.runNullifierLow));
+    if (high < 0n || high >= 1n << 128n || low < 0n || low >= 1n << 128n) throw new Error("range");
+    return `0x${((high << 128n) | low).toString(16).padStart(64, "0")}`;
+  } catch {
+    throw new ApiError(409, "The selected claim nullifier is invalid.", "FX_RENEWAL_CLAIM_BINDING_INVALID");
+  }
+}
 
 function assertRenewablePayrollState(state: string): void {
   if (!["confirmed", "reconciled", "disputed"].includes(state)) {
@@ -184,7 +217,12 @@ function assertRenewablePayrollState(state: string): void {
 export async function getHistoricalFxRenewalEvidence(input: {
   runId: string;
   principal: AuthenticatedPrincipal;
-}): Promise<HistoricalFxRenewalEvidence> {
+} & ({
+  workflowType?: "wage_claim";
+} | {
+  workflowType: "wage_remediation";
+  claimId: string;
+})): Promise<HistoricalFxRenewalEvidence> {
   const database = getDatabase();
   const [run] = await database
     .select()
@@ -237,11 +275,66 @@ export async function getHistoricalFxRenewalEvidence(input: {
   if (!publication || publication.state === "dead") {
     throw new ApiError(409, "The payroll FX publication evidence is unavailable.", "FX_RENEWAL_PUBLICATION_MISSING");
   }
+  let authorizationNullifier = run.runNullifier;
+  if (input.workflowType === "wage_remediation") {
+    const [claimProof] = await database
+      .select({
+        proofVersion: proofBundles.proofVersion,
+        proofPackage: proofBundles.proofPackage,
+        verificationState: proofBundles.verificationState,
+        verificationTransactionHash: proofBundles.verificationTransactionHash,
+      })
+      .from(proofBundles)
+      .where(and(
+        eq(proofBundles.organizationId, run.organizationId),
+        eq(proofBundles.runId, run.id),
+        eq(proofBundles.proofType, "wage_claim"),
+        eq(proofBundles.proofVersion, "3"),
+        eq(proofBundles.subjectRecordId, input.claimId),
+      ))
+      .limit(1);
+    if (
+      !claimProof
+      || claimProof.verificationState !== "onchain_verified"
+      || !claimProof.verificationTransactionHash
+    ) {
+      throw new ApiError(
+        409,
+        "The selected wage claim has not completed on-chain verification.",
+        "FX_RENEWAL_CLAIM_NOT_VERIFIED",
+      );
+    }
+    const [claimSettlement] = await database
+      .select({ state: settlements.state, transactionHash: settlements.transactionHash })
+      .from(settlements)
+      .where(and(
+        eq(settlements.organizationId, run.organizationId),
+        eq(settlements.runId, run.id),
+        eq(settlements.workflowType, "wage_claim"),
+        eq(settlements.subjectRecordId, input.claimId),
+      ))
+      .limit(1);
+    if (
+      !claimSettlement?.transactionHash
+      || !["confirmed", "finalized", "reconciled"].includes(claimSettlement.state)
+    ) {
+      throw new ApiError(
+        409,
+        "The selected wage claim has no finalized settlement.",
+        "FX_RENEWAL_CLAIM_SETTLEMENT_INVALID",
+      );
+    }
+    authorizationNullifier = exceptionAuthorizationNullifier({
+      proofPackage: claimProof.proofPackage,
+      claimId: input.claimId,
+    });
+  }
   return {
     runId: run.id,
     organizationId: run.organizationId,
     catalogRoot: run.fxRoot,
     runNullifier: run.runNullifier,
+    authorizationNullifier,
     transactionHash: run.transactionHash,
   };
 }

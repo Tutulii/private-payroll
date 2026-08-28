@@ -17,6 +17,7 @@ import type { PayoClient } from "./payo-client";
 import {
   executeProofBoundWageClaim,
   executeProofBoundWageRemediation,
+  rebuildPendingExceptionSubmission,
   resumeProofBoundWageClaim,
   resumeProofBoundWageRemediation,
 } from "./exception-execution";
@@ -503,6 +504,15 @@ describe("proof-bound wage-claim execution", () => {
     );
     const storeEncryptedRecord = vi.fn().mockResolvedValue({ record: {} });
     const createSettlementIntent = vi.fn().mockResolvedValue({ settlement: { id: "stored" } });
+    const checkDeploymentReadiness = vi.fn()
+      .mockResolvedValueOnce({
+        readiness: {
+          ready: false,
+          checks: [{ code: "fx_root", ready: false, message: "FX root is inactive." }],
+        },
+      })
+      .mockResolvedValue({ readiness: { ready: true, checks: [] } });
+    const renewHistoricalFxRoot = vi.fn().mockResolvedValue({ transactionHash: "0xf004" });
     const client = {
       getPayrollRun: vi.fn().mockResolvedValue({
         run: {
@@ -517,7 +527,8 @@ describe("proof-bound wage-claim execution", () => {
           envelope: runEnvelope,
         },
       }),
-      checkDeploymentReadiness: vi.fn().mockResolvedValue({ readiness: { ready: true, checks: [] } }),
+      checkDeploymentReadiness,
+      renewHistoricalFxRoot,
       storeEncryptedProofBundle: vi.fn().mockResolvedValue({ proofBundle: {} }),
       storeEncryptedRecord,
       createSettlementIntent,
@@ -543,6 +554,7 @@ describe("proof-bound wage-claim execution", () => {
       state: "submitted" as const,
     };
     const remediationId = "0198f300-0000-7000-8000-000000000007";
+    const prove = vi.fn().mockResolvedValue(proof);
     const submitException = vi.fn().mockImplementation(async (workflow, recipients, action) => {
       expect(workflow).toBe("wage_remediation");
       expect(recipients).toEqual([{ address: "0x456", amount: "0.0005", token: "USDC" }]);
@@ -574,7 +586,7 @@ describe("proof-bound wage-claim execution", () => {
         state: "draft",
       },
       submitException,
-      prove: vi.fn().mockResolvedValue(proof),
+      prove,
       now: () => now,
     });
 
@@ -584,6 +596,14 @@ describe("proof-bound wage-claim execution", () => {
       subjectRecordId: remediationId,
     }));
     expect(storeEncryptedRecord).toHaveBeenCalledTimes(2);
+    expect(renewHistoricalFxRoot).toHaveBeenCalledWith({
+      organizationId,
+      runId,
+      workflowType: "wage_remediation",
+      claimId,
+    });
+    expect(renewHistoricalFxRoot.mock.invocationCallOrder[0]).toBeLessThan(prove.mock.invocationCallOrder[0]);
+    expect(checkDeploymentReadiness).toHaveBeenCalledTimes(3);
   });
 
   it("resumes a timed-out remediation from its saved proof and settlement", async () => {
@@ -636,6 +656,51 @@ describe("proof-bound wage-claim execution", () => {
       subjectRecordId: remediationId,
       principals: [principal],
     });
+    const rebuildClient = {
+      getSettlement: vi.fn().mockResolvedValue({
+        settlement: {
+          organizationId,
+          runId,
+          workflowType: "wage_remediation",
+          subjectRecordId: remediationId,
+          walletRequestId: "0198f300-0000-7000-8000-000000000012",
+          idempotencyKey: "remediation-rebuilt-approval",
+          tokenTotalsCommitment: `0x${"63".repeat(32)}`,
+          transactionHash: "0xc3a2",
+          createdAt: now.toISOString(),
+        },
+      }),
+      getEncryptedRecord: vi.fn().mockResolvedValue({ record: { envelope: bundle.envelope } }),
+      getProofVerification: vi.fn().mockRejectedValue(new Error("No verification job")),
+    } as unknown as PayoClient;
+    const rebuildInput = {
+      client: rebuildClient,
+      organizationId,
+      principal,
+      runId,
+      workflowType: "wage_remediation" as const,
+      subjectRecordId: remediationId,
+      proofBundleId,
+      settlementId,
+    };
+    const rebuilt = await rebuildPendingExceptionSubmission({ ...rebuildInput, now });
+    expect(rebuilt).toMatchObject({
+      workflowType: "wage_remediation",
+      subjectRecordId: remediationId,
+      transactionHash: "0xc3a2",
+      proofShards: [proof.shards[0].proofCalldata, proof.shards[1].proofCalldata],
+    });
+    await expect(rebuildPendingExceptionSubmission({
+      ...rebuildInput,
+      now: new Date(now.getTime() + 3_700_000),
+    })).rejects.toThrow("proof expired before on-chain verification could be queued");
+    vi.mocked(rebuildClient.getProofVerification).mockResolvedValue({
+      proofVerification: { state: "complete" },
+    } as Awaited<ReturnType<PayoClient["getProofVerification"]>>);
+    await expect(rebuildPendingExceptionSubmission({
+      ...rebuildInput,
+      now: new Date(now.getTime() + 3_700_000),
+    })).resolves.toMatchObject({ transactionHash: "0xc3a2" });
     const runEnvelope = encryptVaultRecord(
       { claimProofSource: { buildInput } },
       {

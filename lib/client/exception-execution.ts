@@ -116,6 +116,74 @@ export function parsePendingExceptionSubmission(value: unknown): PendingExceptio
   return pendingExceptionSubmissionSchema.parse(value) as PendingExceptionSubmission;
 }
 
+/**
+ * Rebuilds browser recovery state after Ready submitted successfully but the
+ * tab closed or localStorage was cleared. The transaction hash and intent come
+ * from the authenticated durable settlement; proof calldata remains available
+ * only by decrypting the tenant's encrypted proof bundle in this browser.
+ */
+export async function rebuildPendingExceptionSubmission(input: {
+  client: PayoClient;
+  organizationId: string;
+  principal: VaultPrincipalKeyPair;
+  runId: string;
+  workflowType: "wage_claim" | "wage_remediation";
+  subjectRecordId: string;
+  proofBundleId: string;
+  settlementId: string;
+  now?: Date;
+}): Promise<PendingExceptionSubmission> {
+  const [{ settlement }, proofResponse] = await Promise.all([
+    input.client.getSettlement(input.settlementId),
+    input.client.getEncryptedRecord({
+      organizationId: input.organizationId,
+      recordId: input.proofBundleId,
+    }) as Promise<{ record?: { envelope?: EncryptedVaultRecord } }>,
+  ]);
+  if (
+    settlement.organizationId !== input.organizationId
+    || settlement.runId !== input.runId
+    || settlement.workflowType !== input.workflowType
+    || settlement.subjectRecordId !== input.subjectRecordId
+    || !proofResponse.record?.envelope
+  ) {
+    throw new Error("The durable exception recovery records do not match.");
+  }
+  const proofPayload = resumableExceptionProofSchema.parse(
+    decryptVaultRecord(proofResponse.record.envelope, input.principal),
+  );
+  const validityExpiry = BigInt(proofPayload.shards[0].publicInputs.validityExpiry);
+  const nowUnix = BigInt(Math.floor((input.now ?? new Date()).getTime() / 1_000));
+  if (settlement.transactionHash && validityExpiry <= nowUnix + 120n) {
+    const verificationComplete = await input.client.getProofVerification(input.settlementId)
+      .then(({ proofVerification }) => proofVerification?.state === "complete")
+      .catch(() => false);
+    if (!verificationComplete) {
+      const replacement = input.workflowType === "wage_claim"
+        ? "Draft a fresh claim from the same confirmed payday; a new payroll is not required."
+        : "Draft a fresh remediation from the verified claim.";
+      throw new Error(
+        `This sealed ${input.workflowType === "wage_claim" ? "claim" : "remediation"} proof expired before on-chain verification could be queued. ${replacement}`,
+      );
+    }
+  }
+  return parsePendingExceptionSubmission({
+    version: 1,
+    workflowType: input.workflowType,
+    organizationId: input.organizationId,
+    runId: input.runId,
+    subjectRecordId: input.subjectRecordId,
+    proofBundleId: input.proofBundleId,
+    settlementId: input.settlementId,
+    walletRequestId: settlement.walletRequestId,
+    idempotencyKey: settlement.idempotencyKey,
+    tokenTotalsCommitment: settlement.tokenTotalsCommitment,
+    proofShards: [proofPayload.shards[0].proofCalldata, proofPayload.shards[1].proofCalldata],
+    transactionHash: settlement.transactionHash,
+    createdAt: settlement.createdAt,
+  });
+}
+
 function canonicalRoot(high: string, low: string): `0x${string}` {
   const upper = BigInt(high);
   const lower = BigInt(low);
@@ -189,6 +257,7 @@ async function requireExceptionDeploymentReady(input: {
   organizationId: string;
   runId: string;
   workflowType: "wage_claim" | "wage_remediation";
+  claimId?: string;
   chainId: string;
   sealAddress: string;
   mode: 0 | 2 | 3;
@@ -212,11 +281,21 @@ async function requireExceptionDeploymentReady(input: {
   const fxFailure = failures.some(({ code }) => code === "fx_root");
   const nonFxFailures = failures.filter(({ code }) => code !== "fx_root");
   if (fxFailure && nonFxFailures.length === 0) {
-    await input.client.renewHistoricalFxRoot({
-      organizationId: input.organizationId,
-      runId: input.runId,
-      workflowType: input.workflowType,
-    });
+    if (input.workflowType === "wage_remediation" && !input.claimId) {
+      throw new Error("The selected wage claim is required to renew remediation FX authorization.");
+    }
+    await input.client.renewHistoricalFxRoot(input.workflowType === "wage_remediation"
+      ? {
+          organizationId: input.organizationId,
+          runId: input.runId,
+          workflowType: input.workflowType,
+          claimId: input.claimId!,
+        }
+      : {
+          organizationId: input.organizationId,
+          runId: input.runId,
+          workflowType: input.workflowType,
+        });
     ({ readiness } = await check());
     if (readiness.ready) return;
   }
@@ -329,6 +408,9 @@ export async function executeProofBoundWageClaim(input: {
   const policyRoot = canonicalRoot(publicInputs.policyRootHigh, publicInputs.policyRootLow);
   const fxRoot = canonicalRoot(publicInputs.fxRootHigh, publicInputs.fxRootLow);
   const proofClaimNullifier = canonicalRoot(publicInputs.runNullifierHigh, publicInputs.runNullifierLow);
+  assertSameRoot(agreementRoot, run.agreementRoot, "agreement root");
+  assertSameRoot(policyRoot, run.policyRoot, "policy root");
+  assertSameRoot(fxRoot, run.fxRoot, "FX root");
   if (BigInt(proofClaimNullifier) !== BigInt(claimInput.claimNullifier)) {
     throw new Error("The wage-claim proof returned a different claim nullifier.");
   }
@@ -772,8 +854,7 @@ export async function executeProofBoundWageRemediation(input: {
     || !remediation.claimNullifier
     || !remediation.amountAtomic
     || !remediation.token
-    || !remediation.amountAtomic
-    || !remediation.token
+    || !["submitted", "accepted"].includes(claim.state)
     || BigInt(remediation.claimNullifier) !== BigInt(claim.claimNullifier ?? "0")
   ) {
     throw new Error("The encrypted remediation draft does not match its proved wage claim.");
@@ -800,6 +881,25 @@ export async function executeProofBoundWageRemediation(input: {
   assertSameRoot(payroll.policyRoot, run.policyRoot, "policy root");
   assertSameRoot(payroll.fxRoot, run.fxRoot, "FX root");
   assertSameRoot(payroll.runNullifier, run.runNullifier, "run nullifier");
+
+  // Renew an otherwise valid historical FX authorization before spending
+  // prover capacity. Remediation is allowed only after the claim has reached
+  // the on-chain CLAIMED state, which the renewal endpoint verifies.
+  input.onStage?.("preflight");
+  await requireExceptionDeploymentReady({
+    client: input.client,
+    organizationId: input.organizationId,
+    runId: claim.runId,
+    workflowType: "wage_remediation",
+    claimId: claim.id,
+    chainId: input.chainId,
+    sealAddress: input.sealAddress,
+    mode: PAYO_PROOF_MODE_REMEDIATE,
+    proofVersion: 4,
+    agreementRoot: payroll.agreementRoot,
+    policyRoot: payroll.policyRoot,
+    fxRoot: payroll.fxRoot,
+  });
 
   const now = input.now?.() ?? new Date();
   const nowUnix = BigInt(Math.floor(now.getTime() / 1_000));
@@ -855,12 +955,20 @@ export async function executeProofBoundWageRemediation(input: {
   const policyRoot = canonicalRoot(publicInputs.policyRootHigh, publicInputs.policyRootLow);
   const fxRoot = canonicalRoot(publicInputs.fxRootHigh, publicInputs.fxRootLow);
   const proofClaimNullifier = canonicalRoot(publicInputs.runNullifierHigh, publicInputs.runNullifierLow);
+  assertSameRoot(agreementRoot, run.agreementRoot, "agreement root");
+  assertSameRoot(policyRoot, run.policyRoot, "policy root");
+  assertSameRoot(fxRoot, run.fxRoot, "FX root");
   if (BigInt(proofClaimNullifier) !== BigInt(claim.claimNullifier)) {
     throw new Error("The remediation proof is not bound to the accepted claim nullifier.");
   }
 
   input.onStage?.("preflight");
-  const { readiness } = await input.client.checkDeploymentReadiness({
+  await requireExceptionDeploymentReady({
+    client: input.client,
+    organizationId: input.organizationId,
+    runId: claim.runId,
+    workflowType: "wage_remediation",
+    claimId: claim.id,
     chainId: input.chainId,
     sealAddress: input.sealAddress,
     mode: PAYO_PROOF_MODE_REMEDIATE,
@@ -869,9 +977,6 @@ export async function executeProofBoundWageRemediation(input: {
     policyRoot,
     fxRoot,
   });
-  if (!readiness.ready) {
-    throw new Error(`PAYO remediation deployment is not ready: ${readiness.checks.filter(({ ready }) => !ready).map(({ message }) => message).join(" ")}`);
-  }
 
   input.onStage?.("persisting");
   const proofBundleId = generateUuidV7();
@@ -1142,6 +1247,7 @@ export async function resumeProofBoundWageRemediation(input: {
       organizationId: input.organizationId,
       runId: claim.runId,
       workflowType: "wage_remediation",
+      claimId: claim.id,
       chainId: input.chainId,
       sealAddress: input.sealAddress,
       mode: PAYO_PROOF_MODE_REMEDIATE,

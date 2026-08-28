@@ -1,7 +1,7 @@
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { readFileSync } from "node:fs";
 import { sql } from "drizzle-orm";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   decryptVaultRecord,
   generateVaultPrincipal,
@@ -1393,6 +1393,10 @@ databaseSuite("PostgreSQL durability integration", () => {
       tokenTotalsCommitment: `0x${"22".repeat(32)}`,
       transactionHash: "0xabc",
     });
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(
+      (Number(commonInputs.validityExpiry) - 600) * 1_000,
+    );
+    try {
     await expect(enqueueProofVerification({
       settlementId,
       request: { proofBundleId, shards: shardCalldata },
@@ -1403,17 +1407,45 @@ databaseSuite("PostgreSQL durability integration", () => {
       request: { proofBundleId, shards: shardCalldata },
       principal: admin,
     })).resolves.toMatchObject({ proofBundleId, replayed: true });
+
+    const lateSettlementId = generateUuidV7();
+    await getDatabase().insert(settlements).values({
+      id: lateSettlementId,
+      organizationId,
+      runId,
+      subjectRecordId: runId,
+      walletRequestId: "proof-relay-expired-wallet-request",
+      idempotencyKey: "proof-relay-expired-idempotency-key",
+      state: "submitted",
+      tokenTotalsCommitment: `0x${"23".repeat(32)}`,
+      transactionHash: "0xabd",
+    });
+    dateNow.mockReturnValue((Number(commonInputs.validityExpiry) - 119) * 1_000);
+      await expect(enqueueProofVerification({
+        settlementId: lateSettlementId,
+        request: { proofBundleId, shards: shardCalldata },
+        principal: admin,
+      })).rejects.toMatchObject({ code: "PROOF_VALIDITY_EXPIRED" });
+      await expect(enqueueProofVerification({
+        settlementId,
+        request: { proofBundleId, shards: shardCalldata },
+        principal: admin,
+      })).resolves.toMatchObject({ proofBundleId, replayed: true });
+
     const [proofJob] = await getDatabase().select().from(proofVerificationJobs);
     expect(proofJob).toMatchObject({ state: "pending", nextShard: 0 });
     expect(proofJob.shard0Calldata).toHaveLength(3_187);
 
     const modified = [[...shardCalldata[0]], shardCalldata[1]] as [string[], string[]];
     modified[0][100] = "0x1";
-    await expect(enqueueProofVerification({
-      settlementId,
-      request: { proofBundleId, shards: modified },
-      principal: admin,
-    })).rejects.toMatchObject({ code: "PROOF_CALLDATA_HASH_MISMATCH" });
+      await expect(enqueueProofVerification({
+        settlementId,
+        request: { proofBundleId, shards: modified },
+        principal: admin,
+      })).rejects.toMatchObject({ code: "PROOF_CALLDATA_HASH_MISMATCH" });
+    } finally {
+      dateNow.mockRestore();
+    }
 
     await expect(leaseProofVerificationJobs(
       "proof-worker-too-early",
@@ -1557,6 +1589,58 @@ databaseSuite("PostgreSQL durability integration", () => {
       runId,
       principal: { principalId: "admin:other", sessionId: "other" },
     })).rejects.toMatchObject({ code: "ORG_FORBIDDEN" });
+    const claimId = generateUuidV7();
+    const claimNullifierHigh = 0x81n;
+    const claimNullifierLow = 0x82n;
+    await getDatabase().insert(proofBundles).values({
+      id: generateUuidV7(),
+      runId,
+      organizationId,
+      proofType: "wage_claim",
+      proofVersion: "3",
+      subjectRecordId: claimId,
+      proofPackage: {
+        proofType: "wage_claim",
+        proofVersion: "3",
+        subjectRecordId: claimId,
+        commonInputs: {
+          proofVersion: "3",
+          runNullifierHigh: claimNullifierHigh.toString(),
+          runNullifierLow: claimNullifierLow.toString(),
+        },
+      },
+      proofHash: `0x${"75".repeat(32)}`,
+      verificationState: "onchain_verified",
+      verificationTransactionHash: "0x7103",
+    });
+    await getDatabase().insert(settlements).values({
+      id: generateUuidV7(),
+      organizationId,
+      runId,
+      workflowType: "wage_claim",
+      subjectRecordId: claimId,
+      walletRequestId: generateUuidV7(),
+      idempotencyKey: "historical-fx-verified-claim",
+      state: "finalized",
+      tokenTotalsCommitment: `0x${"76".repeat(32)}`,
+      transactionHash: "0x7104",
+    });
+    const remediationEvidence = await getHistoricalFxRenewalEvidence({
+      runId,
+      principal: admin,
+      workflowType: "wage_remediation",
+      claimId,
+    });
+    expect(remediationEvidence.authorizationNullifier).toBe(
+      `0x${((claimNullifierHigh << 128n) | claimNullifierLow).toString(16).padStart(64, "0")}`,
+    );
+    expect(remediationEvidence.authorizationNullifier).not.toBe(runNullifier);
+    await expect(getHistoricalFxRenewalEvidence({
+      runId,
+      principal: admin,
+      workflowType: "wage_remediation",
+      claimId: generateUuidV7(),
+    })).rejects.toMatchObject({ code: "FX_RENEWAL_CLAIM_NOT_VERIFIED" });
     const [audit] = await getDatabase().select().from(auditEvents)
       .where(sql`${auditEvents.action} = ${"fx_publication.historical_renewal_queued"}`);
     expect(audit?.metadata).toMatchObject({ runId, renewalCount: 1 });
@@ -1725,11 +1809,18 @@ databaseSuite("PostgreSQL durability integration", () => {
       tokenTotalsCommitment: `0x${"62".repeat(32)}`,
       transactionHash: "0xc100",
     });
-    await enqueueProofVerification({
-      settlementId: claimSettlementId,
-      request: { proofBundleId: claimProofBundleId, shards: claimFixture.shards },
-      principal: admin,
-    });
+    const claimDateNow = vi.spyOn(Date, "now").mockReturnValue(
+      (Number(claimFixture.commonInputs.validityExpiry) - 600) * 1_000,
+    );
+    try {
+      await enqueueProofVerification({
+        settlementId: claimSettlementId,
+        request: { proofBundleId: claimProofBundleId, shards: claimFixture.shards },
+        principal: admin,
+      });
+    } finally {
+      claimDateNow.mockRestore();
+    }
     expect((await getDatabase().select().from(payrollRuns))[0].state).toBe("confirmed");
     const [claimJob] = await leaseProofVerificationJobs(
       "phase3-claim-completer",
@@ -1776,11 +1867,18 @@ databaseSuite("PostgreSQL durability integration", () => {
       tokenTotalsCommitment: `0x${"64".repeat(32)}`,
       transactionHash: "0xc200",
     });
-    await enqueueProofVerification({
-      settlementId: remediationSettlementId,
-      request: { proofBundleId: remediationProofBundleId, shards: remediationFixture.shards },
-      principal: admin,
-    });
+    const remediationDateNow = vi.spyOn(Date, "now").mockReturnValue(
+      (Number(remediationFixture.commonInputs.validityExpiry) - 600) * 1_000,
+    );
+    try {
+      await enqueueProofVerification({
+        settlementId: remediationSettlementId,
+        request: { proofBundleId: remediationProofBundleId, shards: remediationFixture.shards },
+        principal: admin,
+      });
+    } finally {
+      remediationDateNow.mockRestore();
+    }
     const [remediationJob] = await leaseProofVerificationJobs(
       "phase3-remediation-completer",
       2,

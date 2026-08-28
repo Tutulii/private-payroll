@@ -54,6 +54,7 @@ import {
   executeProofBoundWageClaim,
   executeProofBoundWageRemediation,
   parsePendingExceptionSubmission,
+  rebuildPendingExceptionSubmission,
   resumeProofBoundWageClaim,
   resumeProofBoundWageRemediation,
   type PendingExceptionSubmission,
@@ -61,6 +62,7 @@ import {
 import type { PayrollExecutionStage } from "@/lib/client/payroll-execution";
 import type { SerializedPayrollIntegrityBuildRequest } from "@/lib/proof/input-builder";
 import { runProgressiveTasks, type ProgressiveTask } from "@/lib/client/progressive-tasks";
+import { READY_AUTH_CHAIN_ID } from "@/lib/auth/ready-session";
 
 type ActivityKind = "Payroll" | "Agent" | "Vault";
 
@@ -77,6 +79,9 @@ type SettlementSummary = {
   finalizedAt: string | null;
   confirmationDepth: number;
   lastErrorCode: string | null;
+  proofValidityExpiry: string | null;
+  proofVerificationState: string | null;
+  proofVerificationLastErrorCode: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -159,6 +164,26 @@ function dateParts(value: string) {
 
 function shortId(value: string | null) {
   return value ? `${value.slice(0, 8)}…${value.slice(-5)}` : "—";
+}
+
+type ExceptionProofDeliveryState = "none" | "recoverable" | "running" | "complete" | "expired" | "failed";
+
+function exceptionProofDeliveryState(
+  settlement: SettlementSummary | undefined,
+  nowUnix = Math.floor(Date.now() / 1_000),
+): ExceptionProofDeliveryState {
+  if (!settlement?.transactionHash) return "none";
+  if (settlement.proofVerificationState === "complete") return "complete";
+  if (
+    settlement.proofVerificationState === "pending"
+    || settlement.proofVerificationState === "leased"
+  ) return "running";
+  if (
+    settlement.proofValidityExpiry
+    && BigInt(settlement.proofValidityExpiry) <= BigInt(nowUnix + 120)
+  ) return "expired";
+  if (settlement.proofVerificationState === "dead") return "failed";
+  return "recoverable";
 }
 
 function settlementEvent(settlement: SettlementSummary): ActivityEvent {
@@ -350,6 +375,14 @@ export default function ActivityPage() {
     return () => window.clearTimeout(timer);
   }, [refreshActivity]);
 
+  const proofVerificationRunning = settlements.some(({ proofVerificationState }) =>
+    proofVerificationState === "pending" || proofVerificationState === "leased");
+  useEffect(() => {
+    if (!proofVerificationRunning) return;
+    const timer = window.setInterval(() => void refreshActivity(), 5_000);
+    return () => window.clearInterval(timer);
+  }, [proofVerificationRunning, refreshActivity]);
+
   useEffect(() => {
     const organizationId = vault.session?.organizationId;
     const timer = window.setTimeout(() => {
@@ -401,12 +434,11 @@ export default function ActivityPage() {
           policyRoot: run.policyRoot,
           fxRoot: run.fxRoot,
         });
-        const expiredFx = readiness.checks.find(({ code, ready }) => code === "fx_root" && !ready);
-        if (expiredFx) {
-          throw new Error("This payday's FX authorization has expired. Choose the newest payday; PAYO blocked proof generation before it could waste prover time.");
-        }
-        if (!readiness.ready) {
-          throw new Error(`This payday is not claim-ready: ${readiness.checks.filter(({ ready }) => !ready).map(({ message }) => message).join(" ")}`);
+        // The execution preflight renews only this payday's exact historical
+        // FX root. Other inactive bindings remain hard blockers here.
+        const blockers = readiness.checks.filter(({ code, ready }) => !ready && code !== "fx_root");
+        if (blockers.length > 0) {
+          throw new Error(`This payday is not claim-ready: ${blockers.map(({ message }) => message).join(" ")}`);
         }
         const payload = decryptVaultRecord<{
           claimProofSource?: { buildInput?: SerializedPayrollIntegrityBuildRequest };
@@ -702,27 +734,57 @@ export default function ActivityPage() {
   };
 
   const resumeClaimApproval = async (claim: WageClaimRecord) => {
-    if (!vault.client || !vault.session || !pendingException) return;
+    if (!vault.client || !vault.session) return;
     setCreatingException(true);
     setProvingClaimId(claim.id);
     setExceptionStage(null);
     setActivityError("");
     setExceptionFeedback(null);
     try {
-      if (!starknet.isConnected || !starknet.isMainnet) {
-        throw new Error("Connect Ready on Starknet Mainnet before resuming the private claim.");
-      }
-      starknet.assertPrivateActionAvailable();
       const sealAddress = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
       if (!sealAddress) throw new Error("The proof-bound PAYO seal is not configured.");
+      let recovery = pendingException?.workflowType === "wage_claim"
+        && pendingException.subjectRecordId === claim.id
+        ? pendingException
+        : null;
+      if (!recovery) {
+        const durable = settlements.find((settlement) =>
+          settlement.workflowType === "wage_claim"
+          && settlement.subjectRecordId === claim.id
+          && Boolean(settlement.transactionHash));
+        if (!durable || !claim.proofBundleId) {
+          throw new Error("No submitted wage-claim recovery record is available.");
+        }
+        recovery = await rebuildPendingExceptionSubmission({
+          client: vault.client,
+          organizationId: vault.session.organizationId,
+          principal: vault.session.principal,
+          runId: claim.runId,
+          workflowType: "wage_claim",
+          subjectRecordId: claim.id,
+          proofBundleId: claim.proofBundleId,
+          settlementId: durable.id,
+        });
+        persistPendingException(recovery);
+      }
+      const durableTransaction = settlements.some((settlement) =>
+        settlement.workflowType === "wage_claim"
+        && settlement.subjectRecordId === claim.id
+        && Boolean(settlement.transactionHash));
+      if (!recovery.transactionHash && !durableTransaction) {
+        if (!starknet.isConnected || !starknet.isMainnet) {
+          throw new Error("Connect Ready on Starknet Mainnet before resuming the private claim.");
+        }
+        starknet.assertPrivateActionAvailable();
+      }
       const result = await resumeProofBoundWageClaim({
         client: vault.client,
         organizationId: vault.session.organizationId,
         principal: vault.session.principal,
-        chainId: starknet.chainId,
+        chainId: starknet.chainId || READY_AUTH_CHAIN_ID,
         sealAddress,
         claim,
-        pendingSubmission: pendingException,
+        pendingSubmission: recovery,
         submitException: starknet.runProofBoundException,
         onStage: setExceptionStage,
         persistPendingSubmission: persistPendingException,
@@ -822,7 +884,7 @@ export default function ActivityPage() {
   };
 
   const resumeRemediationApproval = async (remediation: RemediationRecord) => {
-    if (!vault.client || !vault.session || !pendingException) return;
+    if (!vault.client || !vault.session) return;
     const claim = claims.find(({ id }) => id === remediation.claimId);
     if (!claim) {
       const message = "The encrypted wage claim for this remediation is unavailable.";
@@ -836,21 +898,51 @@ export default function ActivityPage() {
     setActivityError("");
     setExceptionFeedback(null);
     try {
-      if (!starknet.isConnected || !starknet.isMainnet) {
-        throw new Error("Connect Ready on Starknet Mainnet before resuming private remediation.");
-      }
-      starknet.assertPrivateActionAvailable();
       const sealAddress = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
       if (!sealAddress) throw new Error("The proof-bound PAYO seal is not configured.");
+      let recovery = pendingException?.workflowType === "wage_remediation"
+        && pendingException.subjectRecordId === remediation.id
+        ? pendingException
+        : null;
+      if (!recovery) {
+        const durable = settlements.find((settlement) =>
+          settlement.workflowType === "wage_remediation"
+          && settlement.subjectRecordId === remediation.id
+          && Boolean(settlement.transactionHash));
+        if (!durable || !remediation.proofBundleId || !remediation.runId) {
+          throw new Error("No submitted remediation recovery record is available.");
+        }
+        recovery = await rebuildPendingExceptionSubmission({
+          client: vault.client,
+          organizationId: vault.session.organizationId,
+          principal: vault.session.principal,
+          runId: remediation.runId,
+          workflowType: "wage_remediation",
+          subjectRecordId: remediation.id,
+          proofBundleId: remediation.proofBundleId,
+          settlementId: durable.id,
+        });
+        persistPendingException(recovery);
+      }
+      const durableTransaction = settlements.some((settlement) =>
+        settlement.workflowType === "wage_remediation"
+        && settlement.subjectRecordId === remediation.id
+        && Boolean(settlement.transactionHash));
+      if (!recovery.transactionHash && !durableTransaction) {
+        if (!starknet.isConnected || !starknet.isMainnet) {
+          throw new Error("Connect Ready on Starknet Mainnet before resuming private remediation.");
+        }
+        starknet.assertPrivateActionAvailable();
+      }
       const result = await resumeProofBoundWageRemediation({
         client: vault.client,
         organizationId: vault.session.organizationId,
         principal: vault.session.principal,
-        chainId: starknet.chainId,
+        chainId: starknet.chainId || READY_AUTH_CHAIN_ID,
         sealAddress,
         claim,
         remediation,
-        pendingSubmission: pendingException,
+        pendingSubmission: recovery,
         submitException: starknet.runProofBoundException,
         onStage: setExceptionStage,
         persistPendingSubmission: persistPendingException,
@@ -1033,11 +1125,30 @@ export default function ActivityPage() {
               <button type="submit" className="button button--ink button--wide" disabled={creatingException}>{creatingException ? <LoaderCircle className="spin" size={16} /> : <LockKeyhole size={16} />} Encrypt claim draft</button>
             </form>}
             {claims.length > 0 && <div className="private-exception-list">
-              {claims.map((claim) => <div key={claim.id} className="private-exception-row">
-                <span><small>{claim.claimKind.replaceAll("_", " ")}</small><strong>{shortId(claim.id)} · {claim.state}</strong></span>
-                {claim.state === "draft" && <button type="button" className="button button--soft" onClick={() => void proveClaim(claim)} disabled={creatingException || !starknet.isConnected}>{provingClaimId === claim.id ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />} Prove &amp; submit</button>}
-                {claim.state === "proven" && pendingException?.workflowType === "wage_claim" && pendingException.subjectRecordId === claim.id && <button type="button" className="button button--soft" onClick={() => void resumeClaimApproval(claim)} disabled={creatingException || !starknet.isConnected}>{provingClaimId === claim.id ? <LoaderCircle className="spin" size={15} /> : <WalletCards size={15} />} Resume Ready approval</button>}
-              </div>)}
+              {claims.map((claim) => {
+                const savedRecovery = pendingException?.workflowType === "wage_claim"
+                  && pendingException.subjectRecordId === claim.id;
+                const durableSettlement = settlements.find((settlement) =>
+                  settlement.workflowType === "wage_claim"
+                  && settlement.subjectRecordId === claim.id
+                  && Boolean(settlement.transactionHash));
+                const delivery = exceptionProofDeliveryState(durableSettlement);
+                const submittedRecovery = Boolean(
+                  durableSettlement
+                  || (savedRecovery && pendingException?.transactionHash),
+                );
+                const canResume = delivery === "none"
+                  || delivery === "recoverable"
+                  || delivery === "complete";
+                return <div key={claim.id} className="private-exception-row">
+                  <span><small>{claim.claimKind.replaceAll("_", " ")}</small><strong>{shortId(claim.id)} · {claim.state}</strong></span>
+                  {claim.state === "draft" && <button type="button" className="button button--soft" onClick={() => void proveClaim(claim)} disabled={creatingException || !starknet.isConnected}>{provingClaimId === claim.id ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />} Prove &amp; submit</button>}
+                  {claim.state === "proven" && delivery === "expired" && <small>Proof expired · draft a fresh claim from this payday</small>}
+                  {claim.state === "proven" && delivery === "failed" && <small>ZK verification failed · draft a fresh claim</small>}
+                  {claim.state === "proven" && delivery === "running" && <small>ZK verification is running</small>}
+                  {claim.state === "proven" && (savedRecovery || durableSettlement) && canResume && <button type="button" className="button button--soft" onClick={() => void resumeClaimApproval(claim)} disabled={creatingException || (!submittedRecovery && !starknet.isConnected)}>{provingClaimId === claim.id ? <LoaderCircle className="spin" size={15} /> : <WalletCards size={15} />} {delivery === "complete" ? "Sync verified claim" : submittedRecovery ? "Finish ZK verification" : "Resume Ready approval"}</button>}
+                </div>;
+              })}
               {exceptionStage && <p className="private-exception-feedback private-exception-feedback--progress" role="status" aria-live="polite"><LoaderCircle className="spin" size={14} /> {exceptionStageLabel[exceptionStage]}</p>}
             </div>}
             {exceptionFeedback && <p className={`private-exception-feedback private-exception-feedback--${exceptionFeedback.tone}`} role={exceptionFeedback.tone === "error" ? "alert" : "status"}><span aria-hidden="true">{exceptionFeedback.tone === "error" ? "!" : "✓"}</span> {exceptionFeedback.message}</p>}
@@ -1051,10 +1162,29 @@ export default function ActivityPage() {
             {remediations.length > 0 && <div className="private-exception-list">
               {remediations.map((remediation) => {
                 const runDisputed = runs.some(({ id, state }) => id === remediation.runId && state === "disputed");
+                const claimReady = claims.some(({ id, state }) =>
+                  id === remediation.claimId && ["submitted", "accepted"].includes(state));
+                const savedRecovery = pendingException?.workflowType === "wage_remediation"
+                  && pendingException.subjectRecordId === remediation.id;
+                const durableSettlement = settlements.find((settlement) =>
+                  settlement.workflowType === "wage_remediation"
+                  && settlement.subjectRecordId === remediation.id
+                  && Boolean(settlement.transactionHash));
+                const delivery = exceptionProofDeliveryState(durableSettlement);
+                const submittedRecovery = Boolean(
+                  durableSettlement
+                  || (savedRecovery && pendingException?.transactionHash),
+                );
+                const canResume = delivery === "none"
+                  || delivery === "recoverable"
+                  || delivery === "complete";
                 return <div key={remediation.id} className="private-exception-row">
                   <span><small>remediation</small><strong>{shortId(remediation.id)} · {remediation.state}</strong></span>
-                  {remediation.state === "draft" && <button type="button" className="button button--soft" onClick={() => void settleRemediation(remediation)} disabled={creatingException || !starknet.isConnected || !runDisputed}>{provingClaimId === remediation.id ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />} Prove &amp; settle</button>}
-                  {remediation.state === "proven" && pendingException?.workflowType === "wage_remediation" && pendingException.subjectRecordId === remediation.id && <button type="button" className="button button--soft" onClick={() => void resumeRemediationApproval(remediation)} disabled={creatingException || !starknet.isConnected || !runDisputed}>{provingClaimId === remediation.id ? <LoaderCircle className="spin" size={15} /> : <WalletCards size={15} />} Resume Ready approval</button>}
+                  {remediation.state === "draft" && <button type="button" className="button button--soft" onClick={() => void settleRemediation(remediation)} disabled={creatingException || !starknet.isConnected || !runDisputed || !claimReady}>{provingClaimId === remediation.id ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />} {claimReady ? "Prove & settle" : "Finish claim first"}</button>}
+                  {remediation.state === "proven" && delivery === "expired" && <small>Proof expired · draft a fresh remediation</small>}
+                  {remediation.state === "proven" && delivery === "failed" && <small>ZK verification failed · draft a fresh remediation</small>}
+                  {remediation.state === "proven" && delivery === "running" && <small>ZK verification is running</small>}
+                  {remediation.state === "proven" && (savedRecovery || durableSettlement) && canResume && <button type="button" className="button button--soft" onClick={() => void resumeRemediationApproval(remediation)} disabled={creatingException || (!submittedRecovery && !starknet.isConnected) || !runDisputed}>{provingClaimId === remediation.id ? <LoaderCircle className="spin" size={15} /> : <WalletCards size={15} />} {delivery === "complete" ? "Sync verified remediation" : submittedRecovery ? "Finish ZK verification" : "Resume Ready approval"}</button>}
                 </div>;
               })}
             </div>}
