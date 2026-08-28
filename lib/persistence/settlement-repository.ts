@@ -28,25 +28,92 @@ import {
 
 const PAYROLL_SEALED_EVENT_SELECTOR = "0x1b9fd7bf429246efa243b5f4b5eb036c1ab31a548ec13cc42f97a03b34f38ea";
 
-function payrollSealedEventMatches(payload: unknown, runNullifier: string): boolean {
-  let high: bigint;
-  let low: bigint;
+type SealRecoveryBinding = {
+  mode: bigint;
+  proofVersion: bigint;
+  runNullifierHigh: bigint;
+  runNullifierLow: bigint;
+  shardCalldataHashes: readonly [bigint, bigint];
+};
+
+type SealRecoveryCandidate = {
+  workflowType: SettlementWorkflow;
+  subjectRecordId: string;
+  proofType: string;
+  proofVersion: string;
+  proofPackage: unknown;
+};
+
+const RECOVERY_PROFILE = {
+  payroll: { proofType: "payroll_integrity", mode: 0n, proofVersions: [1n, 2n] },
+  wage_claim: { proofType: "wage_claim", mode: 2n, proofVersions: [3n] },
+  wage_remediation: { proofType: "wage_remediation", mode: 3n, proofVersions: [4n] },
+} as const;
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function bigintValue(value: unknown): bigint | null {
   try {
-    const nullifier = BigInt(runNullifier);
-    high = nullifier >> 128n;
-    low = nullifier & ((1n << 128n) - 1n);
+    if (typeof value !== "string" && typeof value !== "number" && typeof value !== "bigint") return null;
+    const parsed = BigInt(value);
+    return parsed >= 0n ? parsed : null;
   } catch {
-    return false;
+    return null;
   }
-  const keys = payload && typeof payload === "object" && "keys" in payload
-    ? (payload as { keys?: unknown }).keys
-    : undefined;
-  if (!Array.isArray(keys) || keys.length < 3) return false;
-  try {
-    return BigInt(String(keys[1])) === high && BigInt(String(keys[2])) === low;
-  } catch {
-    return false;
-  }
+}
+
+function sealRecoveryBinding(candidate: SealRecoveryCandidate): SealRecoveryBinding | null {
+  const profile = RECOVERY_PROFILE[candidate.workflowType];
+  const proofVersion = bigintValue(candidate.proofVersion);
+  const proofPackage = record(candidate.proofPackage);
+  const commonInputs = record(proofPackage?.commonInputs);
+  const shardHashes = proofPackage?.shardCalldataHashes;
+  if (
+    proofVersion === null
+    || !profile.proofVersions.some((version) => version === proofVersion)
+    || proofPackage?.proofType !== profile.proofType
+    || proofPackage.subjectRecordId !== candidate.subjectRecordId
+    || proofPackage.proofVersion !== candidate.proofVersion
+    || commonInputs?.proofVersion !== candidate.proofVersion
+    || !Array.isArray(shardHashes)
+    || shardHashes.length !== 2
+  ) return null;
+  const runNullifierHigh = bigintValue(commonInputs.runNullifierHigh);
+  const runNullifierLow = bigintValue(commonInputs.runNullifierLow);
+  const shard0Hash = bigintValue(shardHashes[0]);
+  const shard1Hash = bigintValue(shardHashes[1]);
+  if (
+    runNullifierHigh === null
+    || runNullifierLow === null
+    || shard0Hash === null
+    || shard1Hash === null
+  ) return null;
+  return {
+    mode: profile.mode,
+    proofVersion,
+    runNullifierHigh,
+    runNullifierLow,
+    shardCalldataHashes: [shard0Hash, shard1Hash],
+  };
+}
+
+function payrollSealedEventMatches(payload: unknown, binding: SealRecoveryBinding): boolean {
+  const event = record(payload);
+  const keys = event?.keys;
+  const data = event?.data;
+  if (!Array.isArray(keys) || keys.length < 3 || !Array.isArray(data) || data.length < 4) return false;
+  const values = [keys[1], keys[2], data[0], data[1], data[2], data[3]].map(bigintValue);
+  return values.every((value) => value !== null)
+    && values[0] === binding.runNullifierHigh
+    && values[1] === binding.runNullifierLow
+    && values[2] === binding.mode
+    && values[3] === binding.shardCalldataHashes[0]
+    && values[4] === binding.shardCalldataHashes[1]
+    && values[5] === binding.proofVersion;
 }
 
 const IDEMPOTENCY_LOCK_MS = 60_000;
@@ -339,9 +406,10 @@ export async function recordSettlementSubmission(input: {
 /**
  * Recovers a wallet submission when Ready executed the atomic STRK20 request
  * but did not resolve `wallet_strk20InvokeTransaction` with its transaction
- * hash. Only a canonical PayrollSealed event whose public run-nullifier keys
- * match the proven run is accepted; salary, token totals, and recipients are
- * neither indexed nor inspected.
+ * hash. Only a canonical PayrollSealed event whose public nullifier, workflow
+ * mode, proof version, and both proof-calldata hashes match the locally stored
+ * proof bundle is accepted; salary, token totals, and recipients are neither
+ * indexed nor inspected.
  */
 export async function recoverApprovalSubmissionsFromSealEvents(input: {
   chainId: string;
@@ -358,16 +426,33 @@ export async function recoverApprovalSubmissionsFromSealEvents(input: {
       settlementId: settlements.id,
       runId: settlements.runId,
       organizationId: settlements.organizationId,
-      runNullifier: payrollRuns.runNullifier,
+      workflowType: settlements.workflowType,
+      subjectRecordId: settlements.subjectRecordId,
+      proofBundleId: proofBundles.id,
+      proofType: proofBundles.proofType,
+      proofVersion: proofBundles.proofVersion,
+      proofPackage: proofBundles.proofPackage,
     })
     .from(settlements)
-    .innerJoin(payrollRuns, eq(payrollRuns.id, settlements.runId))
+    .innerJoin(proofBundles, and(
+      eq(proofBundles.organizationId, settlements.organizationId),
+      eq(proofBundles.runId, settlements.runId),
+      eq(proofBundles.subjectRecordId, settlements.subjectRecordId),
+      or(
+        and(eq(settlements.workflowType, "payroll"), eq(proofBundles.proofType, "payroll_integrity")),
+        and(eq(settlements.workflowType, "wage_claim"), eq(proofBundles.proofType, "wage_claim")),
+        and(eq(settlements.workflowType, "wage_remediation"), eq(proofBundles.proofType, "wage_remediation")),
+      ),
+    ))
     .where(and(
-      eq(settlements.workflowType, "payroll"),
+      or(
+        eq(settlements.workflowType, "payroll"),
+        eq(settlements.workflowType, "wage_claim"),
+        eq(settlements.workflowType, "wage_remediation"),
+      ),
       eq(settlements.state, "approval_pending"),
       isNull(settlements.transactionHash),
-    ))
-    .limit(limit);
+    ));
   if (candidates.length === 0) return { recovered: 0 };
 
   let normalizedSeal: string;
@@ -379,6 +464,7 @@ export async function recoverApprovalSubmissionsFromSealEvents(input: {
   const events = await database
     .select({
       transactionHash: indexedChainEvents.transactionHash,
+      eventIndex: indexedChainEvents.eventIndex,
       blockNumber: indexedChainEvents.blockNumber,
       payload: indexedChainEvents.payload,
     })
@@ -393,10 +479,32 @@ export async function recoverApprovalSubmissionsFromSealEvents(input: {
     .limit(1_000);
 
   let recovered = 0;
-  for (const candidate of candidates) {
-    if (!candidate.runNullifier) continue;
-    const event = events.find(({ payload }) => payrollSealedEventMatches(payload, candidate.runNullifier!));
-    if (!event) continue;
+  const matches = candidates.flatMap((candidate) => {
+    const workflowType = settlementWorkflowSchema.safeParse(candidate.workflowType);
+    if (!workflowType.success) return [];
+    const binding = sealRecoveryBinding({ ...candidate, workflowType: workflowType.data });
+    if (!binding) return [];
+    return events
+      .filter(({ payload }) => payrollSealedEventMatches(payload, binding))
+      .map((event) => ({ candidate: { ...candidate, workflowType: workflowType.data }, event }));
+  });
+  const settlementMatchCounts = new Map<string, number>();
+  const eventMatchCounts = new Map<string, number>();
+  for (const match of matches) {
+    settlementMatchCounts.set(
+      match.candidate.settlementId,
+      (settlementMatchCounts.get(match.candidate.settlementId) ?? 0) + 1,
+    );
+    const eventIdentity = `${match.event.transactionHash}:${match.event.eventIndex}`;
+    eventMatchCounts.set(eventIdentity, (eventMatchCounts.get(eventIdentity) ?? 0) + 1);
+  }
+  for (const { candidate, event } of matches) {
+    if (recovered >= limit) break;
+    const eventIdentity = `${event.transactionHash}:${event.eventIndex}`;
+    if (
+      settlementMatchCounts.get(candidate.settlementId) !== 1
+      || eventMatchCounts.get(eventIdentity) !== 1
+    ) continue;
 
     const now = new Date();
     const didRecover = await database.transaction(async (transaction) => {
@@ -407,6 +515,12 @@ export async function recoverApprovalSubmissionsFromSealEvents(input: {
         .limit(1)
         .for("update");
       if (!current || current.state !== "approval_pending" || current.transactionHash) return false;
+      const [existingTransaction] = await transaction
+        .select({ id: settlements.id })
+        .from(settlements)
+        .where(eq(settlements.transactionHash, event.transactionHash))
+        .limit(1);
+      if (existingTransaction && existingTransaction.id !== candidate.settlementId) return false;
       const [settlement] = await transaction
         .update(settlements)
         .set({
@@ -422,17 +536,19 @@ export async function recoverApprovalSubmissionsFromSealEvents(input: {
         ))
         .returning({ id: settlements.id });
       if (!settlement) return false;
-      const [run] = await transaction
-        .update(payrollRuns)
-        .set({
-          state: "submitted",
-          transactionHash: event.transactionHash,
-          updatedAt: now,
-          version: sql`${payrollRuns.version} + 1`,
-        })
-        .where(and(eq(payrollRuns.id, candidate.runId), eq(payrollRuns.state, "approval_pending")))
-        .returning({ id: payrollRuns.id });
-      if (!run) throw new Error("Payroll state changed during seal-event recovery.");
+      if (candidate.workflowType === "payroll") {
+        const [run] = await transaction
+          .update(payrollRuns)
+          .set({
+            state: "submitted",
+            transactionHash: event.transactionHash,
+            updatedAt: now,
+            version: sql`${payrollRuns.version} + 1`,
+          })
+          .where(and(eq(payrollRuns.id, candidate.runId), eq(payrollRuns.state, "approval_pending")))
+          .returning({ id: payrollRuns.id });
+        if (!run) throw new Error("Payroll state changed during seal-event recovery.");
+      }
       await transaction
         .insert(confirmationJobs)
         .values({ id: generateUuidV7(), settlementId: candidate.settlementId })
@@ -446,7 +562,9 @@ export async function recoverApprovalSubmissionsFromSealEvents(input: {
         metadata: {
           transactionHash: event.transactionHash,
           blockNumber: event.blockNumber.toString(),
-          evidence: "canonical_payroll_sealed_event",
+          evidence: "canonical_proof_bound_sealed_event",
+          proofBundleId: candidate.proofBundleId,
+          workflowType: candidate.workflowType,
         },
       });
       return true;
@@ -477,7 +595,13 @@ export async function getSealedRunRecoveryEvidence(input: {
   if (!run) throw new ApiError(404, "Payroll run not found.", "RUN_NOT_FOUND");
   await requireOrganizationRole(run.organizationId, input.principal, ["admin", "operator"]);
   const [bundle] = await database
-    .select({ id: proofBundles.id })
+    .select({
+      id: proofBundles.id,
+      proofType: proofBundles.proofType,
+      proofVersion: proofBundles.proofVersion,
+      subjectRecordId: proofBundles.subjectRecordId,
+      proofPackage: proofBundles.proofPackage,
+    })
     .from(proofBundles)
     .where(and(
       eq(proofBundles.runId, run.id),
@@ -551,7 +675,16 @@ export async function getSealedRunRecoveryEvidence(input: {
     ))
     .orderBy(desc(indexedChainEvents.blockNumber))
     .limit(1_000);
-  const evidence = events.find(({ payload }) => payrollSealedEventMatches(payload, run.runNullifier!));
+  const binding = sealRecoveryBinding({
+    workflowType: "payroll",
+    subjectRecordId: run.id,
+    proofType: bundle.proofType,
+    proofVersion: bundle.proofVersion,
+    proofPackage: bundle.proofPackage,
+  });
+  const evidence = binding
+    ? events.find(({ payload }) => payrollSealedEventMatches(payload, binding))
+    : undefined;
   if (!evidence) {
     throw new ApiError(404, "No canonical PayrollSealed event matches this run.", "SEALED_SUBMISSION_NOT_FOUND");
   }

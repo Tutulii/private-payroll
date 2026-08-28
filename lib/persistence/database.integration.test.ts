@@ -803,6 +803,10 @@ databaseSuite("PostgreSQL durability integration", () => {
       runNullifier,
     });
     const proofBundleId = generateUuidV7();
+    const nullifier = BigInt(runNullifier);
+    const high = nullifier >> 128n;
+    const low = nullifier & ((1n << 128n) - 1n);
+    const shardCalldataHashes = ["0xabc", "0xdef"] as const;
     await getDatabase().insert(proofBundles).values({
       id: proofBundleId,
       runId,
@@ -810,12 +814,19 @@ databaseSuite("PostgreSQL durability integration", () => {
       proofType: "payroll_integrity",
       proofVersion: "1",
       subjectRecordId: runId,
-      proofPackage: {},
+      proofPackage: {
+        proofType: "payroll_integrity",
+        proofVersion: "1",
+        subjectRecordId: runId,
+        commonInputs: {
+          proofVersion: "1",
+          runNullifierHigh: high.toString(),
+          runNullifierLow: low.toString(),
+        },
+        shardCalldataHashes,
+      },
       proofHash: `0x${"22".repeat(32)}`,
     });
-    const nullifier = BigInt(runNullifier);
-    const high = nullifier >> 128n;
-    const low = nullifier & ((1n << 128n) - 1n);
     const sealAddress = "0x123";
     await persistIndexedBlock({
       chainId: "SN_MAIN",
@@ -834,7 +845,7 @@ databaseSuite("PostgreSQL durability integration", () => {
             `0x${high.toString(16)}`,
             `0x${low.toString(16)}`,
           ],
-          data: [],
+          data: ["0x0", ...shardCalldataHashes, "0x1"],
         },
       }],
     });
@@ -862,6 +873,215 @@ databaseSuite("PostgreSQL durability integration", () => {
       chainId: "SN_MAIN",
       sealAddress,
     })).resolves.toEqual({ recovered: 0 });
+  });
+
+  it("recovers wage-claim and remediation approvals from their exact proof-bound seal events", async () => {
+    const organizationId = await seedOrganization();
+    const runId = generateUuidV7();
+    await getDatabase().insert(payrollRuns).values({
+      id: runId,
+      organizationId,
+      cycleId: "exception-wallet-promise-recovery",
+      revision: 1,
+      state: "confirmed",
+      dueAt: new Date("2026-08-31T00:00:00.000Z"),
+    });
+    const sealAddress = "0x123";
+    const profiles = [
+      { workflowType: "wage_claim" as const, proofVersion: "3", mode: "0x2", base: 0x31n },
+      { workflowType: "wage_remediation" as const, proofVersion: "4", mode: "0x3", base: 0x41n },
+    ];
+    const expected = [] as Array<{ settlementId: string; transactionHash: string }>;
+    const events = [] as Array<{
+      transactionHash: string;
+      eventIndex: number;
+      contractAddress: string;
+      eventName: string;
+      payload: { keys: string[]; data: string[] };
+    }>;
+    for (const [index, profile] of profiles.entries()) {
+      const subjectRecordId = generateUuidV7();
+      const proofBundleId = generateUuidV7();
+      const settlementId = generateUuidV7();
+      const shardCalldataHashes = [
+        `0x${(profile.base + 2n).toString(16)}`,
+        `0x${(profile.base + 3n).toString(16)}`,
+      ] as const;
+      await getDatabase().insert(proofBundles).values({
+        id: proofBundleId,
+        runId,
+        organizationId,
+        proofType: profile.workflowType,
+        proofVersion: profile.proofVersion,
+        subjectRecordId,
+        proofPackage: {
+          proofType: profile.workflowType,
+          proofVersion: profile.proofVersion,
+          subjectRecordId,
+          commonInputs: {
+            proofVersion: profile.proofVersion,
+            runNullifierHigh: profile.base.toString(),
+            runNullifierLow: (profile.base + 1n).toString(),
+          },
+          shardCalldataHashes,
+        },
+        proofHash: `0x${(profile.base + 4n).toString(16)}`,
+        verificationState: "locally_verified",
+      });
+      await getDatabase().insert(settlements).values({
+        id: settlementId,
+        organizationId,
+        runId,
+        workflowType: profile.workflowType,
+        subjectRecordId,
+        walletRequestId: generateUuidV7(),
+        idempotencyKey: `exception-recovery:${settlementId}`,
+        tokenTotalsCommitment: `0x${(profile.base + 5n).toString(16).padStart(64, "0")}`,
+      });
+      const transactionHash = `0x${(profile.base + 6n).toString(16)}`;
+      expected.push({ settlementId, transactionHash });
+      events.push({
+        transactionHash,
+        eventIndex: index,
+        contractAddress: sealAddress,
+        eventName: "0x1b9fd7bf429246efa243b5f4b5eb036c1ab31a548ec13cc42f97a03b34f38ea",
+        payload: {
+          keys: [
+            "0x1b9fd7bf429246efa243b5f4b5eb036c1ab31a548ec13cc42f97a03b34f38ea",
+            `0x${profile.base.toString(16)}`,
+            `0x${(profile.base + 1n).toString(16)}`,
+          ],
+          data: [profile.mode, ...shardCalldataHashes, `0x${BigInt(profile.proofVersion).toString(16)}`],
+        },
+      });
+    }
+    await persistIndexedBlock({
+      chainId: "SN_MAIN",
+      consumer: "payo-seal",
+      blockNumber: 20n,
+      blockHash: "0x20",
+      parentHash: "0x19",
+      events,
+    });
+
+    await expect(recoverApprovalSubmissionsFromSealEvents({
+      chainId: "SN_MAIN",
+      sealAddress,
+    })).resolves.toEqual({ recovered: 2 });
+    const storedSettlements = await getDatabase().select().from(settlements);
+    for (const item of expected) {
+      expect(storedSettlements.find(({ id }) => id === item.settlementId)).toMatchObject({
+        state: "submitted",
+        transactionHash: item.transactionHash,
+      });
+    }
+    expect(await getDatabase().select().from(confirmationJobs)).toHaveLength(2);
+    expect((await getDatabase().select().from(payrollRuns))[0]).toMatchObject({
+      state: "confirmed",
+      transactionHash: null,
+    });
+  });
+
+  it("fails closed when a seal event mismatches proof hashes or matches more than one approval", async () => {
+    const organizationId = await seedOrganization();
+    const runId = generateUuidV7();
+    await getDatabase().insert(payrollRuns).values({
+      id: runId,
+      organizationId,
+      cycleId: "ambiguous-exception-recovery",
+      revision: 1,
+      state: "confirmed",
+      dueAt: new Date("2026-08-31T00:00:00.000Z"),
+    });
+    const sealAddress = "0x123";
+    const sharedHashes = ["0x61", "0x62"] as const;
+    const addPendingClaim = async (input: {
+      high: string;
+      low: string;
+      hashes: readonly [string, string];
+    }) => {
+      const subjectRecordId = generateUuidV7();
+      const settlementId = generateUuidV7();
+      await getDatabase().insert(proofBundles).values({
+        id: generateUuidV7(),
+        runId,
+        organizationId,
+        proofType: "wage_claim",
+        proofVersion: "3",
+        subjectRecordId,
+        proofPackage: {
+          proofType: "wage_claim",
+          proofVersion: "3",
+          subjectRecordId,
+          commonInputs: { proofVersion: "3", runNullifierHigh: input.high, runNullifierLow: input.low },
+          shardCalldataHashes: input.hashes,
+        },
+        proofHash: `0x${settlementId.replaceAll("-", "").slice(0, 63)}`,
+      });
+      await getDatabase().insert(settlements).values({
+        id: settlementId,
+        organizationId,
+        runId,
+        workflowType: "wage_claim",
+        subjectRecordId,
+        walletRequestId: generateUuidV7(),
+        idempotencyKey: `ambiguous-recovery:${settlementId}`,
+        tokenTotalsCommitment: `0x${"63".repeat(32)}`,
+      });
+      return settlementId;
+    };
+    const mismatchId = await addPendingClaim({ high: "81", low: "82", hashes: ["0x51", "0x52"] });
+    const ambiguousIds = await Promise.all([
+      addPendingClaim({ high: "97", low: "98", hashes: sharedHashes }),
+      addPendingClaim({ high: "97", low: "98", hashes: sharedHashes }),
+    ]);
+    await persistIndexedBlock({
+      chainId: "SN_MAIN",
+      consumer: "payo-seal",
+      blockNumber: 21n,
+      blockHash: "0x21",
+      parentHash: "0x20",
+      events: [{
+        transactionHash: "0x7001",
+        eventIndex: 0,
+        contractAddress: sealAddress,
+        eventName: "0x1b9fd7bf429246efa243b5f4b5eb036c1ab31a548ec13cc42f97a03b34f38ea",
+        payload: {
+          keys: [
+            "0x1b9fd7bf429246efa243b5f4b5eb036c1ab31a548ec13cc42f97a03b34f38ea",
+            "0x51",
+            "0x52",
+          ],
+          data: ["0x2", "0x51", "0x99", "0x3"],
+        },
+      }, {
+        transactionHash: "0x7002",
+        eventIndex: 1,
+        contractAddress: sealAddress,
+        eventName: "0x1b9fd7bf429246efa243b5f4b5eb036c1ab31a548ec13cc42f97a03b34f38ea",
+        payload: {
+          keys: [
+            "0x1b9fd7bf429246efa243b5f4b5eb036c1ab31a548ec13cc42f97a03b34f38ea",
+            "0x61",
+            "0x62",
+          ],
+          data: ["0x2", ...sharedHashes, "0x3"],
+        },
+      }],
+    });
+
+    await expect(recoverApprovalSubmissionsFromSealEvents({
+      chainId: "SN_MAIN",
+      sealAddress,
+    })).resolves.toEqual({ recovered: 0 });
+    const stored = await getDatabase().select().from(settlements);
+    for (const settlementId of [mismatchId, ...ambiguousIds]) {
+      expect(stored.find(({ id }) => id === settlementId)).toMatchObject({
+        state: "approval_pending",
+        transactionHash: null,
+      });
+    }
+    expect(await getDatabase().select().from(confirmationJobs)).toHaveLength(0);
   });
 
   it("returns encrypted-proof recovery bindings for a confirmed payroll missing its verification job", async () => {
