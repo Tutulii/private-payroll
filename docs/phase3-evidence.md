@@ -344,10 +344,12 @@ synthetic principal and adapter are not an exposed production test route.
   validated encrypted round trips and private-field absence, and uploaded the
   browser-origin artifact in
   [CI run 32973338048](https://github.com/Tutulii/private-payroll/actions/runs/32973338048).
-- The full proof-artifact workflow regenerated and self-verified the linked Noir
-  proofs, reproduced the Garaga verifier, passed fresh real-Cairo and standalone
-  RPC Devnet integrations, and generated both proofs in a Chromium Web Worker in
-  [run 32966050294](https://github.com/Tutulii/private-payroll/actions/runs/32966050294).
+- The full proof-artifact workflow rebuilt the merged-v2 circuit, enforced its
+  2^21 domain and Mainnet calldata budgets, reproduced its exact verification
+  key and Garaga verifier, regenerated and self-verified the linked base proofs,
+  passed fresh real-Cairo and standalone RPC Devnet integrations, and generated
+  both base proofs in a Chromium Web Worker in
+  [run 33130871328](https://github.com/Tutulii/private-payroll/actions/runs/33130871328).
 - Official-pool v3 claim and exact-recipient/token/amount v4 private
   remediation passed with statuses `4` and `5`, real Garaga shard receipts,
   tamper and replay rejection, and private balance rediscovery; its separate
