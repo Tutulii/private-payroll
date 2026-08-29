@@ -81,6 +81,29 @@ export const payoPhase3ArtifactDefinitions = Object.freeze({
   }),
 });
 
+export const payoWageClaimArtifactDefinitions = Object.freeze({
+  snapshotVerifier: Object.freeze({
+    sierra: "contracts/snapshot_v5_verifier/target/dev/snapshot_v5_verifier_PayoObligationSnapshotV5Verifier.contract_class.json",
+    casm: "contracts/snapshot_v5_verifier/target/dev/snapshot_v5_verifier_PayoObligationSnapshotV5Verifier.compiled_contract_class.json",
+    sourceDirectory: "contracts/snapshot_v5_verifier",
+  }),
+  claimVerifier: Object.freeze({
+    sierra: "contracts/claim_v6_verifier/target/dev/claim_v6_verifier_PayoWageClaimV6Verifier.contract_class.json",
+    casm: "contracts/claim_v6_verifier/target/dev/claim_v6_verifier_PayoWageClaimV6Verifier.compiled_contract_class.json",
+    sourceDirectory: "contracts/claim_v6_verifier",
+  }),
+  remediationVerifier: Object.freeze({
+    sierra: "contracts/remediation_v7_verifier/target/dev/remediation_v7_verifier_PayoWageRemediationV7Verifier.contract_class.json",
+    casm: "contracts/remediation_v7_verifier/target/dev/remediation_v7_verifier_PayoWageRemediationV7Verifier.compiled_contract_class.json",
+    sourceDirectory: "contracts/remediation_v7_verifier",
+  }),
+  exceptionSeal: Object.freeze({
+    sierra: "contracts/target/dev/payo_contracts_PayoPayrollExceptionSeal.contract_class.json",
+    casm: "contracts/target/dev/payo_contracts_PayoPayrollExceptionSeal.compiled_contract_class.json",
+    sourceDirectory: "contracts",
+  }),
+});
+
 async function filesRecursively(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   const nested = await Promise.all(entries.map((entry) => {
@@ -214,6 +237,41 @@ export async function readAllPayoPhase3DeployArtifacts() {
     Object.keys(payoPhase3ArtifactDefinitions).map(async (name) => [
       name,
       await readPayoPhase3DeployArtifact(name),
+    ]),
+  );
+  return Object.fromEntries(entries);
+}
+
+export async function assertFreshPayoWageClaimDeployArtifacts() {
+  await assertFreshDefinitions(payoWageClaimArtifactDefinitions);
+}
+
+export async function readPayoWageClaimDeployArtifact(name) {
+  const definition = payoWageClaimArtifactDefinitions[name];
+  if (!definition) throw new Error(`Unknown PAYO wage-claim artifact ${name}.`);
+  const [sierraSource, casmSource] = await Promise.all([
+    readFile(resolve(repositoryRoot, definition.sierra), "utf8"),
+    readFile(resolve(repositoryRoot, definition.casm), "utf8"),
+  ]);
+  const sierra = JSON.parse(sierraSource);
+  const casm = JSON.parse(casmSource);
+  return {
+    name,
+    definition,
+    sierra,
+    casm,
+    classHash: num.toHex(BigInt(hash.computeContractClassHash(sierra))),
+    compiledClassHash: num.toHex(BigInt(hash.computeCompiledClassHash(casm))),
+    sierraSha256: sha256(sierraSource),
+    casmSha256: sha256(casmSource),
+  };
+}
+
+export async function readAllPayoWageClaimDeployArtifacts() {
+  const entries = await Promise.all(
+    Object.keys(payoWageClaimArtifactDefinitions).map(async (name) => [
+      name,
+      await readPayoWageClaimDeployArtifact(name),
     ]),
   );
   return Object.fromEntries(entries);

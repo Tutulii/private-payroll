@@ -397,6 +397,14 @@ synthetic principal and adapter are not an exposed production test route.
 
 This is why Phase 3 is not reported as complete:
 
+- Snapshot v5, Claim v6, Remediation v7 and the vNext exception seal are now
+  deployed and registry-active on Mainnet. Frozen-block class, profile,
+  valid-proof and tampered-proof readback passed at block `14041891`; see
+  `docs/wage-claim-mainnet-deployment.md` and
+  `evidence/phase3-wage-claim-mainnet.json`. P3-06 still requires the hosted
+  vNext rollout and one browser-origin claim/remediation cycle through
+  reconciled private payment.
+
 - The seven advanced matrix workflows now have official-pool private-value
   movements tied atomically to PAYO proof enforcement, but Devnet does not
   implement full transaction-proof verification. Running the pool with that

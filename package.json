@@ -85,7 +85,14 @@
     "phase3:v2:mainnet:verify-proof": "node --env-file-if-exists=.env.local scripts/payo-phase3-v2-upgrade.mjs verify-proof",
     "phase3:v2:mainnet:estimate-activate": "node --env-file-if-exists=.env.local scripts/payo-phase3-v2-upgrade.mjs estimate-activate",
     "phase3:v2:mainnet:activate": "node --env-file-if-exists=.env.local scripts/payo-phase3-v2-upgrade.mjs activate",
-    "phase3:v2:mainnet:verify": "node --env-file-if-exists=.env.local scripts/payo-phase3-v2-upgrade.mjs verify"
+    "phase3:v2:mainnet:verify": "node --env-file-if-exists=.env.local scripts/payo-phase3-v2-upgrade.mjs verify",
+    "wage-claim:mainnet:plan": "node --env-file-if-exists=.env.local scripts/payo-wage-claim-mainnet.mjs plan",
+    "wage-claim:mainnet:status": "node --env-file-if-exists=.env.local scripts/payo-wage-claim-mainnet.mjs status",
+    "wage-claim:mainnet:estimate": "node --env-file-if-exists=.env.local scripts/payo-wage-claim-mainnet.mjs estimate",
+    "wage-claim:mainnet:declare": "node --env-file-if-exists=.env.local scripts/payo-wage-claim-mainnet.mjs declare",
+    "wage-claim:mainnet:deploy": "node --env-file-if-exists=.env.local scripts/payo-wage-claim-mainnet.mjs deploy",
+    "wage-claim:mainnet:activate": "node --env-file-if-exists=.env.local scripts/payo-wage-claim-mainnet.mjs activate",
+    "wage-claim:mainnet:verify": "node --env-file-if-exists=.env.local scripts/payo-wage-claim-mainnet.mjs verify"
   },
   "dependencies": {
     "@aztec/bb.js": "3.0.0-nightly.20251104",

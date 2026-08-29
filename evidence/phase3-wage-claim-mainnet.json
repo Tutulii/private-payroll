@@ -1,0 +1,268 @@
+{
+  "schemaVersion": 1,
+  "network": "starknet-mainnet",
+  "plan": {
+    "schemaVersion": 1,
+    "generatedAt": "2026-08-29T09:57:12.842Z",
+    "network": "starknet-mainnet",
+    "chainId": "0x534e5f4d41494e",
+    "poolAddress": "0x40337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+    "deployerAddress": "0x126a7a572cf8935d069af937e9f7b27a24949e271e1fbccfe4de0c0d8dc8ea9",
+    "liveTopology": {
+      "policyRegistry": {
+        "classHash": "0x6366141e5ae47f2e170409c6babaa4d6ae220b5b255f8dcbf9b0173f8681cfd",
+        "salt": "0x7061796f2d6d756c746974656e616e742d706f6c6963792d7631",
+        "constructorCalldata": [
+          "0x126a7a572cf8935d069af937e9f7b27a24949e271e1fbccfe4de0c0d8dc8ea9"
+        ],
+        "address": "0x34701f573096b7bab0e5678e1ed2f17a87c8d56eb5f4d70bcf2197bab8e4477"
+      },
+      "obligationRegistry": {
+        "classHash": "0x50ac78b67fd69d7e2a892dc51014159d7e69fe1770c3f4f33add21131aa2a0b",
+        "compiledClassHash": "0x55ca6b5a08b34b53d2626ce238e0e605ee06bbe77b705055e59c6193c8f8f53",
+        "salt": "0x7061796f2d74656e616e742d6f626c69676174696f6e732d7631",
+        "constructorCalldata": [
+          "0x126a7a572cf8935d069af937e9f7b27a24949e271e1fbccfe4de0c0d8dc8ea9"
+        ],
+        "address": "0x44b22f1a17d2710c2f51ed0b37b8b0ff8435262d3c8c0f2f17be07c84ac23b5"
+      },
+      "previousPayrollSeal": {
+        "classHash": "0x1500b1e66ef8c1528f5ea301cbb0420b28a19742d927c5d595ce567b0266148",
+        "salt": "0x7061796f2d6d756c746974656e616e742d7365616c2d7631",
+        "constructorCalldata": [
+          "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+          "0x34701f573096b7bab0e5678e1ed2f17a87c8d56eb5f4d70bcf2197bab8e4477",
+          "0x44b22f1a17d2710c2f51ed0b37b8b0ff8435262d3c8c0f2f17be07c84ac23b5",
+          "0x534e5f4d41494e"
+        ],
+        "address": "0x603c607bf001e279365fd141901ba09b95f72f5a72506742b30f6db32c36ac7"
+      }
+    },
+    "contracts": {
+      "snapshotVerifier": {
+        "address": "0x6ff3b2b74fe14c70bf96bf274c75ec78f2ab346cc6a359410b15d2baf2c1d4e",
+        "salt": "0x7061796f2d766e6578742d736e617073686f742d7635",
+        "constructorCalldata": [],
+        "classHash": "0x14e6a1f1ec3746db2d488a52164d5de818d76ac47c679cf04791d69a88333a2",
+        "compiledClassHash": "0x7a2a972930141232db84342f1ead9647c1d476282c9f0a6f39b1302220ad06c",
+        "sierraSha256": "87cc375e3e61f4305cd30459e9dce747225b4722f35701df3b97c678b2be8107",
+        "casmSha256": "388d10d66b9d3dc35efd4f03d4838d7617561ab02a3d33c498175c320d056699"
+      },
+      "claimVerifier": {
+        "address": "0x6258a5dd16d03e73f13b2f4e653a9f7675ddfbcacfc5e923c53438ec957b9d4",
+        "salt": "0x7061796f2d766e6578742d636c61696d2d7636",
+        "constructorCalldata": [],
+        "classHash": "0x2ff425a9cf03c287f46cb82efc5242ccd953daf3d41aca214dd05219f8ecc34",
+        "compiledClassHash": "0x4860cb7de78a39c1ce8b66475bbe8c8c88f6eb8ae24b4e79a4fbf4ff24a7c87",
+        "sierraSha256": "43afb1dd9a551702a6f90359ab7fb5721631c4c18198274bf8aff94fc883a86f",
+        "casmSha256": "5e4d9d4f6c6cbcdc9ae6a9168224f39c4b6f3bb400715bb9ce3ea12bb2ede3e5"
+      },
+      "remediationVerifier": {
+        "address": "0x25ec16cca6a625bb89aa3f0cdd279c84f569d4dada9f857ba4c5efb1750fdf9",
+        "salt": "0x7061796f2d766e6578742d72656d6564696174696f6e2d7637",
+        "constructorCalldata": [],
+        "classHash": "0x6fc8b2a2ff20b7be7627222e0c50562af57c0a80f4fe63ed6cd674e0db791f9",
+        "compiledClassHash": "0x596bcdc95801cf082eb9b1074f48549a7916af40f093ee0c54908bb2aa118b8",
+        "sierraSha256": "919a75ee1d82d32dd29e20b00d7b66660eabfd91f708c674ae2928f03460c600",
+        "casmSha256": "9f797f7a975d13a4cd8332f7665e7596e6fa3a92e831630beb3b71cbe6a6d7fa"
+      },
+      "exceptionSeal": {
+        "address": "0x3394e58bb2bb294e0ae92514079a1394c6c66eae8a6c033a6f7f449b1d12ce",
+        "salt": "0x7061796f2d766e6578742d657863657074696f6e2d7365616c",
+        "constructorCalldata": [
+          "0x40337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+          "0x34701f573096b7bab0e5678e1ed2f17a87c8d56eb5f4d70bcf2197bab8e4477",
+          "0x44b22f1a17d2710c2f51ed0b37b8b0ff8435262d3c8c0f2f17be07c84ac23b5",
+          "0x534e5f4d41494e"
+        ],
+        "classHash": "0x612f04ea11fd47f83793efee058a9ddd1380b03fe1273fe9fab13ff58b3a3b",
+        "compiledClassHash": "0x6ec635c347fa59fd685c541a9428cd7b1e339291b8869d004f59a0e8cf90c27",
+        "sierraSha256": "806aceeabdba9719d97d4bc2254196ca4d1ab4c1f8781c210e00e40d0ba76e7d",
+        "casmSha256": "fe890b42f1dc24ad90c6803830b567d16bf8fd7dc98e98ac18dfaa4b92d623e5"
+      }
+    },
+    "verifierProfiles": [
+      {
+        "mode": 0,
+        "proofVersion": 5,
+        "address": "0x6ff3b2b74fe14c70bf96bf274c75ec78f2ab346cc6a359410b15d2baf2c1d4e"
+      },
+      {
+        "mode": 2,
+        "proofVersion": 6,
+        "address": "0x6258a5dd16d03e73f13b2f4e653a9f7675ddfbcacfc5e923c53438ec957b9d4"
+      },
+      {
+        "mode": 3,
+        "proofVersion": 7,
+        "address": "0x25ec16cca6a625bb89aa3f0cdd279c84f569d4dada9f857ba4c5efb1750fdf9"
+      }
+    ],
+    "source": "circuits/payroll_integrity/target/payo-wage-claim-mainnet-plan.json"
+  },
+  "declarations": {
+    "snapshotVerifier": {
+      "transactionHash": "0x2ee211219b023934cd38225892edcafe12c9d5088dccb442f180193a874a0b1",
+      "classHash": "0x14e6a1f1ec3746db2d488a52164d5de818d76ac47c679cf04791d69a88333a2",
+      "nonce": "0x46",
+      "simulatedFeeFri": "378879502824092542960",
+      "actualFeeFri": "153082628044146254459",
+      "blockNumber": 14041520
+    },
+    "claimVerifier": {
+      "transactionHash": "0x51ae214e24dffafd6bd587cb0680baa461b593a7fc84822a012eb32b0412f6b",
+      "classHash": "0x2ff425a9cf03c287f46cb82efc5242ccd953daf3d41aca214dd05219f8ecc34",
+      "nonce": "0x47",
+      "tip": "0",
+      "recoveredFromWaitError": true,
+      "actualFeeFri": "153767346893808566971",
+      "blockNumber": 14041555
+    },
+    "remediationVerifier": {
+      "transactionHash": "0xac74ff79461478434274bbf39c7be12b10c99add241a7f436ec8a241c2c6d4",
+      "classHash": "0x6fc8b2a2ff20b7be7627222e0c50562af57c0a80f4fe63ed6cd674e0db791f9",
+      "nonce": "0x48",
+      "tip": "1",
+      "recoveredFromWaitError": false,
+      "simulatedFeeFri": "436859195797929156576",
+      "actualFeeFri": "153274323086315142780",
+      "blockNumber": 14041767
+    },
+    "exceptionSeal": {
+      "transactionHash": "0x19d8e72e0301bc30ac19dd309b32b5753cd6995a3a37c62bece8d0e8ac455a3",
+      "classHash": "0x612f04ea11fd47f83793efee058a9ddd1380b03fe1273fe9fab13ff58b3a3b",
+      "nonce": "0x49",
+      "tip": "1",
+      "recoveredFromWaitError": false,
+      "simulatedFeeFri": "236465561504859525904",
+      "actualFeeFri": "95541641679958486332",
+      "blockNumber": 14041797
+    }
+  },
+  "updatedAt": "2026-08-29T10:48:42.983Z",
+  "deployment": {
+    "names": [
+      "snapshotVerifier",
+      "claimVerifier",
+      "remediationVerifier",
+      "exceptionSeal"
+    ],
+    "transactionHash": "0x2b6642ad06e55e956f82fc05259a3319436f009436fb610da06a7543f0bd5f5",
+    "nonce": "0x4a",
+    "tip": "1",
+    "recoveredFromWaitError": false,
+    "simulatedFeeFri": "393514190637024456",
+    "actualFeeFri": "158956734979101236",
+    "blockNumber": 14041832
+  },
+  "activation": {
+    "transactionHash": "0x3d0153e2bcd11d46dd526677611cf7f8f54cd794d9b6a884b4d0cb7f1692be5",
+    "nonce": "0x4b",
+    "tip": "1",
+    "recoveredFromWaitError": false,
+    "simulatedFeeFri": "549526004605619040",
+    "actualFeeFri": "221992407013731012",
+    "blockNumber": 14041863,
+    "validAfter": 1787999473,
+    "expiresAt": 1819535473
+  },
+  "verification": {
+    "passed": true,
+    "observedAt": "2026-08-29T10:48:42.973Z",
+    "blockNumber": 14042480,
+    "dependencies": [
+      {
+        "name": "policyRegistry",
+        "expectedClassHash": "0x6366141e5ae47f2e170409c6babaa4d6ae220b5b255f8dcbf9b0173f8681cfd",
+        "actualClassHash": "0x6366141e5ae47f2e170409c6babaa4d6ae220b5b255f8dcbf9b0173f8681cfd",
+        "passed": true
+      },
+      {
+        "name": "obligationRegistry",
+        "expectedClassHash": "0x50ac78b67fd69d7e2a892dc51014159d7e69fe1770c3f4f33add21131aa2a0b",
+        "actualClassHash": "0x50ac78b67fd69d7e2a892dc51014159d7e69fe1770c3f4f33add21131aa2a0b",
+        "passed": true
+      },
+      {
+        "name": "policyAdmin",
+        "expectedAddress": "0x126a7a572cf8935d069af937e9f7b27a24949e271e1fbccfe4de0c0d8dc8ea9",
+        "actualAddress": "0x126a7a572cf8935d069af937e9f7b27a24949e271e1fbccfe4de0c0d8dc8ea9",
+        "passed": true
+      }
+    ],
+    "status": {
+      "observedAt": "2026-08-29T10:48:35.486Z",
+      "blockNumber": 14042480,
+      "declarations": {
+        "snapshotVerifier": true,
+        "claimVerifier": true,
+        "remediationVerifier": true,
+        "exceptionSeal": true
+      },
+      "contracts": {
+        "snapshotVerifier": {
+          "address": "0x6ff3b2b74fe14c70bf96bf274c75ec78f2ab346cc6a359410b15d2baf2c1d4e",
+          "expectedClassHash": "0x14e6a1f1ec3746db2d488a52164d5de818d76ac47c679cf04791d69a88333a2",
+          "actualClassHash": "0x14e6a1f1ec3746db2d488a52164d5de818d76ac47c679cf04791d69a88333a2",
+          "deployed": true
+        },
+        "claimVerifier": {
+          "address": "0x6258a5dd16d03e73f13b2f4e653a9f7675ddfbcacfc5e923c53438ec957b9d4",
+          "expectedClassHash": "0x2ff425a9cf03c287f46cb82efc5242ccd953daf3d41aca214dd05219f8ecc34",
+          "actualClassHash": "0x2ff425a9cf03c287f46cb82efc5242ccd953daf3d41aca214dd05219f8ecc34",
+          "deployed": true
+        },
+        "remediationVerifier": {
+          "address": "0x25ec16cca6a625bb89aa3f0cdd279c84f569d4dada9f857ba4c5efb1750fdf9",
+          "expectedClassHash": "0x6fc8b2a2ff20b7be7627222e0c50562af57c0a80f4fe63ed6cd674e0db791f9",
+          "actualClassHash": "0x6fc8b2a2ff20b7be7627222e0c50562af57c0a80f4fe63ed6cd674e0db791f9",
+          "deployed": true
+        },
+        "exceptionSeal": {
+          "address": "0x3394e58bb2bb294e0ae92514079a1394c6c66eae8a6c033a6f7f449b1d12ce",
+          "expectedClassHash": "0x612f04ea11fd47f83793efee058a9ddd1380b03fe1273fe9fab13ff58b3a3b",
+          "actualClassHash": "0x612f04ea11fd47f83793efee058a9ddd1380b03fe1273fe9fab13ff58b3a3b",
+          "deployed": true
+        }
+      },
+      "profiles": [
+        {
+          "mode": 0,
+          "proofVersion": 5,
+          "address": "0x6ff3b2b74fe14c70bf96bf274c75ec78f2ab346cc6a359410b15d2baf2c1d4e",
+          "active": true
+        },
+        {
+          "mode": 2,
+          "proofVersion": 6,
+          "address": "0x6258a5dd16d03e73f13b2f4e653a9f7675ddfbcacfc5e923c53438ec957b9d4",
+          "active": true
+        },
+        {
+          "mode": 3,
+          "proofVersion": 7,
+          "address": "0x25ec16cca6a625bb89aa3f0cdd279c84f569d4dada9f857ba4c5efb1750fdf9",
+          "active": true
+        }
+      ]
+    },
+    "priorPayrollV2Active": true,
+    "proofChecks": [
+      {
+        "name": "snapshotVerifier",
+        "calldataFelts": 3091,
+        "tamperRejected": true
+      },
+      {
+        "name": "claimVerifier",
+        "calldataFelts": 3127,
+        "tamperRejected": true
+      },
+      {
+        "name": "remediationVerifier",
+        "calldataFelts": 3127,
+        "tamperRejected": true
+      }
+    ]
+  }
+}
