@@ -37,12 +37,44 @@ export const settlementState = pgEnum("settlement_state", [
 ]);
 export const durableJobState = pgEnum("durable_job_state", ["pending", "leased", "complete", "dead"]);
 export const obligationScheduleState = pgEnum("obligation_schedule_state", ["active", "superseded"]);
+export const obligationSnapshotPlanState = pgEnum("obligation_snapshot_plan_state", [
+  "prepared",
+  "submitted",
+  "registered",
+  "consumed",
+  "cancelled",
+  "expired",
+]);
 export const idempotencyState = pgEnum("idempotency_state", ["started", "succeeded", "failed"]);
 export const capabilityReservationState = pgEnum("capability_reservation_state", [
   "reserved",
   "committed",
   "released",
   "expired",
+]);
+export const workerClaimState = pgEnum("worker_claim_state", [
+  "prepared",
+  "proved",
+  "authorization_pending",
+  "accepted",
+  "rejected",
+]);
+export const employerStatementState = pgEnum("employer_statement_state", [
+  "prepared",
+  "submitted",
+  "registered",
+  "failed",
+]);
+export const wageRemediationState = pgEnum("wage_remediation_state", [
+  "prepared",
+  "proved",
+  "authorization_pending",
+  "authorized",
+  "payment_pending",
+  "payment_confirmed",
+  "reconciled",
+  "expired",
+  "failed",
 ]);
 
 export const organizations = pgTable("organizations", {
@@ -199,6 +231,55 @@ export const vaultKeyGrants = pgTable(
   ],
 );
 
+/**
+ * Public commitments and deadlines for one pre-payday snapshot. Agreement
+ * details, claim capabilities and salary values remain in the separately
+ * encrypted vault envelope whose record ID equals this plan ID.
+ */
+export const obligationSnapshotPlans = pgTable(
+  "obligation_snapshot_plans",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    cycleId: text("cycle_id").notNull(),
+    revision: integer("revision").notNull(),
+    ownerAddress: text("owner_address").notNull(),
+    agreementRoot: text("agreement_root").notNull(),
+    claimRoot: text("claim_root").notNull(),
+    policyRoot: text("policy_root").notNull(),
+    runNullifier: text("run_nullifier").notNull(),
+    snapshotFact: text("snapshot_fact").notNull(),
+    dueAt: timestamp("due_at", { withTimezone: true }).notNull(),
+    graceEndsAt: timestamp("grace_ends_at", { withTimezone: true }).notNull(),
+    claimEndsAt: timestamp("claim_ends_at", { withTimezone: true }).notNull(),
+    state: obligationSnapshotPlanState("state").default("prepared").notNull(),
+    registrationTransactionHash: text("registration_transaction_hash"),
+    registeredAt: timestamp("registered_at", { withTimezone: true }),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("obligation_snapshot_plans_org_cycle_revision_idx").on(
+      table.organizationId,
+      table.cycleId,
+      table.revision,
+    ),
+    uniqueIndex("obligation_snapshot_plans_run_nullifier_idx").on(table.runNullifier),
+    uniqueIndex("obligation_snapshot_plans_run_idx").on(table.runId),
+    uniqueIndex("obligation_snapshot_plans_fact_idx").on(table.snapshotFact),
+    index("obligation_snapshot_plans_org_due_idx").on(
+      table.organizationId,
+      table.state,
+      table.dueAt,
+    ),
+  ],
+);
+
 export const payrollRuns = pgTable(
   "payroll_runs",
   {
@@ -215,6 +296,8 @@ export const payrollRuns = pgTable(
     policyRoot: text("policy_root"),
     fxRoot: text("fx_root"),
     runNullifier: text("run_nullifier"),
+    obligationSnapshotPlanId: text("obligation_snapshot_plan_id")
+      .references(() => obligationSnapshotPlans.id, { onDelete: "restrict" }),
     transactionHash: text("transaction_hash"),
     version: integer("version").default(1).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -227,7 +310,41 @@ export const payrollRuns = pgTable(
       table.revision,
     ),
     uniqueIndex("payroll_runs_nullifier_idx").on(table.runNullifier),
+    uniqueIndex("payroll_runs_snapshot_plan_idx").on(table.obligationSnapshotPlanId),
     index("payroll_runs_org_due_idx").on(table.organizationId, table.dueAt),
+  ],
+);
+
+/**
+ * One encrypted, worker-scoped opening of an immutable obligation snapshot.
+ * The service can route it by authenticated principal but cannot decrypt the
+ * agreement, amount, recipient, claim type or Merkle witnesses.
+ */
+export const obligationClaimAccessGrants = pgTable(
+  "obligation_claim_access_grants",
+  {
+    id: text("id").primaryKey(),
+    snapshotPlanId: text("snapshot_plan_id")
+      .notNull()
+      .references(() => obligationSnapshotPlans.id, { onDelete: "cascade" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => payrollRuns.id, { onDelete: "cascade" }),
+    claimantPrincipalId: text("claimant_principal_id").notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("obligation_claim_access_claimant_idx").on(
+      table.claimantPrincipalId,
+      table.revokedAt,
+      table.createdAt,
+    ),
+    index("obligation_claim_access_snapshot_idx").on(table.snapshotPlanId),
+    index("obligation_claim_access_run_idx").on(table.runId),
   ],
 );
 
@@ -236,6 +353,115 @@ export const payrollRuns = pgTable(
  * value remain inside the encrypted pay-agreement vault revision. A due row is
  * a draft signal for the browser; it never authorizes or executes a payment.
  */
+/**
+ * Opaque routing for a Claim v6 record. Claim kind, amount, agreement and
+ * evidence remain in the worker/employer encrypted vault envelope. The two
+ * public commitments are already part of the proof and eventual on-chain event.
+ */
+export const workerClaims = pgTable(
+  "worker_claims",
+  {
+    id: text("id").primaryKey(),
+    claimAccessGrantId: text("claim_access_grant_id")
+      .notNull()
+      .references(() => obligationClaimAccessGrants.id, { onDelete: "restrict" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => payrollRuns.id, { onDelete: "cascade" }),
+    claimantPrincipalId: text("claimant_principal_id").notNull(),
+    proofBundleId: text("proof_bundle_id").notNull(),
+    claimSubjectNullifier: text("claim_subject_nullifier").notNull(),
+    claimFactCommitment: text("claim_fact_commitment").notNull(),
+    state: workerClaimState("state").default("prepared").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("worker_claims_proof_bundle_idx").on(table.proofBundleId),
+    uniqueIndex("worker_claims_subject_nullifier_idx").on(table.claimSubjectNullifier),
+    index("worker_claims_claimant_idx").on(table.claimantPrincipalId, table.createdAt),
+    index("worker_claims_org_run_idx").on(table.organizationId, table.runId),
+    index("worker_claims_access_grant_idx").on(table.claimAccessGrantId),
+  ],
+);
+
+/**
+ * Public commitments for one employer-authored payroll statement. Salary,
+ * recipient, claim type and line openings remain in encrypted worker packets.
+ */
+export const employerStatements = pgTable(
+  "employer_statements",
+  {
+    id: text("id").primaryKey(),
+    snapshotPlanId: text("snapshot_plan_id")
+      .notNull()
+      .references(() => obligationSnapshotPlans.id, { onDelete: "restrict" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => payrollRuns.id, { onDelete: "cascade" }),
+    ownerAddress: text("owner_address").notNull(),
+    statementFact: text("statement_fact").notNull(),
+    manifestRoot: text("manifest_root").notNull(),
+    fxRoot: text("fx_root").notNull(),
+    availabilityCommitment: text("availability_commitment").notNull(),
+    observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+    source: text("source").default("employer_statement").notNull(),
+    state: employerStatementState("state").default("prepared").notNull(),
+    registrationTransactionHash: text("registration_transaction_hash"),
+    registeredAt: timestamp("registered_at", { withTimezone: true }),
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("employer_statements_run_fx_idx").on(table.runId, table.fxRoot),
+    uniqueIndex("employer_statements_fact_idx").on(table.statementFact),
+    uniqueIndex("employer_statements_transaction_idx").on(table.registrationTransactionHash),
+    index("employer_statements_org_state_idx").on(table.organizationId, table.state, table.createdAt),
+  ],
+);
+
+/** One claimant-only encrypted Merkle/line packet for a registered statement. */
+export const payrollStatementEvidenceGrants = pgTable(
+  "payroll_statement_evidence_grants",
+  {
+    id: text("id").primaryKey(),
+    statementId: text("statement_id")
+      .notNull()
+      .references(() => employerStatements.id, { onDelete: "cascade" }),
+    claimAccessGrantId: text("claim_access_grant_id")
+      .notNull()
+      .references(() => obligationClaimAccessGrants.id, { onDelete: "restrict" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => payrollRuns.id, { onDelete: "cascade" }),
+    claimantPrincipalId: text("claimant_principal_id").notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("payroll_statement_evidence_statement_access_idx").on(
+      table.statementId,
+      table.claimAccessGrantId,
+    ),
+    index("payroll_statement_evidence_claimant_idx").on(
+      table.claimantPrincipalId,
+      table.revokedAt,
+      table.createdAt,
+    ),
+    index("payroll_statement_evidence_run_idx").on(table.runId),
+  ],
+);
+
 export const obligationSchedules = pgTable(
   "obligation_schedules",
   {
@@ -330,6 +556,65 @@ export const settlements = pgTable(
   ],
 );
 
+
+/**
+ * Durable public routing for one encrypted Remediation v7 attempt. Token,
+ * amount, recipient and claim type remain inside the encrypted vault envelope.
+ */
+export const wageRemediations = pgTable(
+  "wage_remediations",
+  {
+    id: text("id").primaryKey(),
+    workerClaimId: text("worker_claim_id")
+      .notNull()
+      .references(() => workerClaims.id, { onDelete: "restrict" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => payrollRuns.id, { onDelete: "cascade" }),
+    claimantPrincipalId: text("claimant_principal_id").notNull(),
+    proofBundleId: text("proof_bundle_id").notNull(),
+    claimSubjectNullifier: text("claim_subject_nullifier").notNull(),
+    claimFactCommitment: text("claim_fact_commitment").notNull(),
+    remediationSubjectNullifier: text("remediation_subject_nullifier").notNull(),
+    remediationFactCommitment: text("remediation_fact_commitment").notNull(),
+    actionCommitment: text("action_commitment").notNull(),
+    fxRoot: text("fx_root").notNull(),
+    validityExpiresAt: timestamp("validity_expires_at", { withTimezone: true }).notNull(),
+    state: wageRemediationState("state").default("prepared").notNull(),
+    settlementId: text("settlement_id")
+      .references(() => settlements.id, { onDelete: "set null" }),
+    authorizedAt: timestamp("authorized_at", { withTimezone: true }),
+    paymentConfirmedAt: timestamp("payment_confirmed_at", { withTimezone: true }),
+    reconciledAt: timestamp("reconciled_at", { withTimezone: true }),
+    lastErrorCode: text("last_error_code"),
+    lastErrorMessage: text("last_error_message"),
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("wage_remediations_proof_bundle_idx").on(table.proofBundleId),
+    uniqueIndex("wage_remediations_subject_nullifier_idx").on(
+      table.remediationSubjectNullifier,
+    ),
+    uniqueIndex("wage_remediations_action_commitment_idx").on(table.actionCommitment),
+    uniqueIndex("wage_remediations_settlement_idx").on(table.settlementId),
+    index("wage_remediations_claim_state_idx").on(
+      table.workerClaimId,
+      table.state,
+      table.createdAt,
+    ),
+    index("wage_remediations_org_state_idx").on(
+      table.organizationId,
+      table.state,
+      table.updatedAt,
+    ),
+  ],
+);
+
 export const confirmationJobs = pgTable(
   "confirmation_jobs",
   {
@@ -382,6 +667,100 @@ export const proofVerificationJobs = pgTable(
     uniqueIndex("proof_verification_jobs_settlement_idx").on(table.settlementId),
     uniqueIndex("proof_verification_jobs_bundle_idx").on(table.proofBundleId),
     index("proof_verification_jobs_poll_idx").on(table.state, table.availableAt),
+  ],
+);
+
+/**
+ * Durable proof-first authorizations for the vNext exception seal. Claim and
+ * remediation proofs are submitted by the server relayer before any private
+ * payment can consume an authorization. Proof calldata contains public proof
+ * material only; the private witness remains in the encrypted vault bundle.
+ */
+export const exceptionAuthorizationJobs = pgTable(
+  "exception_authorization_jobs",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => payrollRuns.id, { onDelete: "cascade" }),
+    proofBundleId: text("proof_bundle_id")
+      .notNull()
+      .references(() => proofBundles.id, { onDelete: "cascade" }),
+    workflowType: text("workflow_type").notNull(),
+    subjectRecordId: text("subject_record_id").notNull(),
+    proofCalldata: jsonb("proof_calldata").notNull(),
+    state: durableJobState("state").default("pending").notNull(),
+    transactionHash: text("transaction_hash"),
+    attempts: integer("attempts").default(0).notNull(),
+    availableAt: timestamp("available_at", { withTimezone: true }).defaultNow().notNull(),
+    leaseOwner: text("lease_owner"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    lastErrorCode: text("last_error_code"),
+    lastErrorMessage: text("last_error_message"),
+    authorizedAt: timestamp("authorized_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("exception_authorization_jobs_bundle_idx").on(table.proofBundleId),
+    uniqueIndex("exception_authorization_jobs_subject_idx").on(
+      table.organizationId,
+      table.workflowType,
+      table.subjectRecordId,
+    ),
+    index("exception_authorization_jobs_poll_idx").on(table.state, table.availableAt),
+  ],
+);
+
+/**
+ * Staged proof-first authorization for a vNext payroll. The snapshot proof is
+ * verified first; payroll shards are accepted only in their payday window.
+ * The private STRK20 payment can consume the resulting authorization once.
+ */
+export const payrollAuthorizationJobs = pgTable(
+  "payroll_authorization_jobs",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => payrollRuns.id, { onDelete: "cascade" }),
+    payrollProofBundleId: text("payroll_proof_bundle_id")
+      .notNull()
+      .references(() => proofBundles.id, { onDelete: "cascade" }),
+    snapshotProofBundleId: text("snapshot_proof_bundle_id")
+      .notNull()
+      .references(() => proofBundles.id, { onDelete: "cascade" }),
+    payrollShard0Calldata: jsonb("payroll_shard_0_calldata").notNull(),
+    payrollShard1Calldata: jsonb("payroll_shard_1_calldata").notNull(),
+    snapshotProofCalldata: jsonb("snapshot_proof_calldata").notNull(),
+    state: durableJobState("state").default("pending").notNull(),
+    activeStep: text("active_step").default("begin").notNull(),
+    transactionHash: text("transaction_hash"),
+    beginTransactionHash: text("begin_transaction_hash"),
+    snapshotTransactionHash: text("snapshot_transaction_hash"),
+    shard0TransactionHash: text("shard_0_transaction_hash"),
+    shard1TransactionHash: text("shard_1_transaction_hash"),
+    attempts: integer("attempts").default(0).notNull(),
+    availableAt: timestamp("available_at", { withTimezone: true }).defaultNow().notNull(),
+    leaseOwner: text("lease_owner"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    lastErrorCode: text("last_error_code"),
+    lastErrorMessage: text("last_error_message"),
+    authorizedAt: timestamp("authorized_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("payroll_authorization_jobs_run_idx").on(table.runId),
+    uniqueIndex("payroll_authorization_jobs_payroll_bundle_idx").on(table.payrollProofBundleId),
+    uniqueIndex("payroll_authorization_jobs_snapshot_bundle_idx").on(table.snapshotProofBundleId),
+    index("payroll_authorization_jobs_poll_idx").on(table.state, table.availableAt),
   ],
 );
 

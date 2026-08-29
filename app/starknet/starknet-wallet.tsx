@@ -62,6 +62,14 @@ import {
   type PayoDeploymentArtifactName,
   type PayoMainnetTopologyPlan,
 } from "@/lib/starknet/payo-deployment-plan";
+import type {
+  ObligationSnapshotV2,
+  PayrollStatementV2,
+} from "@/lib/domain/exception-protocol";
+import {
+  buildRegisterEmployerStatementCall,
+  buildRegisterObligationSnapshotCall,
+} from "@/lib/starknet/payo-exception-seal";
 
 export {
   formatTokenAmount,
@@ -232,6 +240,14 @@ type StarknetWalletContextValue = {
   assertPrivateActionAvailable: () => void;
   reconcilePayrollTransaction: (transactionHash: string) => Promise<void>;
   scheduleObligationRoot: (agreementRoot: string) => Promise<ObligationRootScheduleResult>;
+  registerObligationSnapshot: (input: {
+    snapshot: ObligationSnapshotV2;
+    snapshotCommitment: string;
+  }) => Promise<string>;
+  registerEmployerStatement: (input: {
+    statement: PayrollStatementV2;
+    statementCommitment: string;
+  }) => Promise<string>;
   isObligationRootActive: (agreementRoot: string) => Promise<boolean>;
   getObligationRootOwner: (agreementRoot: string) => Promise<string>;
   publishFxRoot: (input: {
@@ -1226,6 +1242,117 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     }
   }, [address, chainId, walletAccount]);
 
+  const registerObligationSnapshot = useCallback(async (input: {
+    snapshot: ObligationSnapshotV2;
+    snapshotCommitment: string;
+  }): Promise<string> => {
+    if (!walletAccount || !address) throw new Error("Connect Ready wallet first.");
+    if (chainId !== STARKNET_MAINNET_CHAIN_ID) {
+      throw new Error("Switch Ready to Starknet Mainnet before registering the payroll snapshot.");
+    }
+    if (privateActionLockRef.current) throw new Error("A Mainnet wallet request is already active.");
+    const sealAddress = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
+    if (!sealAddress) throw new Error("The PAYO exception seal is not deployed/configured.");
+    const latest = await mainnetProvider.getBlock("latest");
+    if (BigInt(latest.timestamp) > BigInt(input.snapshot.dueAt)) {
+      throw new Error("This snapshot missed its on-chain pre-payday registration deadline.");
+    }
+    const call = buildRegisterObligationSnapshotCall({
+      sealAddress,
+      ownerAddress: address,
+      snapshot: input.snapshot,
+      snapshotCommitment: input.snapshotCommitment,
+    });
+    const requestToken = Symbol("snapshot-registration");
+    privateActionLockRef.current = requestToken;
+    const pending: PrivateTransaction = {
+      kind: "registry",
+      stage: "wallet",
+      label: "Register private obligation snapshot",
+    };
+    setError("");
+    setTransaction(pending);
+    try {
+      const result = await walletAccount.execute(call);
+      const confirming: PrivateTransaction = {
+        ...pending,
+        stage: "confirming",
+        hash: result.transaction_hash,
+      };
+      setTransaction(confirming);
+      await mainnetProvider.waitForTransaction(result.transaction_hash, {
+        retries: 400,
+        retryInterval: 3_000,
+      });
+      setTransaction({ ...confirming, stage: "confirmed" });
+      return result.transaction_hash;
+    } catch (registrationError) {
+      const message = describeError(registrationError);
+      setTransaction({ ...pending, stage: "failed", error: message });
+      setError(message);
+      throw new Error(message);
+    } finally {
+      if (privateActionLockRef.current === requestToken) privateActionLockRef.current = null;
+    }
+  }, [address, chainId, walletAccount]);
+
+  const registerEmployerStatement = useCallback(async (input: {
+    statement: PayrollStatementV2;
+    statementCommitment: string;
+  }): Promise<string> => {
+    if (!walletAccount || !address) throw new Error("Connect Ready wallet first.");
+    if (chainId !== STARKNET_MAINNET_CHAIN_ID) {
+      throw new Error("Switch Ready to Starknet Mainnet before registering employer evidence.");
+    }
+    if (privateActionLockRef.current) {
+      throw new Error("A Mainnet wallet request is already active.");
+    }
+    const sealAddress = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
+    if (!sealAddress) throw new Error("The PAYO exception seal is not deployed/configured.");
+    const latest = await mainnetProvider.getBlock("latest");
+    if (BigInt(input.statement.observedAt) > BigInt(latest.timestamp)) {
+      throw new Error("The employer statement observation time is still in the future.");
+    }
+    const call = buildRegisterEmployerStatementCall({
+      sealAddress,
+      statement: input.statement,
+      statementCommitment: input.statementCommitment,
+    });
+    const requestToken = Symbol("employer-statement-registration");
+    privateActionLockRef.current = requestToken;
+    const pending: PrivateTransaction = {
+      kind: "registry",
+      stage: "wallet",
+      label: "Register private employer evidence",
+    };
+    setError("");
+    setTransaction(pending);
+    try {
+      const result = await walletAccount.execute(call);
+      const confirming: PrivateTransaction = {
+        ...pending,
+        stage: "confirming",
+        hash: result.transaction_hash,
+      };
+      setTransaction(confirming);
+      await mainnetProvider.waitForTransaction(result.transaction_hash, {
+        retries: 400,
+        retryInterval: 3_000,
+      });
+      setTransaction({ ...confirming, stage: "confirmed" });
+      return result.transaction_hash;
+    } catch (registrationError) {
+      const message = describeError(registrationError);
+      setTransaction({ ...pending, stage: "failed", error: message });
+      setError(message);
+      throw new Error(message);
+    } finally {
+      if (privateActionLockRef.current === requestToken) {
+        privateActionLockRef.current = null;
+      }
+    }
+  }, [address, chainId, walletAccount]);
+
   const isObligationRootActive = useCallback(async (agreementRoot: string): Promise<boolean> => {
     const registryAddress = process.env.NEXT_PUBLIC_PAYO_OBLIGATION_REGISTRY_ADDRESS;
     if (!registryAddress) throw new Error("The PAYO obligation registry is not deployed/configured.");
@@ -1811,6 +1938,8 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     assertPrivateActionAvailable,
     reconcilePayrollTransaction,
     scheduleObligationRoot,
+    registerObligationSnapshot,
+    registerEmployerStatement,
     isObligationRootActive,
     getObligationRootOwner,
     publishFxRoot,

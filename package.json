@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "proof:exception:verify": "node --conditions=react-server --import tsx scripts/verify-exception-prover.ts",
     "dev": "next dev --webpack",
     "build": "next build --webpack",
     "start": "next start",

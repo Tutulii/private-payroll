@@ -1,14 +1,18 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { mapPayrollPublicInputs } from "./protocol";
+import { mapExceptionPublicInputsV2 } from "@/lib/domain/exception-protocol";
 import {
   STARKNET_FIELD_PRIME,
   decodeVerificationKeyHex,
   hashProofCalldata,
   normalizeGaragaProofCalldata,
   orderedPayrollPublicInputs,
+  orderedExceptionPublicInputs,
+  parseExceptionPublicInputsFromGaragaCalldata,
   parsePayrollPublicInputsFromGaragaCalldata,
   serializePayrollPublicInputs,
+  serializeExceptionPublicInputs,
 } from "./starknet-calldata";
 
 describe("PayrollIntegrity Starknet calldata", () => {
@@ -22,6 +26,17 @@ describe("PayrollIntegrity Starknet calldata", () => {
     expect(serialized.slice(0, 31)).toEqual(new Uint8Array(31));
     expect(serialized[31]).toBe(1);
     expect(serialized[serialized.length - 1]).toBe(17);
+  });
+
+  it("serializes the frozen 23-field exception ABI without payroll aliases", () => {
+    const values = Array.from({ length: 23 }, (_, index) => `0x${(index + 1).toString(16)}`);
+    const mapped = mapExceptionPublicInputsV2(values);
+    expect(orderedExceptionPublicInputs(mapped)).toEqual(values);
+    const serialized = serializeExceptionPublicInputs(values);
+    expect(serialized).toHaveLength(23 * 32);
+    expect(serialized[31]).toBe(1);
+    expect(serialized[serialized.length - 1]).toBe(23);
+    expect(() => serializeExceptionPublicInputs(values.slice(0, 22))).toThrow("Expected 23");
   });
 
   it("rejects malformed verification keys and non-canonical public inputs", () => {
@@ -89,6 +104,46 @@ describe("PayrollIntegrity Starknet calldata", () => {
       schemaVersion: "1",
       validityStart: "1010",
       validityExpiry: "2000",
+      shardIndex: "0",
+    });
+  });
+
+  it("extracts the exact 23-field ABI from a real v6 Garaga proof", () => {
+    const calldata = readFileSync(
+      new URL(
+        "../../contracts/exception_vnext_integration/tests/wage_claim_v6.txt",
+        import.meta.url,
+      ),
+      "utf8",
+    ).trim().split(/\s+/);
+    const manifest = JSON.parse(readFileSync(
+      new URL(
+        "../../contracts/exception_vnext_integration/tests/manifest.json",
+        import.meta.url,
+      ),
+      "utf8",
+    )) as {
+      fixtures: Array<{
+        fixtureName: string;
+        calldataFelts: number;
+        calldataHash: string;
+      }>;
+    };
+    const fixture = manifest.fixtures.find(({ fixtureName }) => fixtureName === "wage_claim_v6");
+    if (!fixture) {
+      throw new Error("The wage-claim proof fixture is missing from its manifest.");
+    }
+    expect(calldata).toHaveLength(fixture.calldataFelts);
+    expect(hashProofCalldata(calldata)).toBe(fixture.calldataHash);
+    expect(parseExceptionPublicInputsFromGaragaCalldata(calldata)).toMatchObject({
+      chainId: "1",
+      sealAddress: "74565",
+      proofVersion: "6",
+      schemaVersion: "2",
+      subjectNullifierHigh: BigInt("0x7fee165336c657578a7593966fbff236").toString(),
+      subjectNullifierLow: BigInt("0x864e44f394a67a85f6998f4adcf18ca6").toString(),
+      validityStart: "1150",
+      validityExpiry: "1200",
       shardIndex: "0",
     });
   });

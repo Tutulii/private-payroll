@@ -1,8 +1,14 @@
 import { hash } from "starknet";
 import {
   PAYROLL_INTEGRITY_PUBLIC_INPUT_COUNT,
+  PAYO_EXCEPTION_PUBLIC_INPUT_COUNT,
   type PayrollIntegrityPublicInputs,
 } from "./protocol";
+import {
+  exceptionPublicInputV2Keys,
+  mapExceptionPublicInputsV2,
+  type ExceptionPublicInputsV2,
+} from "@/lib/domain/exception-protocol";
 
 export const STARKNET_FIELD_PRIME = (1n << 251n) + (17n << 192n) + 1n;
 
@@ -53,6 +59,28 @@ export function serializePayrollPublicInputs(values: readonly string[]): Uint8Ar
   const output = new Uint8Array(values.length * 32);
   values.forEach((value, index) => {
     let remaining = parseUnsigned(value, `Public input ${index}`, 1n << 256n);
+    for (let byte = 31; byte >= 0; byte -= 1) {
+      output[index * 32 + byte] = Number(remaining & 0xffn);
+      remaining >>= 8n;
+    }
+  });
+  return output;
+}
+
+export function orderedExceptionPublicInputs(input: ExceptionPublicInputsV2): string[] {
+  return exceptionPublicInputV2Keys.map((key) => input[key]);
+}
+
+/** Barretenberg uses the same 32-byte big-endian encoding for the 23-field exception ABI. */
+export function serializeExceptionPublicInputs(values: readonly string[]): Uint8Array {
+  if (values.length !== PAYO_EXCEPTION_PUBLIC_INPUT_COUNT) {
+    throw new Error(
+      `Expected ${PAYO_EXCEPTION_PUBLIC_INPUT_COUNT} PAYO exception public inputs; received ${values.length}.`,
+    );
+  }
+  const output = new Uint8Array(values.length * 32);
+  values.forEach((value, index) => {
+    let remaining = parseUnsigned(value, `Exception public input ${index}`, 1n << 256n);
     for (let byte = 31; byte >= 0; byte -= 1) {
       output[index * 32 + byte] = Number(remaining & 0xffn);
       remaining >>= 8n;
@@ -181,4 +209,34 @@ export function parsePayrollPublicInputsFromGaragaCalldata(
     }
   }
   return advancedInputs;
+}
+
+/** Extracts the canonical 23-field vNext ABI from direct Garaga calldata. */
+export function parseExceptionPublicInputsFromGaragaCalldata(
+  calldata: readonly string[],
+): ExceptionPublicInputsV2 {
+  const requiredLength = 1 + PAYO_EXCEPTION_PUBLIC_INPUT_COUNT * 2;
+  if (calldata.length < requiredLength) {
+    throw new Error("Garaga proof calldata is too short for PAYO exception public inputs.");
+  }
+  const count = parseUnsigned(calldata[0], "Exception public input count", 1n << 32n);
+  if (count !== BigInt(PAYO_EXCEPTION_PUBLIC_INPUT_COUNT)) {
+    throw new Error(
+      `Expected ${PAYO_EXCEPTION_PUBLIC_INPUT_COUNT} Garaga exception public inputs; received ${count}.`,
+    );
+  }
+  const values = Array.from({ length: PAYO_EXCEPTION_PUBLIC_INPUT_COUNT }, (_, index) => {
+    const low = parseUnsigned(
+      calldata[1 + index * 2],
+      `Exception public input ${index} low limb`,
+      1n << 128n,
+    );
+    const high = parseUnsigned(
+      calldata[2 + index * 2],
+      `Exception public input ${index} high limb`,
+      1n << 128n,
+    );
+    return (low + (high << 128n)).toString();
+  });
+  return mapExceptionPublicInputsV2(values);
 }

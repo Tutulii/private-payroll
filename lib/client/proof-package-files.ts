@@ -11,6 +11,8 @@ import {
   type RecipientProofPackageInspection,
 } from "@/lib/disclosure/proof-package";
 import { atomicAmountSchema, payrollTokenSchema } from "@/lib/domain/payroll";
+import { claimCapabilityCommitmentV2 } from "@/lib/domain/exception-protocol";
+import { deriveClaimCapabilitySecret } from "@/lib/crypto/claim-capability";
 import { formatTokenAmount, PAYROLL_TOKENS, type PayrollTokenSymbol } from "@/lib/starknet/tokens";
 
 const commitmentSchema = z.string().regex(/^0x[0-9a-fA-F]{64}$/);
@@ -39,13 +41,27 @@ export const payoProofPackageExportSchema = z.object({
 
 export type PayoProofPackageExport = z.infer<typeof payoProofPackageExportSchema>;
 
-export const payoPublicIdentitySchema = z.object({
+const payoPublicIdentityV1Schema = z.object({
   format: z.literal("payo-public-identity-v1"),
   principalId: z.string().min(1).max(160),
   publicKey: z.string().min(16).max(160),
   fingerprint: commitmentSchema,
   createdAt: z.string().datetime(),
 }).strict();
+
+const payoPublicIdentityV2Schema = z.object({
+  format: z.literal("payo-public-identity-v2"),
+  principalId: z.string().min(1).max(160),
+  publicKey: z.string().min(16).max(160),
+  claimCapabilityCommitment: commitmentSchema,
+  fingerprint: commitmentSchema,
+  createdAt: z.string().datetime(),
+}).strict();
+
+export const payoPublicIdentitySchema = z.union([
+  payoPublicIdentityV2Schema,
+  payoPublicIdentityV1Schema,
+]);
 
 export type PayoPublicIdentity = z.infer<typeof payoPublicIdentitySchema>;
 
@@ -134,7 +150,23 @@ function workflowFromInspection(inspection: RecipientProofPackageInspection): Pr
   return "payroll";
 }
 
-export function proofPackageIdentityFingerprint(identity: VaultPrincipal): `0x${string}` {
+export function proofPackageIdentityFingerprint(
+  identity: VaultPrincipal & {
+    format?: "payo-public-identity-v1" | "payo-public-identity-v2";
+    claimCapabilityCommitment?: string;
+  },
+): `0x${string}` {
+  if (identity.format === "payo-public-identity-v2" || identity.claimCapabilityCommitment) {
+    if (!identity.claimCapabilityCommitment) {
+      throw new Error("A PAYO v2 identity requires its claim capability commitment.");
+    }
+    return hashCanonicalJson({
+      domain: "PAYO_PUBLIC_IDENTITY_V2",
+      principalId: identity.principalId,
+      publicKey: identity.publicKey,
+      claimCapabilityCommitment: identity.claimCapabilityCommitment,
+    });
+  }
   return hashCanonicalJson({
     domain: "PAYO_PUBLIC_IDENTITY_V1",
     principalId: identity.principalId,
@@ -161,16 +193,23 @@ function assertX25519PublicKey(publicKey: string): void {
 }
 
 export function createPayoPublicIdentity(
-  principal: VaultPrincipal,
+  principal: VaultPrincipalKeyPair,
   now = new Date(),
 ): PayoPublicIdentity {
   assertX25519PublicKey(principal.publicKey);
-  return payoPublicIdentitySchema.parse({
-    format: "payo-public-identity-v1",
+  const claimCapabilityCommitment = claimCapabilityCommitmentV2(
+    deriveClaimCapabilitySecret(principal),
+  );
+  const identity = {
+    format: "payo-public-identity-v2" as const,
     principalId: principal.principalId,
     publicKey: principal.publicKey,
-    fingerprint: proofPackageIdentityFingerprint(principal),
+    claimCapabilityCommitment,
     createdAt: now.toISOString(),
+  };
+  return payoPublicIdentitySchema.parse({
+    ...identity,
+    fingerprint: proofPackageIdentityFingerprint(identity),
   });
 }
 

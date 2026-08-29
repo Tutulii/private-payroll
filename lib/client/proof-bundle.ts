@@ -1,17 +1,27 @@
 import { hashCanonicalJson } from "@/lib/crypto/digest";
 import { encryptVaultRecord, type VaultPrincipal } from "@/lib/crypto/vault";
-import type { EncryptedPayrollIntegrityBundleCreate } from "@/lib/domain/proof-bundle";
+import type {
+  EncryptedExceptionProofBundleCreate,
+  EncryptedPayrollIntegrityBundleCreate,
+} from "@/lib/domain/proof-bundle";
 import {
   ADVANCED_OBLIGATION_CIRCUIT_SHA256,
   ADVANCED_OBLIGATION_VERIFICATION_KEY_SHA256,
+  OBLIGATION_SNAPSHOT_LINK_CIRCUIT_SHA256,
+  OBLIGATION_SNAPSHOT_LINK_VERIFICATION_KEY_SHA256,
   PAYROLL_INTEGRITY_CIRCUIT_SHA256,
   PAYROLL_INTEGRITY_VERIFICATION_KEY_SHA256,
   type PayrollIntegrityPublicInputs,
+  type ExceptionProofWorkerSuccess,
   type ProofWorkerSuccess,
   WAGE_CLAIM_CIRCUIT_SHA256,
   WAGE_CLAIM_VERIFICATION_KEY_SHA256,
   WAGE_REMEDIATION_CIRCUIT_SHA256,
   WAGE_REMEDIATION_VERIFICATION_KEY_SHA256,
+  WAGE_CLAIM_VNEXT_CIRCUIT_SHA256,
+  WAGE_CLAIM_VNEXT_VERIFICATION_KEY_SHA256,
+  WAGE_REMEDIATION_VNEXT_CIRCUIT_SHA256,
+  WAGE_REMEDIATION_VNEXT_VERIFICATION_KEY_SHA256,
 } from "@/lib/proof/protocol";
 import { hashProofCalldata } from "@/lib/proof/starknet-calldata";
 
@@ -150,6 +160,93 @@ export function prepareEncryptedPayrollIntegrityBundle(input: {
     ]),
     commonInputs: common,
     shardCalldataHashes: [shardZero.calldataHash, shardOne.calldataHash],
+    envelope,
+  };
+}
+
+export function prepareEncryptedExceptionProofBundle(input: {
+  id: string;
+  organizationId: string;
+  runId: string;
+  revision: number;
+  proof: ExceptionProofWorkerSuccess;
+  subjectRecordId?: string;
+  principals: readonly VaultPrincipal[];
+}): EncryptedExceptionProofBundleCreate {
+  const profile = input.proof.profile === "obligation_snapshot_v5" ? {
+    proofType: "obligation_snapshot" as const,
+    proofVersion: "5" as const,
+    circuitSha256: OBLIGATION_SNAPSHOT_LINK_CIRCUIT_SHA256,
+    verificationKeySha256: OBLIGATION_SNAPSHOT_LINK_VERIFICATION_KEY_SHA256,
+  } : input.proof.profile === "wage_claim_v6" ? {
+    proofType: "wage_claim" as const,
+    proofVersion: "6" as const,
+    circuitSha256: WAGE_CLAIM_VNEXT_CIRCUIT_SHA256,
+    verificationKeySha256: WAGE_CLAIM_VNEXT_VERIFICATION_KEY_SHA256,
+  } : {
+    proofType: "wage_remediation" as const,
+    proofVersion: "7" as const,
+    circuitSha256: WAGE_REMEDIATION_VNEXT_CIRCUIT_SHA256,
+    verificationKeySha256: WAGE_REMEDIATION_VNEXT_VERIFICATION_KEY_SHA256,
+  };
+  if (input.proof.circuitSha256 !== profile.circuitSha256) {
+    throw new Error("Exception proof worker returned an unpinned PAYO profile.");
+  }
+  const subjectRecordId = profile.proofType === "obligation_snapshot"
+    ? input.runId
+    : input.subjectRecordId;
+  if (!subjectRecordId) throw new Error(`${profile.proofType} requires its encrypted subject record.`);
+  const proof = input.proof.proof;
+  if (!proof.proof.length || !proof.proofCalldata.length) {
+    throw new Error("The vNext exception proof is incomplete.");
+  }
+  const calculatedHash = hashProofCalldata(proof.proofCalldata);
+  if (BigInt(calculatedHash) !== BigInt(proof.calldataHash)) {
+    throw new Error("The vNext exception proof calldata hash is invalid.");
+  }
+  const publicInputs = Object.fromEntries(Object.entries(proof.publicInputs).map(([key, value]) => [
+    key,
+    key === "chainId" || key === "sealAddress" ? canonicalFelt(value) : canonicalDecimal(value),
+  ])) as typeof proof.publicInputs;
+  if (
+    publicInputs.proofVersion !== profile.proofVersion
+    || publicInputs.schemaVersion !== "2"
+    || publicInputs.shardIndex !== "0"
+  ) throw new Error("The exception proof returned the wrong versioned public-input ABI.");
+  const privatePayload = {
+    schemaVersion: 2,
+    scheme: input.proof.scheme,
+    profile: input.proof.profile,
+    circuitSha256: input.proof.circuitSha256,
+    verificationKeySha256: profile.verificationKeySha256,
+    provingTimeMs: input.proof.provingTimeMs,
+    proof: {
+      proofBase64: bytesToBase64(proof.proof),
+      proofCalldata: proof.proofCalldata,
+      calldataHash: proof.calldataHash,
+      publicInputs,
+    },
+  };
+  const envelope = encryptVaultRecord(privatePayload, {
+    schemaVersion: 1,
+    organizationId: input.organizationId,
+    recordType: "proof-bundle",
+    recordId: input.id,
+    revision: input.revision,
+  }, input.principals);
+  return {
+    id: input.id,
+    organizationId: input.organizationId,
+    runId: input.runId,
+    revision: input.revision,
+    proofType: profile.proofType,
+    subjectRecordId,
+    proofVersion: profile.proofVersion,
+    circuitSha256: profile.circuitSha256,
+    verificationKeySha256: profile.verificationKeySha256,
+    publicInputsHash: hashCanonicalJson(publicInputs),
+    publicInputs,
+    proofCalldataHash: calculatedHash,
     envelope,
   };
 }

@@ -3,11 +3,20 @@ import { z } from "zod";
 import { uuidV7Schema } from "@/lib/domain/records";
 import {
   enqueueHistoricalFxRenewal,
+  getFxPublicationJob,
   getHistoricalFxRenewalEvidence,
 } from "@/lib/persistence/fx-publication-repository";
+import { isFxRootActive } from "@/lib/server/fx-root-publisher";
 import { ApiError, requirePrincipal } from "@/lib/server/auth";
 import { apiFailure, readJson } from "@/lib/server/http";
-import { getPayoDeploymentConfig } from "@/lib/server/payo-deployment";
+import {
+  getPayoDeploymentConfig,
+  getPayoRegistryConfig,
+} from "@/lib/server/payo-deployment";
+import {
+  assertInvokedPayrollFxAnchor,
+  readPayrollRunAnchor,
+} from "@/lib/server/payroll-run-anchor";
 import { readProofSealState } from "@/lib/server/proof-relayer";
 
 export const runtime = "nodejs";
@@ -15,6 +24,7 @@ export const dynamic = "force-dynamic";
 
 const requestSchema = z.discriminatedUnion("workflowType", [
   z.object({ workflowType: z.literal("wage_claim") }).strict(),
+  z.object({ workflowType: z.literal("employer_statement") }).strict(),
   z.object({
     workflowType: z.literal("wage_remediation"),
     claimId: uuidV7Schema,
@@ -48,6 +58,7 @@ export async function POST(request: Request, context: FxRenewalContext) {
     const { workflowType } = renewalRequest;
     const rpcUrl = requireConfiguredPublisher();
     const deployment = getPayoDeploymentConfig();
+    const registries = getPayoRegistryConfig();
     const evidence = await getHistoricalFxRenewalEvidence(workflowType === "wage_remediation"
       ? { runId, principal, workflowType, claimId: renewalRequest.claimId }
       : { runId, principal, workflowType });
@@ -60,24 +71,64 @@ export async function POST(request: Request, context: FxRenewalContext) {
       throw new ApiError(503, "The FX renewal RPC is on the wrong Starknet chain.", "FX_RENEWAL_CHAIN_MISMATCH");
     }
     const limbs = rootLimbs(evidence.authorizationNullifier);
-    const [block, sealState] = await Promise.all([
+    const sealValidation = workflowType === "employer_statement"
+      ? readPayrollRunAnchor({
+          callContract: (call, blockIdentifier) =>
+            provider.callContract(call, blockIdentifier),
+        }, {
+          sealAddress: deployment.sealAddress,
+          runNullifierHigh: limbs.high,
+          runNullifierLow: limbs.low,
+          blockNumber,
+        }).then((anchor) => {
+          try {
+            assertInvokedPayrollFxAnchor(anchor, evidence.catalogRoot);
+          } catch {
+            throw new ApiError(
+              409,
+              "The historical payroll is not in the on-chain state required for employer evidence.",
+              "FX_RENEWAL_SEAL_STATE_INVALID",
+            );
+          }
+        })
+      : readProofSealState({
+          getBlockNumber: async () => blockNumber,
+          callContract: (call, blockIdentifier) =>
+            provider.callContract(call, blockIdentifier),
+        }, {
+          sealAddress: deployment.sealAddress,
+          runNullifierHigh: limbs.high,
+          runNullifierLow: limbs.low,
+        }).then((sealState) => {
+          const expectedStatus = workflowType === "wage_remediation" ? 4 : 2;
+          if (
+            sealState.status !== expectedStatus
+            || sealState.shardsVerified.some((verified) => !verified)
+          ) {
+            throw new ApiError(
+              409,
+              "The historical payroll is not in the on-chain state required for this exception.",
+              "FX_RENEWAL_SEAL_STATE_INVALID",
+            );
+          }
+        });
+    const [block, rootActive] = await Promise.all([
       provider.getBlock(blockNumber),
-      readProofSealState({
-        getBlockNumber: async () => blockNumber,
-        callContract: (call, blockIdentifier) => provider.callContract(call, blockIdentifier),
-      }, {
-        sealAddress: deployment.sealAddress,
-        runNullifierHigh: limbs.high,
-        runNullifierLow: limbs.low,
+      isFxRootActive({
+        rpc: provider,
+        policyRegistryAddress: registries.policyRegistryAddress,
+        catalogRoot: evidence.catalogRoot,
+        blockIdentifier: blockNumber,
       }),
+      sealValidation,
     ]);
-    const expectedStatus = workflowType === "wage_claim" ? 2 : 4;
-    if (sealState.status !== expectedStatus || sealState.shardsVerified.some((verified) => !verified)) {
-      throw new ApiError(
-        409,
-        "The historical payroll is not in the on-chain state required for this exception.",
-        "FX_RENEWAL_SEAL_STATE_INVALID",
-      );
+    if (rootActive) {
+      const job = await getFxPublicationJob({
+        organizationId: evidence.organizationId,
+        catalogRoot: evidence.catalogRoot,
+        principal,
+      });
+      return Response.json({ job }, { status: job.state === "complete" ? 200 : 202 });
     }
     const job = await enqueueHistoricalFxRenewal({
       evidence,

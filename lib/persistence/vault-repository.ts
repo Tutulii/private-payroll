@@ -529,7 +529,9 @@ export async function rotateOrganizationVault(input: {
       .orderBy(vaultRecords.id, desc(vaultRecords.revision))
       .for("update");
     const latestRecords = allRecords.filter((record, index) =>
-      index === 0 || allRecords[index - 1].id !== record.id);
+      record.recordType !== "obligation-claim-access"
+      && record.recordType !== "wage-claim-v2"
+      && (index === 0 || allRecords[index - 1].id !== record.id));
     const rotatedById = new Map(rotation.records.map((record) => [record.recordId, record]));
     if (rotatedById.size !== rotation.records.length || rotatedById.size !== latestRecords.length) {
       throw new ApiError(400, "Vault rotation must include every latest encrypted record exactly once.", "ROTATION_COVERAGE_INVALID");

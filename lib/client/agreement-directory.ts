@@ -316,6 +316,9 @@ export async function storeEncryptedRecurringAgreement(input: {
     recipientSalt,
     agreementSalt,
     agreementCommitment,
+    ...(input.payee.claimCapabilityCommitment
+      ? { claimCapabilityCommitment: input.payee.claimCapabilityCommitment }
+      : {}),
     proofScheduleCommitment: agreementScheduleCommitment(agreement),
     effectiveFrom: timestamp,
   });
@@ -479,6 +482,9 @@ export async function storeEncryptedAdvancedAgreement(input: {
     recipientSalt,
     agreementSalt,
     agreementCommitment,
+    ...(input.payee.claimCapabilityCommitment
+      ? { claimCapabilityCommitment: input.payee.claimCapabilityCommitment }
+      : {}),
     proofScheduleCommitment: await agreementProofScheduleCommitment(agreement),
     effectiveFrom: timestamp,
   });

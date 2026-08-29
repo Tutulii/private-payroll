@@ -1,0 +1,5 @@
+[package]
+name = "payo_payroll_proof_types"
+type = "lib"
+authors = ["PAYO contributors"]
+compiler_version = ">=1.0.0"

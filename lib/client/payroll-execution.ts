@@ -1,7 +1,10 @@
 import type { STRK20_INVOKE_ACTION } from "starknet";
 import { z } from "zod";
 import { formatTokenAmount, type PayrollTokenSymbol } from "@/app/starknet/tokens";
-import { prepareEncryptedPayrollIntegrityBundle } from "@/lib/client/proof-bundle";
+import {
+  prepareEncryptedExceptionProofBundle,
+  prepareEncryptedPayrollIntegrityBundle,
+} from "@/lib/client/proof-bundle";
 import { PayoApiError, PayoClient, prepareEncryptedPayrollRun } from "@/lib/client/payo-client";
 import { hashRecipientCommitment } from "@/lib/crypto/commitments";
 import { hashCanonicalJson } from "@/lib/crypto/digest";
@@ -14,6 +17,7 @@ import {
   type VaultPrincipalKeyPair,
 } from "@/lib/crypto/vault";
 import type { PrivatePayrollLine } from "@/lib/domain/payroll";
+import type { ObligationSnapshotPlanPrivate } from "@/lib/domain/obligation-snapshot-plan";
 import {
   fxCatalogPublicationWindow,
   type FxSnapshot,
@@ -30,15 +34,26 @@ import {
 import {
   buildFxCatalogRoot,
   buildPayrollAgreementRoot,
+  buildPayrollIntegrityInputsFromSerialized,
   randomCommitmentSalt,
   serializePayrollIntegrityBuildRequest,
   type PayrollIntegrityLineInput,
 } from "@/lib/proof/input-builder";
+import { buildObligationSnapshotLinkInputs } from "@/lib/proof/exception-input-builder";
 import { advancedPlanProofCommitment } from "@/lib/proof/advanced-plan-commitment";
 import { proveEncryptedPayroll, type ProofProgressListener } from "@/lib/proof/client";
-import { PAYO_MAX_PROOF_CALLDATA_FELTS, type ProofWorkerSuccess } from "@/lib/proof/protocol";
+import {
+  PAYO_MAX_PROOF_CALLDATA_FELTS,
+  type ExceptionProofWorkerSuccess,
+  type ProofWorkerSuccess,
+} from "@/lib/proof/protocol";
 import { buildPayoSealedPayroll } from "@/lib/starknet/payo-seal";
-import { agreementScheduleCommitment, type PayAgreementDirectoryRecord } from "./agreement-directory";
+import { buildAuthorizedPayrollAction } from "@/lib/starknet/payo-exception-seal";
+import {
+  agreementScheduleCommitment,
+  recordProofScheduleCommitment,
+  type PayAgreementDirectoryRecord,
+} from "./agreement-directory";
 import type { PayeeDirectoryRecord } from "./payee-directory";
 import { awaitWalletOrRecoveredTransaction, readRecoveredSettlementTransactionHash } from "./wallet-submission-recovery";
 
@@ -46,6 +61,30 @@ export type PayrollExecutionObligation = {
   agreement: PayAgreementDirectoryRecord;
   payee: PayeeDirectoryRecord;
 };
+
+export function payrollAgreementDueAt(record: PayAgreementDirectoryRecord): bigint {
+  const agreement = record.agreement;
+  const dueAt = agreement.agreementVersion === "payo-agreement-v2"
+    ? agreement.paymentPlan.kind === "recurring"
+      ? agreement.paymentPlan.nextDueAt
+      : agreement.paymentPlan.kind === "checkpoint_stream"
+        ? agreement.paymentPlan.checkpoint.checkpointAt
+        : agreement.paymentPlan.kind === "milestone"
+          ? agreement.paymentPlan.dueAt
+          : agreement.paymentPlan.releaseAt
+    : agreement.schedule.kind === "recurring"
+      ? agreement.schedule.nextDueAt
+      : agreement.schedule.kind === "milestone"
+        ? agreement.schedule.dueAt
+        : agreement.schedule.kind === "stream"
+          ? agreement.schedule.startsAt
+          : agreement.schedule.cliffAt;
+  const milliseconds = new Date(dueAt).getTime();
+  if (!Number.isSafeInteger(milliseconds)) {
+    throw new Error(`Agreement ${agreement.id} has an invalid payday.`);
+  }
+  return BigInt(Math.floor(milliseconds / 1_000));
+}
 
 export type PayrollExecutionStage =
   | "fx"
@@ -56,6 +95,8 @@ export type PayrollExecutionStage =
   | "verifying"
   | "encoding"
   | "preflight"
+  | "snapshot"
+  | "proof_authorization"
   | "persisting"
   | "wallet"
   | "recording"
@@ -63,7 +104,7 @@ export type PayrollExecutionStage =
   | "queued";
 
 export type PendingPayrollSubmission = {
-  version: 3;
+  version: 3 | 4;
   organizationId: string;
   runId: string;
   proofBundleId: string;
@@ -73,6 +114,8 @@ export type PendingPayrollSubmission = {
   tokenTotalsCommitment: `0x${string}`;
   settlementEnvelope: EncryptedVaultRecord;
   proofShards: [string[], string[]];
+  authorizationMode?: "staged_vnext";
+  snapshotProofBundleId?: string;
   transactionHash?: string;
   createdAt: string;
 };
@@ -136,21 +179,7 @@ export function buildPayrollExecutionLines(input: {
     if (referenceCurrency !== "USD" && referenceCurrency !== "GBP") {
       throw new Error(`Agreement ${agreement.id} selects an unsupported proof reference currency.`);
     }
-    const dueAt = agreement.agreementVersion === "payo-agreement-v2"
-      ? agreement.paymentPlan.kind === "recurring"
-        ? BigInt(Math.floor(new Date(agreement.paymentPlan.nextDueAt).getTime() / 1_000))
-        : agreement.paymentPlan.kind === "checkpoint_stream"
-          ? BigInt(Math.floor(new Date(agreement.paymentPlan.checkpoint.checkpointAt).getTime() / 1_000))
-          : agreement.paymentPlan.kind === "milestone"
-            ? BigInt(Math.floor(new Date(agreement.paymentPlan.dueAt).getTime() / 1_000))
-            : BigInt(Math.floor(new Date(agreement.paymentPlan.releaseAt).getTime() / 1_000))
-      : agreement.schedule.kind === "recurring"
-      ? BigInt(Math.floor(new Date(agreement.schedule.nextDueAt).getTime() / 1_000))
-      : agreement.schedule.kind === "milestone"
-        ? BigInt(Math.floor(new Date(agreement.schedule.dueAt).getTime() / 1_000))
-        : agreement.schedule.kind === "stream"
-          ? BigInt(Math.floor(new Date(agreement.schedule.startsAt).getTime() / 1_000))
-          : BigInt(Math.floor(new Date(agreement.schedule.cliffAt).getTime() / 1_000));
+    const dueAt = payrollAgreementDueAt(record);
     const validUntil = record.effectiveUntil
       ? BigInt(Math.floor(new Date(record.effectiveUntil).getTime() / 1_000))
       : 253_402_300_799n;
@@ -289,12 +318,19 @@ const pendingPayrollSubmissionV3Schema = pendingPayrollSubmissionV2Schema.extend
   transactionHash: z.string().regex(/^0x[0-9a-fA-F]{1,64}$/).optional(),
 }).strict();
 
+const pendingPayrollSubmissionV4Schema = pendingPayrollSubmissionV3Schema.extend({
+  version: z.literal(4),
+  authorizationMode: z.literal("staged_vnext"),
+  snapshotProofBundleId: z.string().uuid(),
+}).strict();
+
 export function parsePendingPayrollSubmission(input: unknown): PendingPayrollSubmission {
   const parsed = z.union([
+    pendingPayrollSubmissionV4Schema,
     pendingPayrollSubmissionV3Schema,
     pendingPayrollSubmissionV2Schema,
   ]).parse(input);
-  return { ...parsed, version: 3 } as PendingPayrollSubmission;
+  return (parsed.version === 4 ? parsed : { ...parsed, version: 3 }) as PendingPayrollSubmission;
 }
 
 type ProvePayroll = (input: {
@@ -302,6 +338,12 @@ type ProvePayroll = (input: {
   principal: VaultPrincipalKeyPair;
   onProgress?: ProofProgressListener;
 }) => Promise<ProofWorkerSuccess>;
+
+type ProveSnapshot = (input: {
+  encryptedWitness: EncryptedVaultRecord;
+  principal: VaultPrincipalKeyPair;
+  onProgress?: ProofProgressListener;
+}) => Promise<ExceptionProofWorkerSuccess>;
 
 export type ExecuteProofBoundPayrollInput = {
   client: PayoClient;
@@ -318,6 +360,8 @@ export type ExecuteProofBoundPayrollInput = {
   onStage?: (stage: PayrollExecutionStage) => void;
   persistPendingSubmission?: (submission: PendingPayrollSubmission | null) => void;
   prove?: ProvePayroll;
+  snapshotPlan?: ObligationSnapshotPlanPrivate;
+  proveSnapshot?: ProveSnapshot;
   authorizeFxRoot?: (input: {
     root: `0x${string}`;
     snapshots: readonly FxSnapshot[];
@@ -326,6 +370,8 @@ export type ExecuteProofBoundPayrollInput = {
     proof: ProofWorkerSuccess;
   }) => Promise<void>;
   runRevision?: number;
+  authorizationPollIntervalMs?: number;
+  authorizationTimeoutMs?: number;
   now?: () => Date;
 };
 
@@ -359,6 +405,49 @@ async function retryDurableWrite<T>(operation: () => Promise<T>): Promise<T> {
     }
   }
   throw lastError;
+}
+
+export async function waitForPayrollAuthorization(input: {
+  client: Pick<PayoClient, "getPayrollAuthorization">;
+  runId: string;
+  initial?: Awaited<ReturnType<PayoClient["getPayrollAuthorization"]>>["authorization"];
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+}) {
+  const pollIntervalMs = input.pollIntervalMs ?? 3_000;
+  const timeoutMs = input.timeoutMs ?? 30 * 60_000;
+  if (!Number.isFinite(pollIntervalMs) || pollIntervalMs < 0 || pollIntervalMs > 30_000) {
+    throw new Error("Payroll authorization poll interval is invalid.");
+  }
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 60 * 60_000) {
+    throw new Error("Payroll authorization timeout is invalid.");
+  }
+  const deadline = Date.now() + timeoutMs;
+  let authorization = input.initial;
+  while (Date.now() < deadline) {
+    authorization ??= (await input.client.getPayrollAuthorization(input.runId)).authorization;
+    if (authorization.runId !== input.runId) {
+      throw new Error("PAYO returned an authorization for another payroll run.");
+    }
+    if (authorization.state === "complete") {
+      if (!authorization.authorizedAt || !authorization.transactionHash) {
+        throw new Error("PAYO marked payroll authorization complete without finalized chain evidence.");
+      }
+      return authorization;
+    }
+    if (authorization.state === "dead") {
+      throw new Error(
+        authorization.lastErrorMessage
+          ? `Payroll proof authorization failed: ${authorization.lastErrorMessage}`
+          : "Payroll proof authorization failed permanently.",
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    authorization = (await input.client.getPayrollAuthorization(input.runId)).authorization;
+  }
+  throw new Error(
+    "PAYO did not finish proof-first payroll authorization within 30 minutes. No Ready payment was requested; resume this authorization safely.",
+  );
 }
 
 export async function resumePendingPayrollSubmission(input: {
@@ -404,20 +493,22 @@ export async function resumePendingPayrollSubmission(input: {
       { cause: error },
     );
   }
-  try {
-    await retryDurableWrite(() => input.client.enqueueProofVerification({
-      settlementId: submitted.settlementId,
-      proofBundleId: submitted.proofBundleId,
-      shards: submitted.proofShards,
-    }));
-  } catch {
-    input.persistPendingSubmission?.(null);
-    input.onStage?.("recorded");
-    return {
-      ...submitted,
-      verificationQueued: false,
-      proofDeliveryWarning: PAYROLL_PROOF_DELIVERY_WARNING,
-    };
+  if (submitted.authorizationMode !== "staged_vnext") {
+    try {
+      await retryDurableWrite(() => input.client.enqueueProofVerification({
+        settlementId: submitted.settlementId,
+        proofBundleId: submitted.proofBundleId,
+        shards: submitted.proofShards,
+      }));
+    } catch {
+      input.persistPendingSubmission?.(null);
+      input.onStage?.("recorded");
+      return {
+        ...submitted,
+        verificationQueued: false,
+        proofDeliveryWarning: PAYROLL_PROOF_DELIVERY_WARNING,
+      };
+    }
   }
   input.persistPendingSubmission?.(null);
   input.onStage?.("queued");
@@ -652,9 +743,10 @@ export async function executeProofBoundPayroll(
   const nowUnix = BigInt(Math.floor(now.getTime() / 1_000));
   const validityStart = nowUnix - 30n;
   const validityExpiry = validityStart + 3_600n;
-  const runId = generateUuidV7(now.getTime());
-  const cycleId = derivePayrollCycleId(input.organizationId, input.obligations);
-  const revision = input.runRevision ?? 1;
+  const snapshotPlan = input.snapshotPlan;
+  const runId = snapshotPlan?.runId ?? generateUuidV7(now.getTime());
+  const cycleId = snapshotPlan?.cycleId ?? derivePayrollCycleId(input.organizationId, input.obligations);
+  const revision = snapshotPlan?.payrollRevision ?? input.runRevision ?? 1;
   if (!Number.isInteger(revision) || revision < 1) throw new Error("Payroll run revision must be a positive integer.");
   const usedTokens = [...new Set(input.obligations.map(({ agreement }) => agreement.agreement.settlementToken))];
   const advancedCount = input.obligations.filter(
@@ -664,6 +756,19 @@ export async function executeProofBoundPayroll(
     throw new Error("Legacy and advanced obligations must be settled in separate proof-bound runs.");
   }
   const advancedProfile = advancedCount === input.obligations.length;
+  if (snapshotPlan && (!advancedProfile || !input.proveSnapshot)) {
+    throw new Error(
+      "A registered payday snapshot requires advanced PayrollIntegrity v2 and the configured vNext prover.",
+    );
+  }
+  if (snapshotPlan) {
+    if (
+      snapshotPlan.organizationId !== input.organizationId
+      || snapshotPlan.agreementBindings.length !== input.obligations.length
+      || BigInt(snapshotPlan.snapshot.dueAt) > nowUnix
+      || BigInt(snapshotPlan.snapshot.claimEndsAt) < nowUnix
+    ) throw new Error("The registered snapshot is not valid for this due payroll window.");
+  }
   const policies = resolvePayrollPolicyCohort(
     input.obligations.map(({ agreement }) => agreement.agreement),
     now,
@@ -682,6 +787,11 @@ export async function executeProofBoundPayroll(
   if (unsupportedProtectedToken) {
     throw new Error(
       `FXFloor is unavailable for ${unsupportedProtectedToken}/USD because Pragma Mainnet has no usable TWAP checkpoint history for that pair.`,
+    );
+  }
+  if (advancedProfile && !snapshotPlan) {
+    throw new Error(
+      "Advanced PayrollIntegrity v2 requires an exact registered pre-payday snapshot; protect this payday before it becomes due.",
     );
   }
   const medianOnlyTokens = usedTokens.filter((token) => !protectedTokens.includes(token));
@@ -718,6 +828,62 @@ export async function executeProofBoundPayroll(
     fxSnapshots: snapshots,
     lines,
   });
+  let snapshotLink: Awaited<ReturnType<typeof buildObligationSnapshotLinkInputs>> | undefined;
+  let encryptedSnapshotWitness: EncryptedVaultRecord | undefined;
+  if (snapshotPlan) {
+    const byAgreement = new Map(input.obligations.map(({ agreement, payee }) => [
+      agreement.agreement.id,
+      { agreement, payee },
+    ]));
+    const directoryMatches = snapshotPlan.agreementBindings.every((binding) => {
+      const current = byAgreement.get(binding.agreementId);
+      return Boolean(current)
+        && binding.payeeId === current!.payee.id
+        && BigInt(binding.agreementCommitment) === BigInt(current!.agreement.agreementCommitment)
+        && BigInt(binding.recipientCommitment) === BigInt(current!.agreement.recipientCommitment)
+        && BigInt(binding.scheduleCommitment) === BigInt(recordProofScheduleCommitment(current!.agreement))
+        && BigInt(binding.claimCapabilityCommitment)
+          === BigInt(current!.agreement.claimCapabilityCommitment ?? "0x0");
+    });
+    if (!directoryMatches || byAgreement.size !== snapshotPlan.agreementBindings.length) {
+      throw new Error("The selected encrypted agreements differ from the registered payday snapshot.");
+    }
+    const payrollBuild = await buildPayrollIntegrityInputsFromSerialized(buildInput);
+    snapshotLink = await buildObligationSnapshotLinkInputs({
+      chainId: input.chainId,
+      sealAddress: input.sealAddress,
+      ownerAddress: snapshotPlan.snapshot.ownerAddress,
+      payroll: payrollBuild,
+      claimCapabilityCommitments: Object.fromEntries(snapshotPlan.agreementBindings.map((binding) => [
+        binding.agreementId,
+        binding.claimCapabilityCommitment,
+      ])),
+      graceEndsAt: BigInt(snapshotPlan.snapshot.graceEndsAt),
+      claimEndsAt: BigInt(snapshotPlan.snapshot.claimEndsAt),
+      validityStart,
+      validityExpiry,
+    });
+    payrollBuild.witness.circuitInputs = [{}, {}];
+    if (
+      BigInt(snapshotLink.snapshotCommitment) !== BigInt(snapshotPlan.snapshotCommitment)
+      || hashCanonicalJson(snapshotLink.snapshot) !== hashCanonicalJson(snapshotPlan.snapshot)
+    ) {
+      snapshotLink.circuitInputs = {};
+      throw new Error("The due payroll does not reproduce its immutable pre-payday snapshot.");
+    }
+    const snapshotRequestId = generateUuidV7();
+    encryptedSnapshotWitness = encryptVaultRecord({
+      exceptionCircuitProfile: "obligation_snapshot_v5",
+      circuitInput: snapshotLink.circuitInputs,
+    }, {
+      schemaVersion: 1,
+      organizationId: input.organizationId,
+      recordType: "payroll-proof-request",
+      recordId: snapshotRequestId,
+      revision,
+    }, [input.principal]);
+    snapshotLink.circuitInputs = {};
+  }
   const proofRequestId = generateUuidV7();
   const encryptedWitness = encryptVaultRecord(
     advancedProfile ? {
@@ -740,6 +906,24 @@ export async function executeProofBoundPayroll(
     principal: input.principal,
     onProgress: (stage) => input.onStage?.(stage),
   });
+  let snapshotProof: ExceptionProofWorkerSuccess | undefined;
+  if (snapshotPlan && snapshotLink && encryptedSnapshotWitness && input.proveSnapshot) {
+    input.onStage?.("snapshot");
+    snapshotProof = await input.proveSnapshot({
+      encryptedWitness: encryptedSnapshotWitness,
+      principal: input.principal,
+      onProgress: (stage) => input.onStage?.(stage),
+    });
+    if (snapshotProof.profile !== "obligation_snapshot_v5") {
+      throw new Error("The prover returned the wrong exception profile for this payday snapshot.");
+    }
+    const mismatch = Object.entries(snapshotLink.publicInputs).find(([key, value]) =>
+      BigInt(snapshotProof!.proof.publicInputs[key as keyof typeof snapshotLink.publicInputs])
+        !== BigInt(value));
+    if (mismatch) {
+      throw new Error(`The snapshot proof changed its immutable ${mismatch[0]} binding.`);
+    }
+  }
   // Prove before requesting any registry transaction. A remote prover can be
   // unavailable or reject this origin/session; no user should spend Mainnet
   // fees merely to discover that failure. The proved FX root is authorized
@@ -763,25 +947,35 @@ export async function executeProofBoundPayroll(
     throw new Error("The proof FX root differs from the root authorized for this payroll.");
   }
   const runNullifier = rootFromLimbs(publicInputs.runNullifierHigh, publicInputs.runNullifierLow);
+  if (snapshotPlan && (
+    BigInt(publicInputs.proofVersion) !== 2n
+    || BigInt(agreementRoot) !== BigInt(snapshotPlan.snapshot.baseAgreementRoot)
+    || BigInt(policyRoot) !== BigInt(snapshotPlan.snapshot.policyRoot)
+    || BigInt(runNullifier) !== BigInt(snapshotPlan.snapshot.runNullifier)
+  )) {
+    throw new Error("PayrollIntegrity v2 does not reproduce the registered snapshot run bindings.");
+  }
   for (const { agreement } of input.obligations) {
     if (BigInt(agreement.agreement.statutoryPolicy.catalogRoot) !== BigInt(policyRoot)) {
       throw new Error(`Agreement ${agreement.agreement.id} is bound to a different policy catalog root.`);
     }
   }
 
-  input.onStage?.("preflight");
-  const { readiness } = await input.client.checkDeploymentReadiness({
-    chainId: input.chainId,
-    sealAddress: input.sealAddress,
-    mode: 0,
-    proofVersion: Number(BigInt(publicInputs.proofVersion)),
-    agreementRoot,
-    policyRoot,
-    fxRoot,
-  });
-  if (!readiness.ready) {
-    const blockers = readiness.checks.filter((entry) => !entry.ready).map((entry) => entry.message);
-    throw new Error(`PAYO deployment is not ready: ${blockers.join(" ")}`);
+  if (!snapshotPlan) {
+    input.onStage?.("preflight");
+    const { readiness } = await input.client.checkDeploymentReadiness({
+      chainId: input.chainId,
+      sealAddress: input.sealAddress,
+      mode: 0,
+      proofVersion: Number(BigInt(publicInputs.proofVersion)),
+      agreementRoot,
+      policyRoot,
+      fxRoot,
+    });
+    if (!readiness.ready) {
+      const blockers = readiness.checks.filter((entry) => !entry.ready).map((entry) => entry.message);
+      throw new Error(`PAYO deployment is not ready: ${blockers.join(" ")}`);
+    }
   }
 
   const privateLines: PrivatePayrollLine[] = lines.map((line) => ({
@@ -800,7 +994,9 @@ export async function executeProofBoundPayroll(
     organizationId: input.organizationId,
     cycleId,
     revision,
-    dueAt: new Date(Number(validityStart) * 1_000).toISOString(),
+    dueAt: snapshotPlan
+      ? new Date(Number(snapshotPlan.snapshot.dueAt) * 1_000).toISOString()
+      : new Date(Number(validityStart) * 1_000).toISOString(),
     lines: privateLines,
     lineRecordMetadata: input.obligations.map(({ agreement, payee }) => ({
       agreementId: agreement.agreement.id,
@@ -813,6 +1009,7 @@ export async function executeProofBoundPayroll(
     organizationSecret: input.organizationSecret,
     principals: [input.principal],
     proofBinding: { agreementRoot, manifestRoot, policyRoot, fxRoot, runNullifier },
+    ...(snapshotPlan ? { obligationSnapshotPlanId: snapshotPlan.planId } : {}),
     claimProofSource: { buildInput },
     now,
   });
@@ -830,12 +1027,46 @@ export async function executeProofBoundPayroll(
   // Proof storage atomically promotes the run from calculated to proven. Do not
   // request the same transition again: the repository deliberately rejects a
   // proven -> proven transition as an invalid state-machine replay.
-  const sealed = buildPayoSealedPayroll({
-    sealAddress: input.sealAddress,
-    chainId: input.chainId,
-    shards: proof.shards,
-    nowUnixSeconds: nowUnix,
-  });
+  let snapshotProofBundleId: string | undefined;
+  let payoAction: STRK20_INVOKE_ACTION;
+  if (snapshotPlan && snapshotProof) {
+    snapshotProofBundleId = generateUuidV7();
+    await input.client.storeEncryptedProofBundle(prepareEncryptedExceptionProofBundle({
+      id: snapshotProofBundleId,
+      organizationId: input.organizationId,
+      runId,
+      revision,
+      proof: snapshotProof,
+      principals: [input.principal],
+    }));
+    input.onStage?.("proof_authorization");
+    const queued = await input.client.enqueuePayrollAuthorization({
+      runId,
+      payrollProofBundleId: proofBundleId,
+      snapshotProofBundleId,
+      payrollShards: [proof.shards[0].proofCalldata, proof.shards[1].proofCalldata],
+      snapshotProof: snapshotProof.proof.proofCalldata,
+    });
+    await waitForPayrollAuthorization({
+      client: input.client,
+      runId,
+      initial: queued.authorization,
+      pollIntervalMs: input.authorizationPollIntervalMs,
+      timeoutMs: input.authorizationTimeoutMs,
+    });
+    payoAction = buildAuthorizedPayrollAction({
+      sealAddress: input.sealAddress,
+      payrollPublicInputs: proof.shards[0].publicInputs,
+      snapshotPublicInputs: snapshotProof.proof.publicInputs,
+    });
+  } else {
+    payoAction = buildPayoSealedPayroll({
+      sealAddress: input.sealAddress,
+      chainId: input.chainId,
+      shards: proof.shards,
+      nowUnixSeconds: nowUnix,
+    }).invokeAction;
+  }
   const walletRequestId = generateUuidV7();
   const settlementId = generateUuidV7();
   const idempotencyKey = `payroll:${runId}:${walletRequestId}`;
@@ -889,7 +1120,7 @@ export async function executeProofBoundPayroll(
     [input.principal],
   );
   const pendingApproval: PendingPayrollSubmission = {
-    version: 3,
+    version: snapshotProofBundleId ? 4 : 3,
     organizationId: input.organizationId,
     runId,
     proofBundleId,
@@ -899,6 +1130,10 @@ export async function executeProofBoundPayroll(
     tokenTotalsCommitment,
     settlementEnvelope,
     proofShards: [proof.shards[0].proofCalldata, proof.shards[1].proofCalldata],
+    ...(snapshotProofBundleId ? {
+      authorizationMode: "staged_vnext" as const,
+      snapshotProofBundleId,
+    } : {}),
     createdAt: new Date().toISOString(),
   };
 
@@ -923,11 +1158,13 @@ export async function executeProofBoundPayroll(
     if (returnedId(settlementResponse.settlement, "settlement") !== settlementId) {
       throw new Error("PAYO returned a different settlement identifier for this payroll.");
     }
-    await retryDurableWrite(() => input.client.enqueueProofVerification({
-      settlementId,
-      proofBundleId,
-      shards: pendingApproval.proofShards,
-    }));
+    if (pendingApproval.authorizationMode !== "staged_vnext") {
+      await retryDurableWrite(() => input.client.enqueueProofVerification({
+        settlementId,
+        proofBundleId,
+        shards: pendingApproval.proofShards,
+      }));
+    }
     input.persistPendingSubmission?.(pendingApproval);
   } catch (error) {
     throw new PayrollSubmissionPersistenceError(
@@ -939,7 +1176,7 @@ export async function executeProofBoundPayroll(
 
   input.onStage?.("wallet");
   const transactionHash = await awaitWalletOrRecoveredTransaction({
-    submit: () => input.submitPayroll(walletRecipients, sealed.invokeAction),
+    submit: () => input.submitPayroll(walletRecipients, payoAction),
     readRecoveredTransactionHash: () => readRecoveredSettlementTransactionHash(input.client, settlementId),
   });
   if (!/^0x[0-9a-fA-F]{1,64}$/.test(transactionHash)) {

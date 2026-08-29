@@ -23,8 +23,15 @@ import { usePayoVault } from "../vault/payo-vault";
 import {
   loadEncryptedPayees,
   storeEncryptedPayee,
+  type PayeeClaimIdentity,
   type PayeeDirectoryRecord,
 } from "@/lib/client/payee-directory";
+import {
+  createPayoPublicIdentity,
+  parsePayoJsonText,
+  parsePayoPublicIdentity,
+  type PayoPublicIdentity,
+} from "@/lib/client/proof-package-files";
 import {
   obligationScheduleForRecord,
   loadEncryptedPayAgreements,
@@ -60,6 +67,7 @@ const memberTones = ["coral", "blue", "green", "yellow"] as const;
 type ClassificationFactKey = (typeof CLASSIFICATION_FACTS)[number]["key"];
 type ClassificationAnswerDraft = Record<ClassificationFactKey, "" | "yes" | "no">;
 const NET_INVOICE_POLICY_ID = "payo-net-invoice-no-withholding-v1";
+const MAX_PUBLIC_IDENTITY_FILE_BYTES = 16 * 1024;
 
 function classificationAnswerDraft(principalKind: "human" | "agent"): ClassificationAnswerDraft {
   return Object.fromEntries(CLASSIFICATION_FACTS.map(({ key }) => [key, principalKind === "agent" ? "no" : ""])) as ClassificationAnswerDraft;
@@ -99,6 +107,7 @@ export default function TeamPage() {
   const [principalKind, setPrincipalKind] = useState<"human" | "agent">("human");
   const [tokenPreference, setTokenPreference] = useState<PayrollTokenSymbol>("STRK");
   const [jurisdictionCode, setJurisdictionCode] = useState("US");
+  const [claimIdentity, setClaimIdentity] = useState<PayoPublicIdentity | null>(null);
   const [showAddAgreement, setShowAddAgreement] = useState(false);
   const [agreementPayeeId, setAgreementPayeeId] = useState("");
   const [agreementAmount, setAgreementAmount] = useState("");
@@ -130,6 +139,7 @@ export default function TeamPage() {
   const [fxFloorAmount, setFxFloorAmount] = useState("");
   const [directoryLoadedAt] = useState(() => Date.now());
   const directoryRefreshGeneration = useRef(0);
+  const claimIdentityInput = useRef<HTMLInputElement>(null);
 
   const classificationAnswers = useMemo<ClassificationFactsAnswers | null>(() => {
     if (Object.values(classificationAnswerDrafts).some((answer) => answer === "")) return null;
@@ -250,6 +260,9 @@ export default function TeamPage() {
     setDirectoryLoading(true);
     setDirectoryError("");
     try {
+      if (!claimIdentity || claimIdentity.format !== "payo-public-identity-v2") {
+        throw new Error("Import the contributor's PAYO v2 identity before creating a claim-enabled contributor.");
+      }
       await storeEncryptedPayee({
         client: vault.client,
         organizationId: vault.session.organizationId,
@@ -258,10 +271,16 @@ export default function TeamPage() {
         recipientAddress,
         tokenPreference,
         jurisdictionCode,
+        claimIdentity: {
+          principalId: claimIdentity.principalId,
+          publicKey: claimIdentity.publicKey,
+          claimCapabilityCommitment: claimIdentity.claimCapabilityCommitment as `0x${string}`,
+        } satisfies PayeeClaimIdentity,
         principal: vault.session.principal,
       });
       setDisplayName("");
       setRecipientAddress("");
+      setClaimIdentity(null);
       setShowAddPayee(false);
       await refreshPayees();
       notify("Encrypted contributor added");
@@ -269,6 +288,37 @@ export default function TeamPage() {
       setDirectoryError(error instanceof Error ? error.message : "The contributor could not be encrypted.");
     } finally {
       setDirectoryLoading(false);
+    }
+  };
+
+  const useCurrentClaimIdentity = () => {
+    if (!vault.session) return;
+    try {
+      setClaimIdentity(createPayoPublicIdentity(vault.session.principal));
+      setDirectoryError("");
+    } catch (error) {
+      setDirectoryError(error instanceof Error ? error.message : "The current PAYO identity could not be prepared.");
+    }
+  };
+
+  const importClaimIdentity = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setDirectoryError("");
+    try {
+      if (file.size > MAX_PUBLIC_IDENTITY_FILE_BYTES) {
+        throw new Error("The PAYO public identity file is too large.");
+      }
+      const identity = parsePayoPublicIdentity(
+        parsePayoJsonText(await file.text(), "The contributor PAYO identity file"),
+      );
+      if (identity.format !== "payo-public-identity-v2") {
+        throw new Error("This legacy identity can receive disclosures but cannot authorize vNext wage claims. Ask the contributor to export a new PAYO identity.");
+      }
+      setClaimIdentity(identity);
+    } catch (error) {
+      setDirectoryError(error instanceof Error ? error.message : "The contributor identity could not be imported.");
     }
   };
 
@@ -564,7 +614,14 @@ export default function TeamPage() {
             <label className="team-add-form__address"><span>Registered Starknet address</span><input value={recipientAddress} onChange={(event) => setRecipientAddress(event.target.value)} placeholder="0x…" required /></label>
             <label><span>Private token</span><select value={tokenPreference} onChange={(event) => setTokenPreference(event.target.value as PayrollTokenSymbol)}><option value="STRK">STRK</option><option value="USDC">USDC</option></select></label>
             <label><span>Jurisdiction</span><input value={jurisdictionCode} onChange={(event) => setJurisdictionCode(event.target.value)} placeholder="US-CA or GB" required maxLength={6} /></label>
-            <button className="button button--ink" type="submit" disabled={directoryLoading}>{directoryLoading ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />} Encrypt contributor</button>
+            <div className="proof-identity-actions team-add-form__address">
+              <button type="button" className="button button--soft" onClick={() => claimIdentityInput.current?.click()}><UserPlus size={16} /> Import worker identity</button>
+              <button type="button" className="button button--soft" onClick={useCurrentClaimIdentity}><KeyRound size={16} /> Use this vault</button>
+            </div>
+            <input ref={claimIdentityInput} className="proof-package-file-input" type="file" accept="application/json,.json" onChange={(event) => void importClaimIdentity(event)} tabIndex={-1} aria-hidden="true" />
+            <p className="team-form-note">The worker shares only an X25519 public key and claim-capability commitment. PAYO never imports their vault secret. “Use this vault” is suitable when this vault is also the claimant.</p>
+            {claimIdentity && <p className="proof-identity-fingerprint"><ShieldCheck size={13} /> Claim identity verified · {claimIdentity.principalId.slice(0, 12)}… · {claimIdentity.format === "payo-public-identity-v2" ? "vNext claims enabled" : "legacy disclosure only"}</p>}
+            <button className="button button--ink" type="submit" disabled={directoryLoading || claimIdentity?.format !== "payo-public-identity-v2"}>{directoryLoading ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />} Encrypt contributor</button>
           </form>
         )}
         {showAddAgreement && (

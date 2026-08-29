@@ -2,8 +2,10 @@ import { z } from "zod";
 import { encryptedVaultRecordSchema } from "@/lib/crypto/vault";
 import { ApiError, requirePrincipal } from "@/lib/server/auth";
 import { apiFailure, readJson } from "@/lib/server/http";
-import { provePayrollOnSelfHostedNode } from "@/lib/proof/server-prover";
+import { provePayoOnSelfHostedNode } from "@/lib/proof/server-prover";
+import type { PayoProofWorkerSuccess } from "@/lib/proof/protocol";
 import { enqueueProverJob, getProverJob, waitForProverJob, type ProverJobSnapshot } from "@/lib/proof/prover-job-store";
+import { getObligationClaimAccessGrant } from "@/lib/persistence/obligation-snapshot-plan-repository";
 import { requireOrganizationRole } from "@/lib/persistence/repository";
 
 export const runtime = "nodejs";
@@ -17,6 +19,7 @@ const requestSchema = z.object({
     publicKey: z.string().min(16).max(256),
     secretKey: z.string().min(16).max(256),
   }).strict(),
+  claimAccessGrantId: z.string().uuid().optional(),
 }).strict().superRefine((input, context) => {
   if (input.encryptedWitness.ciphertext.length > 2_000_000) {
     context.addIssue({ code: "custom", message: "The encrypted proof request is too large." });
@@ -50,7 +53,17 @@ function corsHeaders(origin: string | null): Record<string, string> {
   };
 }
 
-function proofResponse(proof: Awaited<ReturnType<typeof provePayrollOnSelfHostedNode>>, origin: string | null) {
+function proofResponse(proof: PayoProofWorkerSuccess, origin: string | null) {
+  if (proof.type === "exception-proof-complete") {
+    const { proof: proofBytes, ...exceptionProof } = proof.proof;
+    return Response.json({
+      ...proof,
+      proof: {
+        ...exceptionProof,
+        proofBase64: Buffer.from(proofBytes).toString("base64"),
+      },
+    }, { headers: corsHeaders(origin) });
+  }
   return Response.json({
     ...proof,
     shards: proof.shards.map(({ proof: proofBytes, ...shard }) => ({
@@ -61,7 +74,9 @@ function proofResponse(proof: Awaited<ReturnType<typeof provePayrollOnSelfHosted
 }
 
 function jobResponse(job: ProverJobSnapshot, origin: string | null) {
-  if (job.state === "complete" && job.result) return proofResponse(job.result, origin);
+  if (job.state === "complete" && job.result) {
+    return proofResponse(job.result, origin);
+  }
   if (job.state === "failed") {
     return Response.json({ error: job.error }, { status: 422, headers: corsHeaders(origin) });
   }
@@ -104,11 +119,20 @@ export async function POST(request: Request) {
     }
     const authenticated = await requirePrincipal(request);
     const input = requestSchema.parse(await readJson(request));
-    await requireOrganizationRole(
-      input.encryptedWitness.aad.organizationId,
-      authenticated,
-      ["admin", "operator"],
-    );
+    let expectedExceptionProfile: "wage_claim_v6" | undefined;
+    if (input.claimAccessGrantId) {
+      const grant = await getObligationClaimAccessGrant(input.claimAccessGrantId, authenticated);
+      if (grant.organizationId !== input.encryptedWitness.aad.organizationId) {
+        throw new ApiError(403, "The worker proof request does not match its claim access.", "CLAIM_ACCESS_MISMATCH");
+      }
+      expectedExceptionProfile = "wage_claim_v6";
+    } else {
+      await requireOrganizationRole(
+        input.encryptedWitness.aad.organizationId,
+        authenticated,
+        ["admin", "operator"],
+      );
+    }
     if (input.principal.principalId !== authenticated.principalId) {
       throw new ApiError(403, "The proof key does not belong to the authenticated principal.", "PROVER_KEY_FORBIDDEN");
     }
@@ -122,7 +146,7 @@ export async function POST(request: Request) {
       job = enqueueProverJob({
         principalId: authenticated.principalId,
         request: { ...input, version: 1 },
-        run: () => provePayrollOnSelfHostedNode(input),
+        run: () => provePayoOnSelfHostedNode(input, { expectedExceptionProfile }),
       });
     } catch (error) {
       if (error instanceof Error && error.message === "PROVER_REQUEST_ID_REUSED") {

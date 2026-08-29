@@ -1,0 +1,10 @@
+[package]
+name = "payo_wage_remediation_v2"
+type = "bin"
+authors = ["PAYO contributors"]
+compiler_version = ">=1.0.0"
+
+[dependencies]
+exception_protocol = { path = "../exception_protocol" }
+fx_types = { path = "../fx_proof_types" }
+payroll_types = { path = "../payroll_proof_types" }

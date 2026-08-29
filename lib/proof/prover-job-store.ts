@@ -1,6 +1,14 @@
 import { createHash } from "node:crypto";
-import type { ProofWorkerSuccess } from "./protocol";
-import type { RemoteProofRequest } from "./remote-prover";
+import type { EncryptedVaultRecord, VaultPrincipalKeyPair } from "@/lib/crypto/vault";
+import type { PayoProofWorkerSuccess } from "./protocol";
+
+export type ProverQueuedRequest = {
+  version: 1;
+  requestId: string;
+  encryptedWitness: EncryptedVaultRecord;
+  principal: VaultPrincipalKeyPair;
+  claimAccessGrantId?: string;
+};
 
 export type ProverJobState = "queued" | "processing" | "complete" | "failed";
 
@@ -9,7 +17,7 @@ export type ProverJobSnapshot = {
   state: ProverJobState;
   createdAt: string;
   updatedAt: string;
-  result?: ProofWorkerSuccess;
+  result?: PayoProofWorkerSuccess;
   error?: { code: string; message: string };
 };
 
@@ -17,7 +25,7 @@ type ProverJob = ProverJobSnapshot & {
   key: string;
   principalId: string;
   fingerprint: string;
-  run?: () => Promise<ProofWorkerSuccess>;
+  run?: () => Promise<PayoProofWorkerSuccess>;
 };
 
 const COMPLETED_JOB_TTL_MS = 30 * 60_000;
@@ -31,7 +39,7 @@ function jobKey(principalId: string, requestId: string): string {
   return `${principalId}:${requestId}`;
 }
 
-function requestFingerprint(request: RemoteProofRequest): string {
+function requestFingerprint(request: ProverQueuedRequest): string {
   return createHash("sha256").update(JSON.stringify(request)).digest("hex");
 }
 
@@ -95,8 +103,8 @@ async function drainQueue(): Promise<void> {
 
 export function enqueueProverJob(input: {
   principalId: string;
-  request: RemoteProofRequest;
-  run: () => Promise<ProofWorkerSuccess>;
+  request: ProverQueuedRequest;
+  run: () => Promise<PayoProofWorkerSuccess>;
 }): ProverJobSnapshot {
   removeExpiredJobs();
   const key = jobKey(input.principalId, input.request.requestId);

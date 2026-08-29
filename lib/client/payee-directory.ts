@@ -15,6 +15,12 @@ import { validateAndParseAddress } from "starknet";
 
 export type PayeeDirectoryRecord = ReturnType<typeof payeeRecordSchema.parse>;
 
+export type PayeeClaimIdentity = {
+  principalId: string;
+  publicKey: string;
+  claimCapabilityCommitment: `0x${string}`;
+};
+
 export function prepareEncryptedPayee(input: {
   organizationId: string;
   displayName: string;
@@ -22,6 +28,7 @@ export function prepareEncryptedPayee(input: {
   recipientAddress: string;
   tokenPreference: PayrollTokenSymbol;
   jurisdictionCode: string;
+  claimIdentity?: PayeeClaimIdentity;
   principal: VaultPrincipalKeyPair;
   now?: Date;
 }) {
@@ -48,6 +55,11 @@ export function prepareEncryptedPayee(input: {
     recipientAddress,
     tokenPreference: input.tokenPreference,
     jurisdictionCode: input.jurisdictionCode.trim().toUpperCase(),
+    ...(input.claimIdentity ? {
+      claimIdentityPrincipalId: input.claimIdentity.principalId,
+      claimIdentityPublicKey: input.claimIdentity.publicKey,
+      claimCapabilityCommitment: input.claimIdentity.claimCapabilityCommitment,
+    } : {}),
     status: "active",
   });
   const principalRecord = principalRecordSchema.parse({
@@ -95,6 +107,7 @@ export async function storeEncryptedPayee(input: {
   recipientAddress: string;
   tokenPreference: PayrollTokenSymbol;
   jurisdictionCode: string;
+  claimIdentity?: PayeeClaimIdentity;
   principal: VaultPrincipalKeyPair;
   now?: Date;
 }): Promise<PayeeDirectoryRecord> {

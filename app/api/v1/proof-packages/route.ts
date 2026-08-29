@@ -1,4 +1,4 @@
-import { encryptedPayrollIntegrityBundleCreateSchema } from "@/lib/domain/proof-bundle";
+import { encryptedPayoProofBundleCreateSchema } from "@/lib/domain/proof-bundle";
 import { storeEncryptedPayrollIntegrityBundle } from "@/lib/persistence/proof-bundle-repository";
 import { requirePrincipal } from "@/lib/server/auth";
 import { apiFailure, readJson } from "@/lib/server/http";
@@ -7,7 +7,7 @@ import { getPayoDeploymentConfig } from "@/lib/server/payo-deployment";
 export async function POST(request: Request) {
   try {
     const principal = await requirePrincipal(request);
-    const bundle = encryptedPayrollIntegrityBundleCreateSchema.parse(await readJson(request));
+    const bundle = encryptedPayoProofBundleCreateSchema.parse(await readJson(request));
     const stored = await storeEncryptedPayrollIntegrityBundle({
       bundle,
       principal,

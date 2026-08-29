@@ -3306,6 +3306,12 @@ button:focus-visible {
 .composer-top { display: flex; justify-content: space-between; align-items: flex-end; gap: 15px; }
 .composer-top h4 { margin: 5px 0 0; font-family: Georgia, serif; font-size: 25px; letter-spacing: -.8px; }
 .composer-top .button { min-height: 36px; padding: 0 12px; font-size: 9px; }
+.snapshot-payday-date { padding: 6px 9px; color: #665c3d; background: var(--yellow-soft); border: 1px solid #d8ca96; border-radius: 999px; font-size: 7.5px; font-weight: 850; white-space: nowrap; }
+.snapshot-protection { position: relative; overflow: hidden; border-style: solid; background: linear-gradient(135deg, #fffaf0 0%, #f4edda 100%); }
+.snapshot-protection::before { position: absolute; width: 42px; height: 42px; right: -12px; bottom: -20px; content: ""; background: rgba(219, 191, 94, .16); border: 1px solid rgba(177, 143, 43, .18); border-radius: 50%; }
+.snapshot-protection > * { position: relative; z-index: 1; }
+.snapshot-protection--active { border-color: #9ebc99; background: linear-gradient(135deg, #edf8eb 0%, #ddeedc 100%); }
+.snapshot-protection + .composer-top { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
 .recipient-labels { margin: 18px 38px 6px 41px; display: grid; grid-template-columns: .75fr 1.45fr .6fr 24px; gap: 9px; color: var(--muted); font-size: 7px; font-weight: 850; text-transform: uppercase; letter-spacing: .06em; }
 .recipient-list { display: grid; gap: 8px; }
 .payroll-empty-guide { gap: 8px; padding: 24px 18px; border: 1px dashed #c9be95; border-radius: 12px; background: #fffaf0; }
@@ -3423,6 +3429,9 @@ button:focus-visible {
   .wallet-picker { padding: 21px 17px; }
   .composer-top { align-items: stretch; flex-direction: column; }
   .composer-top .button { width: 100%; }
+  .snapshot-payday-date { width: fit-content; }
+  .snapshot-protection { align-items: stretch; flex-direction: column; }
+  .snapshot-protection .button { width: 100%; }
   .composer-summary { grid-template-columns: 1fr; }
 }
 .vault-gate {
@@ -3497,4 +3506,122 @@ button:focus-visible {
   .vault-gate { align-items: stretch; flex-wrap: wrap; }
   .vault-gate__form, .vault-gate__form--unlock { grid-template-columns: 1fr; width: 100%; }
   .vault-gate__error { bottom: auto; left: auto; position: static; width: 100%; }
+}
+
+
+/* Worker-owned Claim v6 and employer-bound Remediation v7 */
+.wage-vnext-card {
+  background: #edf7ff;
+  border: 1.5px solid #8eb9dc;
+  box-shadow: 3px 3px 0 #8eb9dc;
+  overflow: hidden;
+  position: relative;
+}
+.wage-vnext-card::after {
+  background: #ffd96a;
+  border: 1.5px solid var(--ink);
+  border-radius: 50%;
+  content: "";
+  height: 18px;
+  position: absolute;
+  right: 14px;
+  top: -8px;
+  width: 18px;
+}
+.wage-vnext-card > p { color: #47667d; }
+.wage-vnext-heading,
+.wage-vnext-section__title,
+.wage-vnext-state,
+.wage-vnext-item > div:first-child {
+  align-items: center;
+  display: flex;
+}
+.wage-vnext-heading { justify-content: space-between; gap: 10px; }
+.wage-vnext-heading h3 { margin-bottom: 0; }
+.wage-vnext-heading .button { min-height: 31px; padding: 6px 9px; }
+.wage-vnext-section {
+  border-top: 1px dashed #8eb9dc;
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 11px;
+}
+.wage-vnext-section__title { gap: 7px; }
+.wage-vnext-section__title > span { display: grid; gap: 1px; }
+.wage-vnext-section__title small {
+  color: #47799d;
+  font-size: 7px;
+  font-weight: 900;
+  letter-spacing: .09em;
+}
+.wage-vnext-section__title strong { font-size: 10px; }
+.wage-vnext-empty {
+  background: rgba(255, 255, 255, .58);
+  border: 1px solid #bed8eb;
+  border-radius: 9px;
+  color: #587389 !important;
+  font-size: 8px;
+  margin: 0;
+  padding: 9px;
+}
+.wage-vnext-item {
+  background: rgba(255, 255, 255, .72);
+  border: 1px solid #a9cbe3;
+  border-radius: 11px;
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+}
+.wage-vnext-item > div:first-child {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 2px;
+}
+.wage-vnext-item small { color: #47799d; font-size: 7px; font-weight: 850; text-transform: uppercase; }
+.wage-vnext-item strong { color: var(--ink); font-size: 9px; }
+.wage-vnext-item span { color: #5b7486; font-size: 7.5px; }
+.wage-vnext-item > button,
+.wage-vnext-actions button,
+.wage-vnext-state button {
+  align-items: center;
+  background: #fff;
+  border: 1.5px solid var(--ink);
+  border-radius: 8px;
+  color: var(--ink);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 7px;
+  font-weight: 850;
+  gap: 5px;
+  justify-content: center;
+  min-height: 30px;
+  padding: 6px 8px;
+}
+.wage-vnext-item button:disabled { cursor: not-allowed; opacity: .48; }
+.wage-vnext-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+.wage-vnext-actions button:first-child { background: #fff1c8; }
+.wage-vnext-state {
+  background: #f6fbff;
+  border-radius: 8px;
+  gap: 7px;
+  justify-content: space-between;
+  padding: 7px;
+}
+.wage-vnext-state > span { display: grid; gap: 2px; min-width: 0; }
+.wage-vnext-state i {
+  align-items: center;
+  color: #34734a;
+  display: inline-flex;
+  font-size: 7px;
+  font-style: normal;
+  font-weight: 850;
+  gap: 4px;
+  text-align: right;
+}
+@media (max-width: 640px) {
+  .wage-vnext-heading { align-items: flex-start; flex-direction: column; }
+  .wage-vnext-heading .button { width: 100%; }
+  .wage-vnext-state { align-items: stretch; flex-direction: column; }
+  .wage-vnext-state button { width: 100%; }
 }

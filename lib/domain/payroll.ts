@@ -156,6 +156,7 @@ export const encryptedRunCreateSchema = z.object({
   policyRoot: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
   fxRoot: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
   runNullifier: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+  obligationSnapshotPlanId: z.string().uuid().optional(),
   lineRecords: z.array(z.object({
     id: z.string().min(8).max(128),
     revision: z.literal(1),

@@ -97,8 +97,25 @@ export const payeeRecordSchema = recordHeaderSchema.extend({
   recipientAddress: starknetAddressSchema,
   tokenPreference: payrollTokenSchema,
   jurisdictionCode: z.string().regex(/^[A-Z]{2}(-[A-Z0-9]{1,3})?$/),
+  claimIdentityPrincipalId: vaultPrincipalIdSchema.optional(),
+  claimIdentityPublicKey: z.string().min(16).max(160).optional(),
+  claimCapabilityCommitment: commitmentSchema.optional(),
   status: z.enum(["active", "offboarding", "inactive"]),
-}).strict();
+}).strict().superRefine((record, context) => {
+  const fields = [
+    record.claimIdentityPrincipalId,
+    record.claimIdentityPublicKey,
+    record.claimCapabilityCommitment,
+  ];
+  const configured = fields.filter(Boolean).length;
+  if (configured !== 0 && configured !== fields.length) {
+    context.addIssue({
+      code: "custom",
+      path: ["claimCapabilityCommitment"],
+      message: "A claim identity requires its principal, public key and capability commitment together.",
+    });
+  }
+});
 
 export const payAgreementRecordSchema = recordHeaderSchema.extend({
   payeeId: uuidV7Schema,
@@ -107,6 +124,9 @@ export const payAgreementRecordSchema = recordHeaderSchema.extend({
   recipientSalt: commitmentSchema,
   agreementSalt: commitmentSchema,
   agreementCommitment: commitmentSchema,
+  // Optional only for pre-vNext legacy records. New claim-enabled agreements
+  // copy the worker-owned public capability commitment from the payee record.
+  claimCapabilityCommitment: commitmentSchema.optional(),
   // The v2 circuit uses a Poseidon plan commitment while the externally
   // disclosed agreement commitment remains Keccak. Persist the exact proof
   // schedule binding so durable-run locking never compares different domains.

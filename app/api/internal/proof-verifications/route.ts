@@ -1,6 +1,8 @@
 import { Account, RpcProvider } from "starknet";
 import { authorizeInternalWorker } from "@/lib/server/internal-auth";
 import { getPayoDeploymentConfig } from "@/lib/server/payo-deployment";
+import { processExceptionAuthorizationBatch } from "@/lib/server/exception-authorization-relayer";
+import { processPayrollAuthorizationBatch } from "@/lib/server/payroll-authorization-relayer";
 import { processProofVerificationBatch } from "@/lib/server/proof-relayer";
 import { withStarknetRelayerSubmissionLock } from "@/lib/persistence/relayer-lock";
 
@@ -50,27 +52,58 @@ export async function POST(request: Request) {
       address: relayerAddress,
       signer: relayerPrivateKey,
     });
-    const result = await processProofVerificationBatch({
-      rpc: {
-        callContract: (call, blockIdentifier) => provider.callContract(call, blockIdentifier),
-        getTransactionReceipt: (transactionHash) => provider.getTransactionReceipt(transactionHash),
-        getBlockNumber: () => provider.getBlockNumber(),
-        getBlockWithTxHashes: (blockNumber) => provider.getBlockWithTxHashes(blockNumber),
-      },
-      submitter: {
-        submit: (call) => withStarknetRelayerSubmissionLock(relayerAddress, async () => {
+    const rpc = {
+      callContract: (call: Parameters<typeof provider.callContract>[0], blockIdentifier?: number) =>
+        provider.callContract(call, blockIdentifier),
+      getTransactionReceipt: (transactionHash: string) => provider.getTransactionReceipt(transactionHash),
+      getBlockNumber: () => provider.getBlockNumber(),
+      getBlockWithTxHashes: (blockNumber: number) => provider.getBlockWithTxHashes(blockNumber),
+    };
+    const submitter = {
+      submit: (call: Parameters<typeof account.execute>[0]) =>
+        withStarknetRelayerSubmissionLock(relayerAddress, async () => {
           // PAYO relays large deterministic verifier payloads. Do not depend on
           // Starknet.js tip sampling: sparse recent V3 blocks can make that
           // heuristic fail before the RPC receives an otherwise valid invoke.
           const response = await account.execute(call, { tip: 0 });
           return { transactionHash: response.transaction_hash };
         }),
+    };
+    const workerId = request.headers.get("x-payo-worker-id") || "payo-proof-relayer";
+    const proofVerifications = await processProofVerificationBatch({
+      rpc: {
+        ...rpc,
       },
+      submitter,
       deployment,
-      workerId: request.headers.get("x-payo-worker-id") || "payo-proof-relayer",
+      workerId,
       limit: 2,
     });
-    return Response.json(result);
+    const payrollAuthorizations = await processPayrollAuthorizationBatch({
+      rpc,
+      submitter,
+      deployment,
+      workerId,
+      limit: 2,
+    });
+    const exceptionAuthorizations = await processExceptionAuthorizationBatch({
+      rpc,
+      submitter,
+      deployment,
+      workerId,
+      limit: 2,
+    });
+    return Response.json({
+      leased: proofVerifications.leased + payrollAuthorizations.leased + exceptionAuthorizations.leased,
+      results: [
+        ...proofVerifications.results.map((result) => ({ kind: "payroll_proof", ...result })),
+        ...payrollAuthorizations.results.map((result) => ({ kind: "payroll_authorization", ...result })),
+        ...exceptionAuthorizations.results.map((result) => ({ kind: "exception_authorization", ...result })),
+      ],
+      proofVerifications,
+      payrollAuthorizations,
+      exceptionAuthorizations,
+    });
   } catch {
     return Response.json({
       error: { code: "PROOF_RELAYER_FAILURE", message: "Proof relay processing failed closed." },

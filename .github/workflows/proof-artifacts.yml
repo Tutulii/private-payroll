@@ -222,6 +222,44 @@ jobs:
           scarb build
           snforge test
 
+      - name: Reproduce and test the wage-claim vNext circuits
+        run: |
+          for profile in obligation_snapshot_link wage_claim_v2 wage_remediation_v2; do
+            (
+              cd "circuits/$profile"
+              nargo test
+              nargo build
+            )
+          done
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const profiles = [
+            ["obligation_snapshot_link", "payo_obligation_snapshot_link", "obligation_snapshot_link-v5"],
+            ["wage_claim_v2", "payo_wage_claim_v2", "wage_claim-v6"],
+            ["wage_remediation_v2", "payo_wage_remediation_v2", "wage_remediation-v7"],
+          ];
+          for (const [directory, artifact, publishedName] of profiles) {
+            const built = JSON.parse(fs.readFileSync(`circuits/${directory}/target/${artifact}.json`));
+            const published = JSON.parse(fs.readFileSync(`public/circuits/${publishedName}.json`));
+            for (const key of ["noir_version", "abi", "bytecode", "expression_width"]) {
+              if (JSON.stringify(built[key]) !== JSON.stringify(published[key])) {
+                throw new Error(`${publishedName} ${key} differs from the pinned clean build`);
+              }
+            }
+          }
+          NODE
+
+      - name: Generate and self-verify all wage-claim vNext proof vectors
+        env:
+          PAYO_EXCEPTION_PROOF_FIXTURE_DIR: contracts/exception_vnext_integration/tests
+        run: npm run proof:exception:verify
+
+      - name: Pass fresh v5/v6/v7 proofs through their real Cairo verifiers and seal
+        working-directory: contracts/exception_vnext_integration
+        run: |
+          scarb build
+          snforge test
+
       - name: Pass dynamically deployment-bound proofs through standalone RPC Devnet
         run: |
           starknet-devnet \

@@ -1,0 +1,55 @@
+{
+  "generatedBy": "scripts/verify-exception-prover.ts",
+  "chainId": "0x1",
+  "sealAddress": "0x12345",
+  "fixtures": [
+    {
+      "profile": "obligation_snapshot_v5",
+      "fixtureName": "obligation_snapshot_v5",
+      "circuitSha256": "0x0ab9ec30937c59911dc57b70e5cb1a3f837a06ea0b9fd8aebdcc90221663707d",
+      "provingTimeMs": 37142,
+      "calldataFelts": 3091,
+      "calldataHash": "0x12e5a3b60a145312bacad8f0b17d45722113fc2eed997ccb8334b8cbc4dfea0"
+    },
+    {
+      "profile": "wage_claim_v6",
+      "fixtureName": "wage_claim_v6",
+      "circuitSha256": "0xcc85586de2e3ea273e6769cdefcab96df4d781e7fee9da303c353c34b749c2bf",
+      "provingTimeMs": 67622,
+      "calldataFelts": 3127,
+      "calldataHash": "0x7d3d75364da1395ab6d7b1bf0baf9862b4da6a5ded8bbb1b7ab63e9c24700a9"
+    },
+    {
+      "profile": "wage_remediation_v7",
+      "fixtureName": "wage_remediation_v7",
+      "circuitSha256": "0x18c0c90caaf5e3caf412acce0c197a13e3d90f79e2166308dd08a6ae299ade54",
+      "provingTimeMs": 58883,
+      "calldataFelts": 3127,
+      "calldataHash": "0x1a28b0788623ef8887645287b3d3136390524c648382f16e225e2d3c706dc18"
+    },
+    {
+      "profile": "wage_claim_v6",
+      "fixtureName": "wage_claim_v6_fx_floor",
+      "circuitSha256": "0xcc85586de2e3ea273e6769cdefcab96df4d781e7fee9da303c353c34b749c2bf",
+      "provingTimeMs": 63744,
+      "calldataFelts": 3127,
+      "calldataHash": "0x7545fa1e2debb000da0aa6370d5916567b6f31af0ef30fec562a1e3f60ff4d6"
+    },
+    {
+      "profile": "wage_remediation_v7",
+      "fixtureName": "wage_remediation_v7_fx_floor",
+      "circuitSha256": "0x18c0c90caaf5e3caf412acce0c197a13e3d90f79e2166308dd08a6ae299ade54",
+      "provingTimeMs": 57586,
+      "calldataFelts": 3127,
+      "calldataHash": "0x24461ee56849c67bc55d2821a66c8f56ad6e4cba2ea7b78d26605397c125493"
+    },
+    {
+      "profile": "wage_claim_v6",
+      "fixtureName": "wage_claim_v6_final_pay",
+      "circuitSha256": "0xcc85586de2e3ea273e6769cdefcab96df4d781e7fee9da303c353c34b749c2bf",
+      "provingTimeMs": 73476,
+      "calldataFelts": 3127,
+      "calldataHash": "0x3a514ca53716914df1ee75c2d214e1a444d955231751ba0929231c8596ccfd7"
+    }
+  ]
+}

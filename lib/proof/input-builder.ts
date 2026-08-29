@@ -104,6 +104,92 @@ export type PayrollIntegrityInputBuild = {
   fxRoot: `0x${string}`;
   runNullifier: `0x${string}`;
   calculatedLines: CalculatedPayrollLine[];
+  proofBindings: PayrollIntegrityProofLineBinding[];
+};
+
+export type PayrollAgreementCircuitWitness = {
+  enabled: boolean;
+  id_commitment: number[];
+  recipient_commitment: number[];
+  earnings: string[];
+  earnings_count: string;
+  token: string;
+  policy_commitment: number[];
+  schedule_commitment: number[];
+  due_at: string;
+  valid_until: string;
+  classification_declared: string;
+  classification_score: string;
+  classification_employee_threshold: string;
+  final_pay_mode: boolean;
+  final_required_mask: string;
+  final_components: string[];
+  fx_floor_atomic: string;
+  reference_currency: string;
+  salt: number[];
+};
+
+export type PayrollLineCircuitWitness = {
+  active: boolean;
+  deductions: string[];
+  deductions_count: string;
+  policy_slot: string;
+  fx_slot: string;
+  salt: number[];
+  classification_treatment: string;
+  final_included_mask: string;
+  reference_value_atomic: string;
+};
+
+export type FxSnapshotCircuitWitness = {
+  token: string;
+  token_decimals: string;
+  reference_currency: string;
+  quote_decimals: string;
+  feed_commitment: number[];
+  sources_commitment: number[];
+  price_numerator: string;
+  price_denominator: string;
+  observed_at: string;
+  source_count: string;
+  minimum_source_count: string;
+  maximum_age_seconds: string;
+  haircut_bps: string;
+};
+
+export type MerkleCircuitWitness = {
+  siblings: string[];
+  path_bits: boolean[];
+};
+
+export type PayrollIntegrityProofLineBinding = {
+  index: number;
+  agreementId: string;
+  source: PayrollIntegrityLineInput;
+  calculated: CalculatedPayrollLine;
+  agreementLeaf: `0x${string}`;
+  payrollLeaf: `0x${string}`;
+  agreement: PayrollAgreementCircuitWitness;
+  line: PayrollLineCircuitWitness;
+  fxSnapshot: FxSnapshotCircuitWitness;
+  fxMembership: MerkleCircuitWitness;
+};
+
+export type PayrollAgreementSnapshotLineBinding = {
+  index: number;
+  agreementId: string;
+  source: PayrollIntegrityLineInput;
+  calculated: CalculatedPayrollLine;
+  agreementLeaf: `0x${string}`;
+  agreement: PayrollAgreementCircuitWitness;
+};
+
+export type PayrollAgreementSnapshotBuild = {
+  agreementRoot: `0x${string}`;
+  policyRoot: `0x${string}`;
+  runNullifier: `0x${string}`;
+  calculatedLines: CalculatedPayrollLine[];
+  proofBindings: PayrollAgreementSnapshotLineBinding[];
 };
 
 function bytes32(value: string): number[] {
@@ -304,6 +390,33 @@ function prepareAgreementDetails(input: {
   return prepared;
 }
 
+function buildAgreementWitnesses(
+  prepared: readonly PreparedAgreement[],
+  policyDetails: readonly PreparedPolicy[],
+): PayrollAgreementCircuitWitness[] {
+  return prepared.map((entry) => ({
+    enabled: true,
+    id_commitment: bytes32(entry.idCommitment),
+    recipient_commitment: bytes32(entry.recipientCommitment),
+    earnings: padded(entry.calculated.earningsAtomic, 8, () => "0"),
+    earnings_count: entry.calculated.earningsAtomic.length.toString(),
+    token: entry.calculated.token === "STRK" ? "0" : "1",
+    policy_commitment: bytes32(policyDetails[entry.policySlot].commitment),
+    schedule_commitment: bytes32(entry.source.scheduleCommitment),
+    due_at: boundedUnsigned(entry.source.dueAt, 64, "Agreement due timestamp"),
+    valid_until: boundedUnsigned(entry.source.validUntil, 64, "Agreement expiry timestamp"),
+    classification_declared: entry.source.classification.declared.toString(),
+    classification_score: entry.source.classification.score.toString(),
+    classification_employee_threshold: entry.source.classification.employeeThreshold.toString(),
+    final_pay_mode: Boolean(entry.source.finalPay),
+    final_required_mask: (entry.source.finalPay?.requiredMask ?? 0).toString(),
+    final_components: padded(entry.source.finalPay?.componentsAtomic ?? [], 5, () => "0"),
+    fx_floor_atomic: entry.source.fxFloorAtomic ?? "0",
+    reference_currency: entry.source.referenceCurrency === "USD" ? "0" : "1",
+    salt: bytes32(entry.source.agreementSalt),
+  }));
+}
+
 function cycleBytes(cycleId: string): { value: number[]; length: number } {
   const encoded = new TextEncoder().encode(cycleId);
   if (encoded.length === 0 || encoded.length > 64) throw new Error("Cycle ID must contain 1–64 UTF-8 bytes.");
@@ -376,6 +489,64 @@ export async function buildPayrollAgreementRoot(input: {
   return committer.buildProofFixedMerkleRoot(
     prepared.map(({ agreementTerms }) => agreementTerms),
   );
+}
+
+/**
+ * Builds the immutable agreement-side payroll state without a short-lived FX
+ * observation. This is safe to prepare before payday and must be reproduced by
+ * the later PayrollIntegrity proof before its reserved run can be consumed.
+ */
+export async function buildPayrollAgreementSnapshot(input: {
+  organizationSecret: string;
+  cycleId: string;
+  revision: number;
+  policies: readonly PolicyPack[];
+  lines: readonly PayrollIntegrityLineInput[];
+}): Promise<PayrollAgreementSnapshotBuild> {
+  if (input.lines.length < 1 || input.lines.length > MAX_LINES) {
+    throw new Error(`An obligation snapshot requires 1–${MAX_LINES} agreement lines.`);
+  }
+  if (input.policies.length < 1 || input.policies.length > 4) {
+    throw new Error("An obligation snapshot requires 1–4 policy programs.");
+  }
+  if (!Number.isInteger(input.revision) || input.revision < 1 || input.revision >= 2 ** 32) {
+    throw new Error("Payroll snapshot revision must be a positive u32.");
+  }
+  bytes32(input.organizationSecret);
+  cycleBytes(input.cycleId);
+  const committer = await createProofCommitter();
+  const policyDetails: PreparedPolicy[] = input.policies.map((pack) => ({
+    pack,
+    compiled: compilePolicyPack(pack),
+    commitment: policyPackCommitment(pack),
+  }));
+  const policyRoot = committer.buildProofCatalog(
+    policyDetails.map(({ commitment }) => commitment),
+  ).root;
+  const prepared = prepareAgreementDetails({ lines: input.lines, policyDetails, committer });
+  const agreementRoot = committer.buildProofFixedMerkleRoot(
+    prepared.map(({ agreementTerms }) => agreementTerms),
+  );
+  const runNullifier = deriveRunNullifier({
+    organizationSecret: input.organizationSecret,
+    cycleId: input.cycleId,
+    revision: input.revision,
+  });
+  const agreements = buildAgreementWitnesses(prepared, policyDetails);
+  return {
+    agreementRoot,
+    policyRoot,
+    runNullifier,
+    calculatedLines: prepared.map(({ calculated }) => calculated),
+    proofBindings: prepared.map((entry, index) => ({
+      index,
+      agreementId: entry.source.agreementId,
+      source: entry.source,
+      calculated: entry.calculated,
+      agreementLeaf: entry.agreementTerms,
+      agreement: agreements[index],
+    })),
+  };
 }
 
 export function serializePayrollIntegrityBuildRequest(input: {
@@ -522,27 +693,7 @@ export async function buildPayrollIntegrityInputs(input: {
     () => BigInt(PAYO_PROOF_EMPTY_LEAF).toString(),
   );
 
-  const agreementWitnesses = prepared.map((entry) => ({
-    enabled: true,
-    id_commitment: bytes32(entry.idCommitment),
-    recipient_commitment: bytes32(entry.recipientCommitment),
-    earnings: padded(entry.calculated.earningsAtomic, 8, () => "0"),
-    earnings_count: entry.calculated.earningsAtomic.length.toString(),
-    token: entry.calculated.token === "STRK" ? "0" : "1",
-    policy_commitment: bytes32(policyDetails[entry.policySlot].commitment),
-    schedule_commitment: bytes32(entry.source.scheduleCommitment),
-    due_at: boundedUnsigned(entry.source.dueAt, 64, "Agreement due timestamp"),
-    valid_until: boundedUnsigned(entry.source.validUntil, 64, "Agreement expiry timestamp"),
-    classification_declared: entry.source.classification.declared.toString(),
-    classification_score: entry.source.classification.score.toString(),
-    classification_employee_threshold: entry.source.classification.employeeThreshold.toString(),
-    final_pay_mode: Boolean(entry.source.finalPay),
-    final_required_mask: (entry.source.finalPay?.requiredMask ?? 0).toString(),
-    final_components: padded(entry.source.finalPay?.componentsAtomic ?? [], 5, () => "0"),
-    fx_floor_atomic: entry.source.fxFloorAtomic ?? "0",
-    reference_currency: entry.source.referenceCurrency === "USD" ? "0" : "1",
-    salt: bytes32(entry.source.agreementSalt),
-  }));
+  const agreementWitnesses = buildAgreementWitnesses(prepared, policyDetails);
   const lineWitnesses = prepared.map((entry) => ({
     active: true,
     deductions: padded(entry.calculated.deductionsAtomic, 8, () => "0"),
@@ -660,5 +811,17 @@ export async function buildPayrollIntegrityInputs(input: {
     fxRoot: fxCatalog.root,
     runNullifier: nullifier,
     calculatedLines: prepared.map(({ calculated }) => calculated),
+    proofBindings: prepared.map((entry, index) => ({
+      index,
+      agreementId: entry.source.agreementId,
+      source: entry.source,
+      calculated: entry.calculated,
+      agreementLeaf: entry.agreementTerms,
+      payrollLeaf: entry.payrollLeaf,
+      agreement: agreementWitnesses[index] as PayrollAgreementCircuitWitness,
+      line: lineWitnesses[index] as PayrollLineCircuitWitness,
+      fxSnapshot: fxWitnesses[entry.fxSlot].snapshot as FxSnapshotCircuitWitness,
+      fxMembership: fxWitnesses[entry.fxSlot].membership as MerkleCircuitWitness,
+    })),
   };
 }

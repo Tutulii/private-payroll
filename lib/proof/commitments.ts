@@ -16,6 +16,8 @@ export const PAYO_PROOF_DOMAIN_PAYROLL_LINE = 4n;
 export const PAYO_PROOF_DOMAIN_CATALOG_LEAF = 5n;
 export const PAYO_PROOF_DOMAIN_REMEDIATION = 6n;
 export const PAYO_PROOF_DOMAIN_ADVANCED_PLAN = 7n;
+export const PAYO_PROOF_DOMAIN_CLAIM_OBLIGATION = 8n;
+export const PAYO_PROOF_DOMAIN_REMEDIATION_ACTION = 9n;
 export const PAYO_PROOF_EMPTY_LEAF =
   "0x168758332d5b3e2d13be8048c8011b454590e06c44bce7f702f09103eef5a373" as const;
 
@@ -57,6 +59,18 @@ type ProofCommitter = {
     agreementLeaf: string;
     amountAtomic: bigint | string;
     token: 0 | 1;
+    salt: string;
+  }): `0x${string}`;
+  proofClaimObligationCommitment(input: {
+    agreementLeaf: string;
+    claimCapabilityCommitment: string;
+    expectedNetAtomic: bigint | string;
+  }): `0x${string}`;
+  proofRemediationActionCommitment(input: {
+    claimSubjectNullifier: string;
+    recipientCommitment: string;
+    token: 0 | 1;
+    amountAtomic: bigint | string;
     salt: string;
   }): `0x${string}`;
 };
@@ -117,6 +131,32 @@ export async function createProofCommitter(): Promise<ProofCommitter> {
 
   const proofCatalogLeaf = (commitment: string): `0x${string}` =>
     proofHash(PAYO_PROOF_DOMAIN_CATALOG_LEAF, limbs(commitment));
+
+  const proofClaimObligationCommitment = (input: {
+    agreementLeaf: string;
+    claimCapabilityCommitment: string;
+    expectedNetAtomic: bigint | string;
+  }): `0x${string}` =>
+    proofHash(PAYO_PROOF_DOMAIN_CLAIM_OBLIGATION, [
+      BigInt(input.agreementLeaf),
+      ...limbs(input.claimCapabilityCommitment),
+      packedAmount(input.expectedNetAtomic),
+    ]);
+
+  const proofRemediationActionCommitment = (input: {
+    claimSubjectNullifier: string;
+    recipientCommitment: string;
+    token: 0 | 1;
+    amountAtomic: bigint | string;
+    salt: string;
+  }): `0x${string}` =>
+    proofHash(PAYO_PROOF_DOMAIN_REMEDIATION_ACTION, [
+      ...limbs(input.claimSubjectNullifier),
+      ...limbs(input.recipientCommitment),
+      BigInt(input.token),
+      packedAmount(input.amountAtomic),
+      ...limbs(input.salt),
+    ]);
 
   const buildProofFixedMerkleRoot = (
     leaves: readonly string[],
@@ -314,6 +354,7 @@ export async function createProofCommitter(): Promise<ProofCommitter> {
     proofHash,
     proofMerkleNode,
     proofCatalogLeaf,
+    proofClaimObligationCommitment,
     buildProofFixedMerkleRoot,
     buildProofFixedMerkleMembership,
     firstProofCatalogMembership,
@@ -322,5 +363,6 @@ export async function createProofCommitter(): Promise<ProofCommitter> {
     proofAgreementCommitment,
     proofPayrollCommitment,
     proofRemediationCommitment,
+    proofRemediationActionCommitment,
   };
 }

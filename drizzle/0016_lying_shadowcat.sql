@@ -1,0 +1,2 @@
+ALTER TABLE "obligation_snapshot_plans" ADD COLUMN "run_id" text NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "obligation_snapshot_plans_run_idx" ON "obligation_snapshot_plans" USING btree ("run_id");

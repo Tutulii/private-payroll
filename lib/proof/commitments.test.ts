@@ -15,6 +15,49 @@ describe("PAYO circuit-internal proof commitments", () => {
     );
   });
 
+  it("binds each claim capability to one stable agreement slot", () => {
+    const agreementLeaf = committer.proofHash(3n, [11n]);
+    const first = committer.proofClaimObligationCommitment({
+      agreementLeaf,
+      claimCapabilityCommitment: `0x${"22".repeat(32)}`,
+      expectedNetAtomic: 100n,
+    });
+    expect(first).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(committer.proofClaimObligationCommitment({
+      agreementLeaf,
+      claimCapabilityCommitment: `0x${"23".repeat(32)}`,
+      expectedNetAtomic: 100n,
+    })).not.toBe(first);
+    expect(committer.proofClaimObligationCommitment({
+      agreementLeaf: committer.proofHash(3n, [12n]),
+      claimCapabilityCommitment: `0x${"22".repeat(32)}`,
+      expectedNetAtomic: 100n,
+    })).not.toBe(first);
+    expect(committer.proofClaimObligationCommitment({
+      agreementLeaf,
+      claimCapabilityCommitment: `0x${"22".repeat(32)}`,
+      expectedNetAtomic: 101n,
+    })).not.toBe(first);
+  });
+
+  it("binds a remediation action to claim, recipient, token and amount", () => {
+    const action = committer.proofRemediationActionCommitment({
+      claimSubjectNullifier: `0x${"11".repeat(32)}`,
+      recipientCommitment: `0x${"22".repeat(32)}`,
+      token: 0,
+      amountAtomic: 100n,
+      salt: `0x${"33".repeat(32)}`,
+    });
+    expect(action).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(committer.proofRemediationActionCommitment({
+      claimSubjectNullifier: `0x${"11".repeat(32)}`,
+      recipientCommitment: `0x${"22".repeat(32)}`,
+      token: 1,
+      amountAtomic: 100n,
+      salt: `0x${"33".repeat(32)}`,
+    })).not.toBe(action);
+  });
+
   it("uses a fixed 64-leaf tree and rejects more than 50 real leaves", () => {
     const root = committer.buildProofFixedMerkleRoot([PAYO_PROOF_EMPTY_LEAF]);
     expect(root).toMatch(/^0x[0-9a-f]{64}$/);

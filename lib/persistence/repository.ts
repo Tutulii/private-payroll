@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { hashCanonicalJson } from "@/lib/crypto/digest";
 import { encryptedVaultRecordSchema, type EncryptedVaultRecord } from "@/lib/crypto/vault";
 import type { SignedCapability } from "@/lib/domain/capability";
@@ -17,6 +17,7 @@ import {
   agentCapabilities,
   organizationMembers,
   organizations,
+  obligationSnapshotPlans,
   payrollRuns,
   vaultRecords,
 } from "./schema";
@@ -158,6 +159,50 @@ export async function createEncryptedRun(input: EncryptedRunCreate, principal: A
         "VAULT_RECOVERY_REQUIRED",
       );
     }
+    const now = new Date();
+    let snapshotPlan: typeof obligationSnapshotPlans.$inferSelect | undefined;
+    if (input.obligationSnapshotPlanId) {
+      [snapshotPlan] = await transaction.select().from(obligationSnapshotPlans).where(and(
+        eq(obligationSnapshotPlans.id, input.obligationSnapshotPlanId),
+        eq(obligationSnapshotPlans.organizationId, input.organizationId),
+      )).limit(1).for("update");
+      if (!snapshotPlan) {
+        throw new ApiError(404, "Obligation snapshot plan not found.", "SNAPSHOT_PLAN_NOT_FOUND");
+      }
+      if (snapshotPlan.state !== "registered" && snapshotPlan.state !== "consumed") {
+        throw new ApiError(
+          409,
+          "The obligation snapshot must be registered before creating its payroll.",
+          "SNAPSHOT_PLAN_NOT_REGISTERED",
+        );
+      }
+      if (
+        !principal.walletAddress
+        || BigInt(principal.walletAddress) !== BigInt(snapshotPlan.ownerAddress)
+      ) {
+        throw new ApiError(403, "Use the Ready account that registered this snapshot.", "SNAPSHOT_OWNER_MISMATCH");
+      }
+      const immutableBindingsMatch = snapshotPlan.runId === input.id
+        && snapshotPlan.cycleId === input.cycleId
+        && snapshotPlan.revision === input.revision
+        && snapshotPlan.dueAt.getTime() === new Date(input.dueAt).getTime()
+        && BigInt(snapshotPlan.agreementRoot) === BigInt(input.agreementRoot)
+        && BigInt(snapshotPlan.policyRoot) === BigInt(input.policyRoot)
+        && BigInt(snapshotPlan.runNullifier) === BigInt(input.runNullifier);
+      if (!immutableBindingsMatch) {
+        throw new ApiError(
+          409,
+          "The payroll differs from its registered obligation snapshot.",
+          "SNAPSHOT_PAYROLL_BINDING_MISMATCH",
+        );
+      }
+      if (now.getTime() < snapshotPlan.dueAt.getTime()) {
+        throw new ApiError(409, "This registered payroll is not due yet.", "SNAPSHOT_PAYROLL_NOT_DUE");
+      }
+      if (now.getTime() > snapshotPlan.claimEndsAt.getTime()) {
+        throw new ApiError(409, "This snapshot's payroll and claim window has expired.", "SNAPSHOT_PLAN_EXPIRED");
+      }
+    }
     const runEnvelope = encryptedVaultRecordSchema.parse(input.envelope);
     const lineRecords = input.lineRecords.map((line) => ({
       ...line,
@@ -181,6 +226,68 @@ export async function createEncryptedRun(input: EncryptedRunCreate, principal: A
         || line.envelope.aad.revision !== line.revision
       ) throw new ApiError(400, "Encrypted payroll-line AAD does not match its storage identity.", "AAD_MISMATCH");
     }
+    const [existingRun] = await transaction.select().from(payrollRuns)
+      .where(eq(payrollRuns.id, input.id)).limit(1).for("update");
+    if (existingRun) {
+      const publicBindingsMatch = existingRun.organizationId === input.organizationId
+        && existingRun.cycleId === input.cycleId
+        && existingRun.revision === input.revision
+        && existingRun.dueAt.getTime() === new Date(input.dueAt).getTime()
+        && existingRun.obligationSnapshotPlanId === (input.obligationSnapshotPlanId ?? null)
+        && BigInt(existingRun.agreementRoot ?? "0x0") === BigInt(input.agreementRoot)
+        && BigInt(existingRun.policyRoot ?? "0x0") === BigInt(input.policyRoot)
+        && BigInt(existingRun.runNullifier ?? "0x0") === BigInt(input.runNullifier);
+      if (!publicBindingsMatch) {
+        throw new ApiError(409, "This payroll identifier is already reserved for different immutable facts.", "RUN_CONFLICT");
+      }
+      const recordIds = [input.id, ...lineRecords.map(({ id }) => id)];
+      const storedRecords = await transaction.select({
+        id: vaultRecords.id,
+        recordType: vaultRecords.recordType,
+        revision: vaultRecords.revision,
+        envelopeHash: vaultRecords.envelopeHash,
+      }).from(vaultRecords).where(and(
+        eq(vaultRecords.organizationId, input.organizationId),
+        inArray(vaultRecords.id, recordIds),
+        isNull(vaultRecords.supersededAt),
+      ));
+      const storedRunEnvelope = storedRecords.find(({ id, recordType }) =>
+        id === input.id && recordType === "payroll-run");
+      if (storedRunEnvelope) {
+        const expectedRecords = [
+          { id: input.id, recordType: "payroll-run", revision: input.revision, envelopeHash: payloadHash(runEnvelope) },
+          ...lineRecords.map((line) => ({
+            id: line.id,
+            recordType: "payroll-line",
+            revision: line.revision,
+            envelopeHash: payloadHash(line.envelope),
+          })),
+        ];
+        const envelopesMatch = storedRecords.length === expectedRecords.length
+          && expectedRecords.every((expected) => storedRecords.some((stored) =>
+            stored.id === expected.id
+            && stored.recordType === expected.recordType
+            && stored.revision === expected.revision
+            && stored.envelopeHash === expected.envelopeHash));
+        const completedBindingsMatch = BigInt(existingRun.manifestRoot ?? "0x0") === BigInt(input.manifestRoot)
+          && BigInt(existingRun.fxRoot ?? "0x0") === BigInt(input.fxRoot);
+        if (!envelopesMatch || !completedBindingsMatch || (snapshotPlan && snapshotPlan.state !== "consumed")) {
+          throw new ApiError(409, "The existing payroll payload differs from this retry.", "RUN_REPLAY_MISMATCH");
+        }
+        return { ...existingRun, replayed: true };
+      }
+      if (
+        !snapshotPlan
+        || snapshotPlan.state !== "registered"
+        || existingRun.state !== "draft"
+        || existingRun.manifestRoot !== null
+        || existingRun.fxRoot !== null
+      ) {
+        throw new ApiError(409, "This payroll reservation cannot accept a new encrypted payload.", "RUN_RESERVATION_INVALID");
+      }
+    } else if (snapshotPlan) {
+      throw new ApiError(409, "The registered snapshot is missing its durable run reservation.", "SNAPSHOT_RUN_RESERVATION_MISSING");
+    }
     await transaction.insert(vaultRecords).values({
       id: input.id,
       organizationId: input.organizationId,
@@ -201,9 +308,18 @@ export async function createEncryptedRun(input: EncryptedRunCreate, principal: A
       envelopeHash: payloadHash(line.envelope),
       createdBy: principal.principalId,
     })));
-    const [run] = await transaction
-      .insert(payrollRuns)
-      .values({
+    const [run] = existingRun
+      ? await transaction.update(payrollRuns).set({
+        manifestRoot: input.manifestRoot,
+        fxRoot: input.fxRoot,
+        updatedAt: now,
+      }).where(and(
+        eq(payrollRuns.id, input.id),
+        eq(payrollRuns.state, "draft"),
+        isNull(payrollRuns.manifestRoot),
+        isNull(payrollRuns.fxRoot),
+      )).returning()
+      : await transaction.insert(payrollRuns).values({
         id: input.id,
         organizationId: input.organizationId,
         cycleId: input.cycleId,
@@ -214,17 +330,35 @@ export async function createEncryptedRun(input: EncryptedRunCreate, principal: A
         policyRoot: input.policyRoot,
         fxRoot: input.fxRoot,
         runNullifier: input.runNullifier,
-      })
-      .returning();
+        obligationSnapshotPlanId: input.obligationSnapshotPlanId,
+      }).returning();
+    if (!run) throw new ApiError(409, "The payroll reservation changed; retry safely.", "RUN_STATE_CONFLICT");
+    if (snapshotPlan) {
+      const [consumed] = await transaction.update(obligationSnapshotPlans).set({
+        state: "consumed",
+        consumedAt: now,
+        updatedAt: now,
+      }).where(and(
+        eq(obligationSnapshotPlans.id, snapshotPlan.id),
+        eq(obligationSnapshotPlans.state, "registered"),
+      )).returning({ id: obligationSnapshotPlans.id });
+      if (!consumed) {
+        throw new ApiError(409, "The snapshot was consumed by another payroll.", "SNAPSHOT_PLAN_CONSUMED");
+      }
+    }
     await transaction.insert(auditEvents).values({
       id: eventId(),
       organizationId: input.organizationId,
       actorId: principal.principalId,
       action: "payroll_run.created",
       subjectId: input.id,
-      metadata: auditMetadata({ revision: input.revision, encryptedLineCount: lineRecords.length }),
+      metadata: auditMetadata({
+        revision: input.revision,
+        encryptedLineCount: lineRecords.length,
+        ...(snapshotPlan ? { obligationSnapshotPlanId: snapshotPlan.id } : {}),
+      }),
     });
-    return run;
+    return { ...run, replayed: false };
   });
 }
 

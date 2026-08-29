@@ -2,6 +2,7 @@ import type { InputMap } from "@noir-lang/noir_js";
 import type { EncryptedVaultRecord, VaultPrincipalKeyPair } from "@/lib/crypto/vault";
 import type { SerializedPayrollIntegrityBuildRequest } from "./input-builder";
 import type { EmploymentAgreement } from "@/lib/domain/obligations";
+import type { ExceptionPublicInputsV2 } from "@/lib/domain/exception-protocol";
 
 export const PAYROLL_INTEGRITY_CIRCUIT_URL = "/circuits/payroll_integrity-v1.json";
 export const PAYROLL_INTEGRITY_CIRCUIT_SHA256 =
@@ -28,7 +29,26 @@ export const WAGE_REMEDIATION_CIRCUIT_URL = "/circuits/wage_remediation-v4.json"
 export const WAGE_REMEDIATION_VERIFICATION_KEY_URL = "/circuits/wage_remediation-v4.vk.hex";
 export const WAGE_REMEDIATION_VERIFICATION_KEY_SHA256 =
   "0x09c496d66bbf803a92b617840e12a403c8036a05e7e6437acd59d01d87910045";
+export const OBLIGATION_SNAPSHOT_LINK_CIRCUIT_URL = "/circuits/obligation_snapshot_link-v5.json";
+export const OBLIGATION_SNAPSHOT_LINK_CIRCUIT_SHA256 =
+  "0x0ab9ec30937c59911dc57b70e5cb1a3f837a06ea0b9fd8aebdcc90221663707d";
+export const OBLIGATION_SNAPSHOT_LINK_VERIFICATION_KEY_URL = "/circuits/obligation_snapshot_link-v5.vk.hex";
+export const OBLIGATION_SNAPSHOT_LINK_VERIFICATION_KEY_SHA256 =
+  "0xf93551c79f62cebab72ef651e0ebf1c230e7e5f56481ef20bfcd2a6b6698626a";
+export const WAGE_CLAIM_VNEXT_CIRCUIT_URL = "/circuits/wage_claim-v6.json";
+export const WAGE_CLAIM_VNEXT_CIRCUIT_SHA256 =
+  "0xcc85586de2e3ea273e6769cdefcab96df4d781e7fee9da303c353c34b749c2bf";
+export const WAGE_CLAIM_VNEXT_VERIFICATION_KEY_URL = "/circuits/wage_claim-v6.vk.hex";
+export const WAGE_CLAIM_VNEXT_VERIFICATION_KEY_SHA256 =
+  "0xd957476608ea70eaabb5e10d3706b6e2edb06abbf7c409cef8085ec7c21f3fc0";
+export const WAGE_REMEDIATION_VNEXT_CIRCUIT_URL = "/circuits/wage_remediation-v7.json";
+export const WAGE_REMEDIATION_VNEXT_CIRCUIT_SHA256 =
+  "0x18c0c90caaf5e3caf412acce0c197a13e3d90f79e2166308dd08a6ae299ade54";
+export const WAGE_REMEDIATION_VNEXT_VERIFICATION_KEY_URL = "/circuits/wage_remediation-v7.vk.hex";
+export const WAGE_REMEDIATION_VNEXT_VERIFICATION_KEY_SHA256 =
+  "0xc31a0a4455735625f55bcc94d2f4ef366627872d09fc0fd5f91ffd4eba152525";
 export const PAYROLL_INTEGRITY_PUBLIC_INPUT_COUNT = 17;
+export const PAYO_EXCEPTION_PUBLIC_INPUT_COUNT = 23;
 // Starknet Mainnet accepts at most 5,000 invoke calldata felts. PAYO's
 // account + seal wrapper contributes eight felts around each raw Garaga proof,
 // so every generated or accepted proof must fit this fail-closed budget.
@@ -71,7 +91,15 @@ export type EncryptedPayrollWitness = {
 } | {
   circuitProfile: "wage_claim" | "wage_remediation";
   circuitInputs: [InputMap, InputMap];
+} | {
+  exceptionCircuitProfile: ExceptionCircuitProfile;
+  circuitInput: InputMap;
 };
+
+export type ExceptionCircuitProfile =
+  | "obligation_snapshot_v5"
+  | "wage_claim_v6"
+  | "wage_remediation_v7";
 
 export type ProofWorkerRequest = {
   version: 1;
@@ -124,6 +152,34 @@ export type ProofWorkerSuccess = {
   shards: [PayrollIntegrityShardProof, PayrollIntegrityShardProof];
   circuitSha256: string;
   provingTimeMs: number;
+};
+
+export type ExceptionCircuitProof = {
+  proof: Uint8Array;
+  proofCalldata: string[];
+  calldataHash: string;
+  publicInputs: ExceptionPublicInputsV2;
+};
+
+export type ExceptionProofWorkerSuccess = {
+  version: 2;
+  type: "exception-proof-complete";
+  requestId: string;
+  profile: ExceptionCircuitProfile;
+  scheme: "ultra_keccak_zk_honk";
+  proof: ExceptionCircuitProof;
+  circuitSha256: string;
+  provingTimeMs: number;
+};
+
+export type PayoProofWorkerSuccess = ProofWorkerSuccess | ExceptionProofWorkerSuccess;
+
+export type ExceptionProofWorkerRequest = {
+  version: 2;
+  type: "prove-payo-exception";
+  requestId: string;
+  encryptedWitness: EncryptedVaultRecord;
+  principal: VaultPrincipalKeyPair;
 };
 
 export type ProofWorkerFailure = {

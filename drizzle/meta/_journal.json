@@ -85,6 +85,83 @@
       "when": 1787848360311,
       "tag": "0011_many_molten_man",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1787936441839,
+      "tag": "0012_exception_authorization_jobs",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1787937669037,
+      "tag": "0013_payroll_authorization_jobs",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1787937930698,
+      "tag": "0014_payroll_authorization_receipts",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1787939407368,
+      "tag": "0015_outstanding_leper_queen",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1787940177581,
+      "tag": "0016_lying_shadowcat",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1787965254254,
+      "tag": "0017_cool_lenny_balinger",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1787966300577,
+      "tag": "0018_gorgeous_synch",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1787968741551,
+      "tag": "0019_charming_stark_industries",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1787969980438,
+      "tag": "0020_long_morlun",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1787971406108,
+      "tag": "0021_striped_riptide",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1787974281000,
+      "tag": "0022_bent_gorgon",
+      "breakpoints": true
     }
   ]
 }

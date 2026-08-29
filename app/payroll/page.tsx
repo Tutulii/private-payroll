@@ -38,6 +38,7 @@ import { usePayoVault } from "../vault/payo-vault";
 import {
   executeProofBoundPayroll,
   derivePayrollCycleId,
+  payrollAgreementDueAt,
   parsePendingPayrollSubmission,
   preparePayrollObligationRoot,
   recoverSealedProvenPayroll,
@@ -46,6 +47,13 @@ import {
   type PayrollExecutionResult,
   type PendingPayrollSubmission,
 } from "@/lib/client/payroll-execution";
+import {
+  createDurableObligationSnapshotPlan,
+  deriveObligationSnapshotCycleId,
+  loadRegisteredObligationSnapshotPlan,
+  openObligationSnapshotPlan,
+  registerDurableObligationSnapshotPlan,
+} from "@/lib/client/obligation-snapshot-plan";
 import {
   payrollRecoveryMode,
   payrollSubmissionRecoveryHash,
@@ -70,6 +78,7 @@ import {
   type PayeeDirectoryRecord,
 } from "@/lib/client/payee-directory";
 import { isAgreementDue } from "@/lib/domain/obligations";
+import type { ObligationSnapshotPlanSummary } from "@/lib/domain/obligation-snapshot-plan";
 
 type PayrollRunSummary = {
   id: string;
@@ -86,6 +95,13 @@ type PayrollRunSummary = {
 
 const filters = ["All", "Pending", "Confirmed", "Attention"] as const;
 const MIN_RECOVERY_PASSWORD_LENGTH = 12;
+type SnapshotActionStage = "preparing" | "authorizing_root" | "registering" | "reconciling";
+const snapshotStageLabel: Record<SnapshotActionStage, string> = {
+  preparing: "Preparing encrypted snapshot",
+  authorizing_root: "Authorizing obligation root",
+  registering: "Registering before payday",
+  reconciling: "Verifying canonical state",
+};
 
 function runStateLabel(state: string) {
   return state.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
@@ -136,6 +152,9 @@ export default function PayrollPage() {
   const [releasingRunId, setReleasingRunId] = useState<string | null>(null);
   const [recoveringRunId, setRecoveringRunId] = useState<string | null>(null);
   const [payrollRuns, setPayrollRuns] = useState<PayrollRunSummary[]>([]);
+  const [snapshotPlans, setSnapshotPlans] = useState<ObligationSnapshotPlanSummary[]>([]);
+  const [snapshotSyncError, setSnapshotSyncError] = useState("");
+  const [snapshotActionStage, setSnapshotActionStage] = useState<SnapshotActionStage | null>(null);
   const [obligationSchedule, setObligationSchedule] = useState<{
     root: string;
     transactionHash: string | null;
@@ -169,7 +188,7 @@ export default function PayrollPage() {
   const payrollBusy = payrollStage !== null && payrollStage !== "queued";
   const walletTransactionBusy = starknet.transaction?.stage === "wallet" || starknet.transaction?.stage === "confirming";
   const registryTransactionBusy = starknet.transaction?.kind === "registry" && walletTransactionBusy;
-  const busy = payrollBusy || obligationAuthorizationActionPending || walletTransactionBusy;
+  const busy = payrollBusy || obligationAuthorizationActionPending || snapshotActionStage !== null || walletTransactionBusy;
   const privacyChecking = starknet.privacyCapability === "checking";
   const privacyUnsupported = starknet.privacyCapability === "unsupported";
   const registrationRequired = starknet.privacyCapability === "uninitialized";
@@ -238,12 +257,53 @@ export default function PayrollPage() {
     { STRK: 0n, USDC: 0n },
   ), [selectedObligations]);
 
+  const upcomingObligationCandidates = useMemo(() => agreements.flatMap((agreement) => {
+    const payee = payees.find(({ id }) => id === agreement.payeeId);
+    if (
+      !payee
+      || payee.status !== "active"
+      || agreement.effectiveUntil
+      || agreement.agreement.agreementVersion !== "payo-agreement-v2"
+    ) return [];
+    const dueAt = payrollAgreementDueAt(agreement);
+    if (dueAt <= BigInt(Math.floor(dashboardNow / 1_000)) + 120n) return [];
+    return [{ agreement, payee, dueAt }];
+  }).sort((left, right) => {
+    if (left.dueAt !== right.dueAt) return left.dueAt < right.dueAt ? -1 : 1;
+    return left.agreement.agreement.id.localeCompare(right.agreement.agreement.id);
+  }), [agreements, dashboardNow, payees]);
+  const nextSnapshotDueAt = upcomingObligationCandidates[0]?.dueAt ?? null;
+  const upcomingSnapshotObligations = useMemo(() => nextSnapshotDueAt === null
+    ? []
+    : upcomingObligationCandidates
+      .filter(({ dueAt }) => dueAt === nextSnapshotDueAt)
+      .map(({ agreement, payee }) => ({ agreement, payee })),
+  [nextSnapshotDueAt, upcomingObligationCandidates]);
+  const snapshotCycleId = useMemo(() => {
+    if (!vault.session || upcomingSnapshotObligations.length === 0) return null;
+    return deriveObligationSnapshotCycleId(
+      vault.session.organizationId,
+      upcomingSnapshotObligations,
+    );
+  }, [upcomingSnapshotObligations, vault.session]);
+  const currentSnapshotPlan = useMemo(() => snapshotCycleId
+    ? snapshotPlans
+      .filter(({ cycleId }) => cycleId === snapshotCycleId)
+      .sort((left, right) => right.revision - left.revision)[0] ?? null
+    : null,
+  [snapshotCycleId, snapshotPlans]);
+  const snapshotOverflow = upcomingSnapshotObligations.length > 50;
+  const snapshotProtected = currentSnapshotPlan?.state === "registered"
+    || currentSnapshotPlan?.state === "consumed";
+
   const refreshPayrollRuns = useCallback(async () => {
     if (!vault.client || !vault.session) {
       setPayrollRuns([]);
       setPayees([]);
       setAgreements([]);
       setSelectedAgreementIds([]);
+      setSnapshotPlans([]);
+      setSnapshotSyncError("");
       setDueScheduleKeys(new Set());
       setScheduleSyncError("");
       return;
@@ -252,7 +312,7 @@ export default function PayrollPage() {
     refreshInFlight.current = true;
     setRunsLoading(true);
     try {
-      const [listing, loadedPayees, loadedAgreements] = await Promise.all([
+      const [listing, loadedPayees, loadedAgreements, snapshotListing] = await Promise.all([
         vault.client.listPayrollRuns(vault.session.organizationId),
         loadEncryptedPayees({
           client: vault.client,
@@ -264,6 +324,14 @@ export default function PayrollPage() {
           organizationId: vault.session.organizationId,
           principal: vault.session.principal,
         }),
+        vault.client.listObligationSnapshotPlans(vault.session.organizationId)
+          .then(({ plans }) => ({ plans, error: "" }))
+          .catch((snapshotError: unknown) => ({
+            plans: null,
+            error: snapshotError instanceof Error
+              ? snapshotError.message
+              : "Pre-payday snapshots could not be refreshed.",
+          })),
       ]);
       const decrypted = await Promise.all(listing.runs.map(async (candidate) => {
         const run = candidate as {
@@ -347,6 +415,8 @@ export default function PayrollPage() {
       setPayrollRuns(decrypted);
       setPayees(loadedPayees);
       setAgreements(synchronizedAgreements);
+      if (snapshotListing.plans) setSnapshotPlans(snapshotListing.plans);
+      setSnapshotSyncError(snapshotListing.error);
       setDashboardNow(Date.now());
       const activeSchedules = synchronizedAgreements
         .filter(({ effectiveUntil }) => !effectiveUntil)
@@ -605,6 +675,97 @@ export default function PayrollPage() {
     }));
   };
 
+  const protectNextPayday = async () => {
+    if (snapshotActionStage) return;
+    setFormError("");
+    starknet.clearTransaction();
+    setSnapshotActionStage("preparing");
+    try {
+      if (!vault.session || !vault.client) throw new Error("Unlock the encrypted workspace first.");
+      if (!starknet.isConnected || !starknet.isMainnet || !starknet.address) {
+        throw new Error("Connect the organization Ready account on Starknet Mainnet first.");
+      }
+      if (upcomingSnapshotObligations.length === 0 || !snapshotCycleId || nextSnapshotDueAt === null) {
+        throw new Error("No future payday is available for pre-payday protection.");
+      }
+      if (snapshotOverflow) {
+        throw new Error("This payday exceeds the 50-obligation proof limit and must not be partially snapshotted.");
+      }
+
+      let registrationPlan: Parameters<typeof registerDurableObligationSnapshotPlan>[0]["plan"];
+      if (currentSnapshotPlan) {
+        const { plan } = await vault.client.getObligationSnapshotPlan(currentSnapshotPlan.id);
+        const privatePlan = openObligationSnapshotPlan({
+          plan,
+          principal: vault.session.principal,
+          organizationId: vault.session.organizationId,
+          ownerAddress: starknet.address,
+          obligations: upcomingSnapshotObligations,
+        });
+        registrationPlan = {
+          id: plan.id,
+          state: plan.state,
+          registrationTransactionHash: plan.registrationTransactionHash,
+          snapshot: privatePlan.snapshot,
+          snapshotCommitment: privatePlan.snapshotCommitment,
+        };
+      } else {
+        const durable = await createDurableObligationSnapshotPlan({
+          client: vault.client,
+          organizationId: vault.session.organizationId,
+          organizationSecret: vault.session.organizationSecret,
+          ownerAddress: starknet.address,
+          obligations: upcomingSnapshotObligations,
+          principal: vault.session.principal,
+          revision: 1,
+        });
+        setSnapshotPlans((current) => [
+          durable.stored,
+          ...current.filter(({ id }) => id !== durable.stored.id),
+        ]);
+        registrationPlan = {
+          id: durable.stored.id,
+          state: durable.stored.state,
+          registrationTransactionHash: durable.stored.registrationTransactionHash,
+          snapshot: durable.create.snapshot,
+          snapshotCommitment: durable.create.snapshotCommitment,
+        };
+      }
+
+      setSnapshotActionStage("reconciling");
+      const registered = await registerDurableObligationSnapshotPlan({
+        client: vault.client,
+        plan: registrationPlan,
+        ensureAgreementRoot: async (agreementRoot) => {
+          setSnapshotActionStage("authorizing_root");
+          if (await starknet.isObligationRootActive(agreementRoot)) {
+            const owner = await starknet.getObligationRootOwner(agreementRoot);
+            if (BigInt(owner) !== BigInt(starknet.address)) {
+              throw new Error("This payday's obligation root belongs to another Ready account.");
+            }
+            return;
+          }
+          await starknet.scheduleObligationRoot(agreementRoot);
+        },
+        registerSnapshot: async (snapshot) => {
+          setSnapshotActionStage("registering");
+          return starknet.registerObligationSnapshot(snapshot);
+        },
+      });
+      await refreshPayrollRuns();
+      notify(registered.recovered
+        ? "Pre-payday protection recovered and verified"
+        : "Pre-payday obligation snapshot registered");
+    } catch (snapshotError) {
+      setFormError(snapshotError instanceof Error
+        ? snapshotError.message
+        : "The pre-payday snapshot was not registered.");
+      await refreshPayrollRuns();
+    } finally {
+      setSnapshotActionStage(null);
+    }
+  };
+
   const scheduleSelectedObligationRoot = async () => {
     if (obligationAuthorizationActionPending) return;
     setFormError("");
@@ -691,6 +852,23 @@ export default function PayrollPage() {
       if (BigInt(obligationOwner) !== BigInt(starknet.address)) {
         throw new Error("The connected Ready account does not own this encrypted obligation root.");
       }
+      const advancedProfile = selectedObligations.every(
+        ({ agreement }) => agreement.agreement.agreementVersion === "payo-agreement-v2",
+      );
+      let dueSnapshotPlan: ReturnType<typeof openObligationSnapshotPlan> | undefined;
+      if (advancedProfile) {
+        if (!selfHostedProverUrl) {
+          throw new Error("The vNext payroll prover is not configured for this PAYO deployment.");
+        }
+        dueSnapshotPlan = await loadRegisteredObligationSnapshotPlan({
+          client: vault.client,
+          principal: vault.session.principal,
+          organizationId: vault.session.organizationId,
+          ownerAddress: starknet.address,
+          agreementRoot: plannedObligations.root,
+          obligations: selectedObligations,
+        });
+      }
       for (const token of Object.keys(PAYROLL_TOKENS) as PayrollTokenSymbol[]) {
         const available = starknet.shieldedBalances[token];
         if (available === null) throw new Error(`The shielded ${token} balance is unavailable.`);
@@ -706,12 +884,25 @@ export default function PayrollPage() {
         chainId: starknet.chainId,
         sealAddress,
         obligations: selectedObligations,
-        runRevision: Math.max(
-          0,
-          ...payrollRuns
-            .filter(({ cycleId }) => cycleId === derivePayrollCycleId(vault.session!.organizationId, selectedObligations))
-            .map(({ revision }) => revision),
-        ) + 1,
+        ...(dueSnapshotPlan ? {
+          snapshotPlan: dueSnapshotPlan,
+          proveSnapshot: async ({ encryptedWitness, principal, onProgress }) => {
+            onProgress?.("loading");
+            onProgress?.("proving");
+            return vault.client!.proveExceptionRemotely({
+              proverBaseUrl: selfHostedProverUrl!,
+              encryptedWitness,
+              principal,
+            });
+          },
+        } : {
+          runRevision: Math.max(
+            0,
+            ...payrollRuns
+              .filter(({ cycleId }) => cycleId === derivePayrollCycleId(vault.session!.organizationId, selectedObligations))
+              .map(({ revision }) => revision),
+          ) + 1,
+        }),
         submitPayroll: starknet.runProofBoundPayroll,
         prove: selfHostedProverUrl
           ? async ({ encryptedWitness, principal, onProgress }) => {
@@ -918,6 +1109,8 @@ export default function PayrollPage() {
     verifying: "Verifying locally",
     encoding: "Encoding Starknet proof",
     preflight: "Checking on-chain registries",
+    snapshot: "Proving pre-payday snapshot",
+    proof_authorization: "Authorizing proofs on-chain",
     persisting: "Encrypting payroll records",
     wallet: "Approve in Ready",
     recording: "Recording submission",
@@ -1215,6 +1408,58 @@ export default function PayrollPage() {
           </aside>
 
           <div className="payroll-composer">
+            <div className="composer-top">
+              <div>
+                <span className="label">PRE-PAYDAY PROTECTION</span>
+                <h4>Freeze the next payday before it is due</h4>
+              </div>
+              {nextSnapshotDueAt !== null && (
+                <span className="snapshot-payday-date">
+                  {new Date(Number(nextSnapshotDueAt) * 1_000).toLocaleString()}
+                </span>
+              )}
+            </div>
+            <div className={`obligation-root-control snapshot-protection ${snapshotProtected ? "snapshot-protection--active" : ""}`}>
+              <span>
+                <strong>{snapshotActionStage
+                  ? snapshotStageLabel[snapshotActionStage]
+                  : snapshotProtected
+                    ? "Payday snapshot protected"
+                    : currentSnapshotPlan?.state === "submitted"
+                      ? "Registration awaiting canonical confirmation"
+                      : currentSnapshotPlan?.state === "prepared"
+                        ? "Encrypted snapshot saved; Ready registration pending"
+                        : upcomingSnapshotObligations.length > 0
+                          ? `${upcomingSnapshotObligations.length} obligation${upcomingSnapshotObligations.length === 1 ? "" : "s"} ready to protect`
+                          : "No future payday to protect"}</strong>
+                <small>{snapshotSyncError
+                  ? `Snapshot status could not refresh: ${snapshotSyncError}`
+                  : snapshotOverflow
+                    ? "This payday exceeds the 50-line proof limit. PAYO will not create an incomplete snapshot."
+                    : snapshotProtected
+                      ? "Every obligation in this exact payday is encrypted, fixed-slot committed, and canonically registered for a later worker-owned claim."
+                      : currentSnapshotPlan?.state === "submitted"
+                        ? "PAYO will reconcile the recorded transaction and will never open a duplicate Ready request."
+                        : upcomingSnapshotObligations.length > 0
+                          ? `Includes ${upcomingSnapshotObligations.slice(0, 3).map(({ payee }) => payee.displayName).join(", ")}${upcomingSnapshotObligations.length > 3 ? ` and ${upcomingSnapshotObligations.length - 3} more` : ""}. The encrypted plan is saved before Ready opens.`
+                          : "Set a future due time and worker claim identity on an active agreement to enable historical wage-claim evidence."}</small>
+              </span>
+              <button
+                type="button"
+                className="button button--soft"
+                disabled={!vault.session || !starknet.isConnected || !starknet.isMainnet || busy || snapshotProtected || snapshotOverflow || upcomingSnapshotObligations.length === 0 || ["cancelled", "expired"].includes(currentSnapshotPlan?.state ?? "")}
+                onClick={protectNextPayday}
+              >
+                {snapshotActionStage
+                  ? <><LoaderCircle className="spin" size={15} /> {snapshotStageLabel[snapshotActionStage]}</>
+                  : snapshotProtected
+                    ? <>Protected <ShieldCheck size={15} /></>
+                    : currentSnapshotPlan
+                      ? <>Resume protection <Clock3 size={15} /></>
+                      : <>Protect next payday <ShieldCheck size={15} /></>}
+              </button>
+            </div>
+
             <div className="composer-top"><div><span className="label">DUE AGREEMENTS</span><h4>Which obligations settle?</h4></div><Link className="button button--soft" href="/team">Manage agreements <ArrowRight size={15} /></Link></div>
             <div className="recipient-labels"><span>Recipient</span><span>Starknet address</span><span>Private amount</span><span /></div>
             <div className="recipient-list">

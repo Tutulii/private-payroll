@@ -102,7 +102,30 @@ describe("buildPrivatePayrollActions", () => {
       .toThrow(/exactly one/i);
   });
 
-  it("rejects a proof action whose mode does not match its workflow", () => {
+  it("accepts the vNext seven-field payroll and remediation consumption ABI", () => {
+    const payrollAction = {
+      ...PAYO_ACTION,
+      calldata: ["0x0", "0x11", "0x12", "0x13", "0x14", "0x15", "0x16"],
+    };
+    expect(buildPrivatePayrollActions(
+      [{ address: "0x111", token: "STRK", amount: "1" }],
+      payrollAction,
+      SEAL,
+    ).actions.at(-1)).toBe(payrollAction);
+
+    const remediationAction = {
+      ...PAYO_ACTION,
+      calldata: ["0x3", "0x21", "0x22", "0x23", "0x24", "0x25", "0x26"],
+    };
+    expect(buildPrivateExceptionActions(
+      "wage_remediation",
+      [{ address: "0x111", token: "USDC", amount: "2.5" }],
+      remediationAction,
+      SEAL,
+    ).actions.at(-1)).toBe(remediationAction);
+  });
+
+  it("rejects a proof action whose mode or ABI does not match its workflow", () => {
     expect(() => buildPrivatePayrollActions(
       [{ address: "0x111", token: "STRK", amount: "1" }],
       { ...PAYO_ACTION, calldata: ["0x2", ...PAYO_ACTION.calldata.slice(1)] },
@@ -110,6 +133,19 @@ describe("buildPrivatePayrollActions", () => {
     )).toThrow(/proof mode 0/i);
     expect(() => buildPrivateExceptionActions("wage_claim", [], PAYO_ACTION, SEAL))
       .toThrow(/proof mode 2/i);
+    expect(() => buildPrivateExceptionActions(
+      "wage_claim",
+      [],
+      { ...PAYO_ACTION, calldata: ["0x2", "0x1", "0x2", "0x3", "0x4", "0x5", "0x6"] },
+      SEAL,
+      "0x111",
+    )).toThrow(/ABI/i);
+    expect(() => buildPrivateExceptionActions(
+      "wage_remediation",
+      [{ address: "0x111", token: "USDC", amount: "1" }],
+      { ...PAYO_ACTION, calldata: ["0x3", "bad", "0x2", "0x3", "0x4", "0x5", "0x6"] },
+      SEAL,
+    )).toThrow(/canonical/i);
   });
 });
 

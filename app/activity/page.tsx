@@ -88,6 +88,7 @@ import {
   disclosureFormDefaults,
   resolveDisclosureSelection,
 } from "@/lib/client/disclosure-form";
+import { WageClaimsVNextCard } from "./wage-claims-vnext";
 
 type ActivityKind = "Payroll" | "Agent" | "Vault";
 
@@ -181,6 +182,8 @@ const exceptionStageLabel: Record<PayrollExecutionStage, string> = {
   verifying: "Verifying the claim locally",
   encoding: "Encoding the Starknet proof",
   preflight: "Checking the on-chain verifier",
+  snapshot: "Proving the pre-payday snapshot",
+  proof_authorization: "Authorizing proofs on-chain",
   persisting: "Encrypting the proof records",
   wallet: "Approve the claim in Ready",
   recording: "Recording the submission",
@@ -1400,7 +1403,7 @@ export default function ActivityPage() {
                 <button type="button" className="button button--soft" onClick={exportCurrentPublicIdentity}><Download size={16} /> Share mine</button>
               </div>
               <input ref={publicIdentityInput} className="proof-package-file-input" type="file" accept="application/json,.json" onChange={(event) => void importRecipientPublicIdentity(event)} tabIndex={-1} aria-hidden="true" />
-              <p>Use a public PAYO identity file instead of copying key fields. It contains only the principal ID, X25519 public key and fingerprint—never a vault secret or recovery value.</p>
+              <p>Use a public PAYO identity file instead of copying key fields. A current file contains the principal ID, X25519 public key, claim-capability commitment and fingerprint—never a vault secret, claim secret or recovery value.</p>
               {granteeIdentityFingerprint && <p className="proof-identity-fingerprint"><ShieldCheck size={13} /> Validated identity file · {shortId(granteeIdentityFingerprint)}</p>}
               <label><span>Recipient PAYO principal ID</span><input value={granteePrincipalId} onChange={(event) => { setGranteePrincipalId(event.target.value); setGranteeIdentityFingerprint(""); }} placeholder="PAYO vault principal ID" required minLength={1} maxLength={160} autoComplete="off" spellCheck={false} /></label>
               <label><span>Recipient X25519 public key</span><input value={granteePublicKey} onChange={(event) => { setGranteePublicKey(event.target.value); setGranteeIdentityFingerprint(""); }} placeholder="Recipient encryption key" required autoComplete="off" spellCheck={false} /></label>
@@ -1462,16 +1465,18 @@ export default function ActivityPage() {
             </div>}
           </section>
 
+          <WageClaimsVNextCard />
+
           <section className="receipts-card private-exceptions-card">
             <div className="receipt-doodle receipt-doodle--warning" aria-hidden="true"><FileText size={28} /><span>!</span></div>
-            <span className="label">PRIVATE EXCEPTIONS</span>
-            <h3>Raise the issue.<br />Keep terms encrypted.</h3>
-            <p>Claim and remediation facts remain encrypted. Draft claims can now generate the pinned wage-claim proof, seal CLAIM through Ready, and enter durable verification.</p>
+            <span className="label">LEGACY EXCEPTION RECOVERY</span>
+            <h3>Recover old drafts.<br />Start new claims above.</h3>
+            <p>These version 3/4 records remain available for recovery and audit. Every new protected payday uses worker-owned Claim v6 and employer-bound Remediation v7 above.</p>
             <div className="private-exception-counts">
               <span><strong>{claims.length}</strong> claim drafts</span>
               <span><strong>{remediations.length}</strong> remediation drafts</span>
             </div>
-            <button type="button" className="button button--ink button--wide" onClick={() => setShowClaimForm((current) => !current)} disabled={!vault.session || creatingException || agreements.length === 0 || runOptions.length === 0}><FileText size={16} /> Draft private claim</button>
+            <button type="button" className="button button--ink button--wide" onClick={() => setShowClaimForm(false)} disabled><FileText size={16} /> Legacy drafting closed</button>
             {showClaimForm && <form className="receipt-disclosure-form" onSubmit={createClaimDraft}>
               <label><span>Payroll run</span><select value={claimRunId} onChange={(event) => {
                 const runId = event.target.value;
@@ -1517,7 +1522,7 @@ export default function ActivityPage() {
               {exceptionStage && <p className="private-exception-feedback private-exception-feedback--progress" role="status" aria-live="polite"><LoaderCircle className="spin" size={14} /> {exceptionStageLabel[exceptionStage]}</p>}
             </div>}
             {exceptionFeedback && <p className={`private-exception-feedback private-exception-feedback--${exceptionFeedback.tone}`} role={exceptionFeedback.tone === "error" ? "alert" : "status"}><span aria-hidden="true">{exceptionFeedback.tone === "error" ? "!" : "✓"}</span> {exceptionFeedback.message}</p>}
-            <button type="button" className="button button--soft button--wide" onClick={() => setShowRemediationForm((current) => !current)} disabled={!vault.session || creatingException || claims.length === 0}><ShieldCheck size={16} /> Draft remediation</button>
+            <button type="button" className="button button--soft button--wide" onClick={() => setShowRemediationForm(false)} disabled><ShieldCheck size={16} /> Legacy remediation closed</button>
             {showRemediationForm && <form className="receipt-disclosure-form" onSubmit={createRemediationDraft}>
               <label><span>Encrypted claim</span><select value={remediationClaimId} onChange={(event) => setRemediationClaimId(event.target.value)} required><option value="">Choose claim</option>{claims.filter((claim) => ["submitted", "accepted"].includes(claim.state)).map((claim) => <option value={claim.id} key={claim.id}>{claim.claimKind.replaceAll("_", " ")} · {shortId(claim.id)}</option>)}</select></label>
               <label><span>Remediation amount (token atomic units)</span><input inputMode="numeric" pattern="[0-9]+" value={remediationAmount} onChange={(event) => setRemediationAmount(event.target.value)} placeholder="Leave empty for exact proved shortfall" /></label>

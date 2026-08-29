@@ -63,7 +63,9 @@ export async function rotateClientVault(input: {
   };
 
   const { records: summaries } = await input.client.listEncryptedRecords(input.organizationId);
-  const records = await Promise.all(summaries.map(async (summary) => {
+  const organizationVaultSummaries = summaries.filter(({ recordType }) =>
+    recordType !== "obligation-claim-access" && recordType !== "wage-claim-v2");
+  const records = await Promise.all(organizationVaultSummaries.map(async (summary) => {
     const { record } = await input.client.getEncryptedRecord({
       organizationId: input.organizationId,
       recordId: summary.id,

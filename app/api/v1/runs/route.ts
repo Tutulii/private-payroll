@@ -44,7 +44,7 @@ export async function POST(request: Request) {
       throw new ApiError(400, "Encrypted payroll-line identifiers must be unique.", "PAYROLL_LINE_DUPLICATE");
     }
     const run = await createEncryptedRun({ ...input, envelope, lineRecords }, principal);
-    return Response.json({ run }, { status: 201 });
+    return Response.json({ run }, { status: run.replayed ? 200 : 201 });
   } catch (error) {
     return apiFailure(error);
   }

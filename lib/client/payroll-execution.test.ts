@@ -1,11 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildFxSnapshot } from "@/lib/domain/fx";
 import { referenceClassificationAnswers } from "@/lib/domain/classification";
+import { claimCapabilityCommitmentV2, type ExceptionPublicInputsV2 } from "@/lib/domain/exception-protocol";
+import { generateUuidV7 } from "@/lib/domain/records";
 import { decryptVaultRecord, encryptVaultRecord, generateVaultPrincipal } from "@/lib/crypto/vault";
 import { hashProofCalldata } from "@/lib/proof/starknet-calldata";
+import { buildAdvancedObligationInputs } from "@/lib/proof/advanced-obligation-input";
 import { buildFxCatalogRoot, buildPayrollIntegrityInputsFromSerialized } from "@/lib/proof/input-builder";
 import {
+  ADVANCED_OBLIGATION_CIRCUIT_SHA256,
+  OBLIGATION_SNAPSHOT_LINK_CIRCUIT_SHA256,
   PAYROLL_INTEGRITY_CIRCUIT_SHA256,
+  type ExceptionProofWorkerSuccess,
   type EncryptedPayrollWitness,
   type ProofWorkerSuccess,
 } from "@/lib/proof/protocol";
@@ -23,6 +29,7 @@ import {
   resumePendingPayrollSubmission,
 } from "./payroll-execution";
 import { buildAdvancedPaymentPlanDraft } from "./advanced-agreement-draft";
+import { prepareObligationSnapshotPlan } from "./obligation-snapshot-plan";
 
 const organizationId = "0198ddf0-9c00-7000-8000-000000000001";
 const chainId = "0x1";
@@ -48,27 +55,119 @@ async function prove(input: {
   principal: typeof principal;
 }): Promise<ProofWorkerSuccess> {
   const encrypted = decryptVaultRecord<EncryptedPayrollWitness>(input.encryptedWitness, input.principal);
-  if (!("buildInput" in encrypted)) throw new Error("expected serialized build input");
-  const built = await buildPayrollIntegrityInputsFromSerialized(encrypted.buildInput);
+  if (!("buildInput" in encrypted) && !("advancedBuildInput" in encrypted)) {
+    throw new Error("expected serialized build input");
+  }
+  const buildInput = "advancedBuildInput" in encrypted
+    ? encrypted.advancedBuildInput.payroll
+    : encrypted.buildInput;
+  const built = await buildPayrollIntegrityInputsFromSerialized(buildInput);
+  const advanced = "advancedBuildInput" in encrypted
+    ? buildAdvancedObligationInputs({
+        payroll: built,
+        agreements: encrypted.advancedBuildInput.agreements,
+      })
+    : undefined;
   const proofCalldata = ["0x1", "0x2"];
   return {
     version: 1,
     type: "proof-complete",
     requestId: "proof-request",
     scheme: "ultra_keccak_zk_honk",
-    circuitSha256: PAYROLL_INTEGRITY_CIRCUIT_SHA256,
+    circuitSha256: advanced
+      ? ADVANCED_OBLIGATION_CIRCUIT_SHA256
+      : PAYROLL_INTEGRITY_CIRCUIT_SHA256,
     provingTimeMs: 10,
     shards: [0, 1].map((shardIndex) => ({
       shardIndex: shardIndex as 0 | 1,
       proof: new Uint8Array([shardIndex + 1]),
       proofCalldata,
       calldataHash: hashProofCalldata(proofCalldata),
-      publicInputs: built.publicInputs[shardIndex],
+      publicInputs: advanced?.publicInputs[shardIndex] ?? built.publicInputs[shardIndex],
     })) as ProofWorkerSuccess["shards"],
   };
 }
 
+function exceptionPublicInputs(circuitInput: Record<string, unknown>): ExceptionPublicInputsV2 {
+  const value = (key: string) => {
+    const field = circuitInput[key];
+    if (typeof field !== "string") throw new Error(`expected exception public input ${key}`);
+    return field;
+  };
+  return {
+    chainId: value("chain_id"),
+    sealAddress: value("seal_address"),
+    proofVersion: value("proof_version"),
+    schemaVersion: value("schema_version"),
+    agreementRootHigh: value("agreement_root_high"),
+    agreementRootLow: value("agreement_root_low"),
+    manifestRootHigh: value("manifest_root_high"),
+    manifestRootLow: value("manifest_root_low"),
+    policyRootHigh: value("policy_root_high"),
+    policyRootLow: value("policy_root_low"),
+    fxRootHigh: value("fx_root_high"),
+    fxRootLow: value("fx_root_low"),
+    subjectNullifierHigh: value("subject_nullifier_high"),
+    subjectNullifierLow: value("subject_nullifier_low"),
+    parentNullifierHigh: value("parent_nullifier_high"),
+    parentNullifierLow: value("parent_nullifier_low"),
+    factCommitmentHigh: value("fact_commitment_high"),
+    factCommitmentLow: value("fact_commitment_low"),
+    parentFactCommitmentHigh: value("parent_fact_commitment_high"),
+    parentFactCommitmentLow: value("parent_fact_commitment_low"),
+    validityStart: value("validity_start"),
+    validityExpiry: value("validity_expiry"),
+    shardIndex: value("shard_index"),
+  };
+}
+
+async function proveSnapshot(input: {
+  encryptedWitness: Parameters<typeof decryptVaultRecord>[0];
+  principal: typeof principal;
+}): Promise<ExceptionProofWorkerSuccess> {
+  const encrypted = decryptVaultRecord<EncryptedPayrollWitness>(input.encryptedWitness, input.principal);
+  if (!("exceptionCircuitProfile" in encrypted) || encrypted.exceptionCircuitProfile !== "obligation_snapshot_v5") {
+    throw new Error("expected obligation snapshot witness");
+  }
+  const proofCalldata = Array.from({ length: 35 }, (_, index) => `0x${(index + 1).toString(16)}`);
+  return {
+    version: 2,
+    type: "exception-proof-complete",
+    requestId: "snapshot-proof-request",
+    profile: "obligation_snapshot_v5",
+    scheme: "ultra_keccak_zk_honk",
+    circuitSha256: OBLIGATION_SNAPSHOT_LINK_CIRCUIT_SHA256,
+    provingTimeMs: 10,
+    proof: {
+      proof: new Uint8Array([5]),
+      proofCalldata,
+      calldataHash: hashProofCalldata(proofCalldata),
+      publicInputs: exceptionPublicInputs(encrypted.circuitInput as Record<string, unknown>),
+    },
+  };
+}
+
 function client(ready = true) {
+  const authorization = (runId: string) => ({
+    id: generateUuidV7(now.getTime() + 20),
+    organizationId,
+    runId,
+    payrollProofBundleId: generateUuidV7(now.getTime() + 21),
+    snapshotProofBundleId: generateUuidV7(now.getTime() + 22),
+    state: "complete" as const,
+    activeStep: "shard1" as const,
+    transactionHash: "0xabc",
+    beginTransactionHash: "0xa1",
+    snapshotTransactionHash: "0xa2",
+    shard0TransactionHash: "0xa3",
+    shard1TransactionHash: "0xabc",
+    attempts: 0,
+    lastErrorCode: null,
+    lastErrorMessage: null,
+    authorizedAt: now.toISOString(),
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+  });
   return {
     getFxSnapshots: vi.fn().mockImplementation((tokens: Array<"STRK" | "USDC">) =>
       Promise.resolve({ blockNumber: 1, snapshots: tokens.map((token) => snapshot(token)) })),
@@ -103,8 +202,75 @@ function client(ready = true) {
       Promise.resolve({ settlement: { id } })),
     recordSettlementSubmission: vi.fn().mockResolvedValue({ settlement: {} }),
     enqueueProofVerification: vi.fn().mockResolvedValue({ proofVerification: {} }),
+    enqueuePayrollAuthorization: vi.fn().mockImplementation(({ runId }: { runId: string }) =>
+      Promise.resolve({ authorization: authorization(runId) })),
+    getPayrollAuthorization: vi.fn().mockImplementation((runId: string) =>
+      Promise.resolve({ authorization: authorization(runId) })),
     getSealedPayrollRecovery: vi.fn(),
     getEncryptedRecord: vi.fn(),
+  };
+}
+
+async function snapshotExecutionInput(mockClient: ReturnType<typeof client>) {
+  const preparedAt = new Date("2026-08-24T11:50:00.000Z");
+  const executionAt = new Date("2026-08-24T12:01:00.000Z");
+  const claimSecret = `0x${"91".repeat(32)}`;
+  const payee = prepareEncryptedPayee({
+    organizationId,
+    displayName: "Protected worker",
+    principalKind: "human",
+    recipientAddress: "0x456",
+    tokenPreference: "STRK",
+    jurisdictionCode: "US",
+    claimIdentity: {
+      principalId: generateUuidV7(preparedAt.getTime() - 1),
+      publicKey: principal.publicKey,
+      claimCapabilityCommitment: claimCapabilityCommitmentV2(claimSecret),
+    },
+    principal,
+    now: preparedAt,
+  }).record;
+  const agreement = await storeEncryptedAdvancedAgreement({
+    client: { storeEncryptedRecord: vi.fn().mockResolvedValue({ record: {} }) } as never,
+    organizationId,
+    payee,
+    token: "STRK",
+    classification: "contractor",
+    classificationAnswers: referenceClassificationAnswers("contractor"),
+    paymentPlan: buildAdvancedPaymentPlanDraft({
+      kind: "recurring",
+      cadence: "monthly",
+      nextDueAt: "2026-08-24T12:00:00.000Z",
+    }),
+    fixedAmount: "1",
+    principal,
+    now: preparedAt,
+  });
+  const obligations = [{ agreement, payee }];
+  const snapshot = await prepareObligationSnapshotPlan({
+    organizationId,
+    organizationSecret: `0x${"44".repeat(32)}`,
+    ownerAddress: "0xabc",
+    obligations,
+    principal,
+    now: preparedAt,
+  });
+  return {
+    client: mockClient as unknown as PayoClient,
+    organizationId,
+    organizationSecret: `0x${"44".repeat(32)}`,
+    principal,
+    chainId,
+    sealAddress,
+    obligations,
+    snapshotPlan: snapshot.privatePlan,
+    submitPayroll: vi.fn().mockResolvedValue("0xfeed"),
+    persistPendingSubmission: vi.fn(),
+    prove: vi.fn(prove),
+    proveSnapshot: vi.fn(proveSnapshot),
+    authorizationPollIntervalMs: 0,
+    authorizationTimeoutMs: 1_000,
+    now: () => executionAt,
   };
 }
 
@@ -649,5 +815,87 @@ describe("proof-bound payroll browser orchestration", () => {
 
     expect(persist).toHaveBeenLastCalledWith(null);
     expect(onStage).toHaveBeenLastCalledWith("recorded");
+  });
+
+  it("authorizes PayrollIntegrity v2 and snapshot v5 before opening Ready", async () => {
+    const mockClient = client();
+    const input = await snapshotExecutionInput(mockClient);
+
+    const result = await executeProofBoundPayroll(input);
+
+    expect(input.prove).toHaveBeenCalledOnce();
+    expect(input.proveSnapshot).toHaveBeenCalledOnce();
+    expect(input.prove.mock.invocationCallOrder[0]).toBeLessThan(
+      input.proveSnapshot.mock.invocationCallOrder[0],
+    );
+    expect(mockClient.storeEncryptedProofBundle).toHaveBeenCalledTimes(2);
+    expect(mockClient.storeEncryptedProofBundle.mock.invocationCallOrder[1]).toBeLessThan(
+      mockClient.enqueuePayrollAuthorization.mock.invocationCallOrder[0],
+    );
+    expect(mockClient.enqueuePayrollAuthorization.mock.invocationCallOrder[0]).toBeLessThan(
+      input.submitPayroll.mock.invocationCallOrder[0],
+    );
+    expect(mockClient.checkDeploymentReadiness).not.toHaveBeenCalled();
+    expect(mockClient.enqueueProofVerification).not.toHaveBeenCalled();
+    expect(mockClient.createPayrollRun).toHaveBeenCalledWith(expect.objectContaining({
+      id: input.snapshotPlan.runId,
+      cycleId: input.snapshotPlan.cycleId,
+      revision: input.snapshotPlan.payrollRevision,
+      obligationSnapshotPlanId: input.snapshotPlan.planId,
+    }));
+    expect(input.submitPayroll).toHaveBeenCalledTimes(1);
+    const action = input.submitPayroll.mock.calls[0][1];
+    expect(action.type).toBe("invoke");
+    expect(BigInt(action.contract)).toBe(BigInt(sealAddress));
+    expect(action.calldata[0]).toBe("0x0");
+    expect(input.persistPendingSubmission).toHaveBeenCalledWith(expect.objectContaining({
+      version: 4,
+      authorizationMode: "staged_vnext",
+      snapshotProofBundleId: expect.any(String),
+    }));
+    expect(result).toMatchObject({
+      runId: input.snapshotPlan.runId,
+      version: 4,
+      authorizationMode: "staged_vnext",
+      transactionHash: "0xfeed",
+      verificationQueued: true,
+    });
+  });
+
+  it("fails closed without a Ready request when staged payroll authorization dies", async () => {
+    const mockClient = client();
+    const input = await snapshotExecutionInput(mockClient);
+    mockClient.enqueuePayrollAuthorization.mockImplementationOnce(async ({ runId }: { runId: string }) => ({
+      authorization: {
+        ...(await mockClient.getPayrollAuthorization(runId)).authorization,
+        state: "dead" as const,
+        transactionHash: null,
+        authorizedAt: null,
+        lastErrorCode: "PROOF_REJECTED",
+        lastErrorMessage: "Snapshot proof rejected.",
+      },
+    }));
+
+    await expect(executeProofBoundPayroll(input)).rejects.toThrow(
+      "Payroll proof authorization failed: Snapshot proof rejected.",
+    );
+    expect(input.submitPayroll).not.toHaveBeenCalled();
+    expect(mockClient.createSettlementIntent).not.toHaveBeenCalled();
+    expect(input.persistPendingSubmission).not.toHaveBeenCalled();
+  });
+
+  it("rejects an advanced payroll that omits its registered pre-payday snapshot", async () => {
+    const mockClient = client();
+    const input = await snapshotExecutionInput(mockClient);
+    const { snapshotPlan, proveSnapshot, ...withoutSnapshot } = input;
+    expect(snapshotPlan).toBeDefined();
+    expect(proveSnapshot).toBeTypeOf("function");
+
+    await expect(executeProofBoundPayroll(withoutSnapshot)).rejects.toThrow(
+      /requires an exact registered pre-payday snapshot/i,
+    );
+    expect(input.prove).not.toHaveBeenCalled();
+    expect(input.submitPayroll).not.toHaveBeenCalled();
+    expect(mockClient.createPayrollRun).not.toHaveBeenCalled();
   });
 });

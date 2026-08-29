@@ -1,0 +1,27 @@
+[package]
+name = "exception_vnext_integration"
+version = "0.1.0"
+edition = "2024_07"
+
+[dependencies]
+starknet = "2.16.1"
+garaga = { git = "https://github.com/keep-starknet-strange/garaga.git", tag = "v1.1.0" }
+payo_contracts = { path = ".." }
+snapshot_v5_verifier = { path = "../snapshot_v5_verifier" }
+claim_v6_verifier = { path = "../claim_v6_verifier" }
+remediation_v7_verifier = { path = "../remediation_v7_verifier" }
+
+[dev-dependencies]
+snforge_std = { git = "https://github.com/foundry-rs/starknet-foundry.git", tag = "v0.57.0" }
+
+[target-defaults.test]
+build-external-contracts = [
+  "snapshot_v5_verifier::honk_verifier::PayoObligationSnapshotV5Verifier",
+  "claim_v6_verifier::honk_verifier::PayoWageClaimV6Verifier",
+  "remediation_v7_verifier::honk_verifier::PayoWageRemediationV7Verifier",
+  "payo_contracts::payroll_exception_seal::PayoPayrollExceptionSeal",
+  "payo_contracts::policy_registry::PayoPolicyRegistry",
+  "payo_contracts::tenant_obligation_registry::PayoTenantObligationRootRegistry",
+]
+
+[lib]

@@ -223,4 +223,32 @@ describe("PAYO API response recovery", () => {
       message: expect.stringContaining("safe to retry"),
     });
   });
+
+  it("requests employer-statement FX renewal and returns immediately for an active root", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+      job: {
+        id: "0198ddf0-9c00-7000-8000-000000000005",
+        catalogRoot: `0x${"22".repeat(32)}`,
+        state: "complete",
+        transactionHash: "0x123",
+        attempts: 1,
+        lastErrorCode: null,
+        lastErrorMessage: null,
+      },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PayoClient(async () => "a".repeat(64));
+    await expect(client.renewHistoricalFxRoot({
+      organizationId: "0198ddf0-9c00-7000-8000-000000000002",
+      runId: "0198ddf0-9c00-7000-8000-000000000001",
+      workflowType: "employer_statement",
+    })).resolves.toMatchObject({
+      catalogRoot: `0x${"22".repeat(32)}`,
+      transactionHash: "0x123",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      workflowType: "employer_statement",
+    });
+  });
 });

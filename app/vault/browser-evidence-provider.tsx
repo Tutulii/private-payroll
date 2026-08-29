@@ -24,6 +24,8 @@ const STORAGE_KEY = "payo:phase3-browser-evidence:v1";
 const SYNTHETIC_ROOT = `0x${"42".repeat(32)}`;
 const SYNTHETIC_SETTLEMENT_ID = "018f1000-0000-7000-8000-000000000035";
 const SYNTHETIC_SETTLEMENT_RUN_ID = "018f1000-0000-7000-8000-000000000036";
+const SYNTHETIC_SNAPSHOT_PLAN_ID = "018f1000-0000-7000-8000-000000000037";
+const SYNTHETIC_CLAIM_GRANT_ID = "018f1000-0000-7000-8000-000000000038";
 
 // This key can only decrypt synthetic records created in the server-gated browser-evidence route.
 // It is deliberately unrelated to any PAYO deployment, user, or funded Starknet account.
@@ -111,6 +113,31 @@ function latestRecords(state: BrowserEvidenceState): StoredRecord[] {
   return [...latest.values()];
 }
 
+function syntheticSnapshotPlan(runId: string) {
+  return {
+    id: SYNTHETIC_SNAPSHOT_PLAN_ID,
+    runId,
+    organizationId: ORGANIZATION_ID,
+    cycleId: "browser-vnext-evidence",
+    revision: 1,
+    ownerAddress: "0x123",
+    agreementRoot: SYNTHETIC_ROOT,
+    claimRoot: "0x" + "43".repeat(32),
+    policyRoot: SYNTHETIC_ROOT,
+    runNullifier: "0x" + "44".repeat(32),
+    snapshotFact: "0x" + "45".repeat(32),
+    dueAt: "2026-08-26T00:00:00.000Z",
+    graceEndsAt: "2026-08-26T00:15:00.000Z",
+    claimEndsAt: "2027-08-26T00:00:00.000Z",
+    state: "consumed" as const,
+    registrationTransactionHash: "0x111",
+    registeredAt: "2026-08-25T23:50:00.000Z",
+    consumedAt: "2026-08-26T00:01:00.000Z",
+    createdAt: "2026-08-25T23:49:00.000Z",
+    updatedAt: "2026-08-26T00:01:00.000Z",
+  };
+}
+
 function metadata(record: StoredRecord) {
   return {
     id: record.id,
@@ -185,6 +212,48 @@ export function PayoBrowserEvidenceProvider({ children }: { children: ReactNode 
         .filter((record) => !recordType || record.recordType === recordType)
         .map(metadata);
       return { records };
+    },
+
+    async listObligationClaimAccessGrants() {
+      const run = readState().runs.find(({ id, obligationSnapshotPlanId }) =>
+        typeof id === "string" && obligationSnapshotPlanId === SYNTHETIC_SNAPSHOT_PLAN_ID);
+      if (!run || typeof run.id !== "string") return { grants: [] };
+      return { grants: [{
+        id: SYNTHETIC_CLAIM_GRANT_ID,
+        claimantPrincipalId: SYNTHETIC_PRINCIPAL.principalId,
+        revokedAt: null,
+        plan: syntheticSnapshotPlan(run.id),
+        envelope: encryptVaultRecord({ syntheticBrowserClaimAccess: true }, {
+          schemaVersion: 1,
+          organizationId: ORGANIZATION_ID,
+          recordType: "obligation-claim-access",
+          recordId: SYNTHETIC_CLAIM_GRANT_ID,
+          revision: 1,
+        }, [SYNTHETIC_PRINCIPAL]),
+      }] };
+    },
+    async listPayrollStatementEvidence() {
+      return { evidence: [] };
+    },
+    async listWorkerClaims() {
+      return { claims: [] };
+    },
+    async listWageRemediations() {
+      return { remediations: [] };
+    },
+    async listObligationSnapshotPlans() {
+      const plans = readState().runs.flatMap((run) => {
+        if (
+          typeof run.id !== "string"
+          || typeof run.obligationSnapshotPlanId !== "string"
+          || typeof run.transactionHash !== "string"
+        ) return [];
+        return [syntheticSnapshotPlan(run.id)];
+      });
+      return { plans };
+    },
+    async listEmployerStatements() {
+      return { statements: [] };
     },
     async listPayrollRuns() {
       return { runs: readState().runs };

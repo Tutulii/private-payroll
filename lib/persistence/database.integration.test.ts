@@ -11,6 +11,10 @@ import {
 import { hashCanonicalJson } from "@/lib/crypto/digest";
 import { signCapability, type AgentCapability, type PaymentIntent } from "@/lib/domain/capability";
 import { generateUuidV7 } from "@/lib/domain/records";
+import {
+  obligationSnapshotCommitmentV2,
+  payrollStatementCommitmentV2,
+} from "@/lib/domain/exception-protocol";
 import { prepareEncryptedAgentCapability } from "@/lib/client/agent-capabilities";
 import {
   commitPayoActionTokenTotals,
@@ -18,15 +22,25 @@ import {
   type TokenTotals,
 } from "@/lib/domain/settlement";
 import {
+  ADVANCED_OBLIGATION_CIRCUIT_SHA256,
+  ADVANCED_OBLIGATION_VERIFICATION_KEY_SHA256,
   PAYROLL_INTEGRITY_CIRCUIT_SHA256,
   PAYROLL_INTEGRITY_VERIFICATION_KEY_SHA256,
+  OBLIGATION_SNAPSHOT_LINK_CIRCUIT_SHA256,
+  OBLIGATION_SNAPSHOT_LINK_VERIFICATION_KEY_SHA256,
+  PAYROLL_INTEGRITY_PUBLIC_INPUT_COUNT,
   WAGE_CLAIM_CIRCUIT_SHA256,
   WAGE_CLAIM_VERIFICATION_KEY_SHA256,
+  WAGE_CLAIM_VNEXT_CIRCUIT_SHA256,
+  WAGE_CLAIM_VNEXT_VERIFICATION_KEY_SHA256,
   WAGE_REMEDIATION_CIRCUIT_SHA256,
   WAGE_REMEDIATION_VERIFICATION_KEY_SHA256,
+  WAGE_REMEDIATION_VNEXT_CIRCUIT_SHA256,
+  WAGE_REMEDIATION_VNEXT_VERIFICATION_KEY_SHA256,
 } from "@/lib/proof/protocol";
 import {
   hashProofCalldata,
+  parseExceptionPublicInputsFromGaragaCalldata,
   parsePayrollPublicInputsFromGaragaCalldata,
 } from "@/lib/proof/starknet-calldata";
 import { ApiError, requirePrincipal, type AuthenticatedPrincipal } from "@/lib/server/auth";
@@ -48,6 +62,24 @@ import {
   revokeAgentCapability,
 } from "./repository";
 import {
+  createObligationSnapshotPlan,
+  markObligationSnapshotRegistered,
+} from "./obligation-snapshot-plan-repository";
+import {
+  createWorkerClaim,
+  getWorkerClaim,
+  listWorkerClaims,
+} from "./worker-claim-repository";
+import {
+  createWageRemediation,
+} from "./wage-remediation-repository";
+import {
+  createEmployerStatement,
+  listPayrollStatementEvidenceGrants,
+  markEmployerStatementRegistered,
+  recordEmployerStatementSubmission,
+} from "./employer-statement-repository";
+import {
   listDueObligationSchedules,
   materializeDueObligationSchedules,
   registerObligationSchedules,
@@ -59,7 +91,17 @@ import {
   rollbackIndexedChain,
 } from "./chain-indexer-repository";
 import { closeDatabase, getDatabase } from "./db";
-import { storeEncryptedPayrollIntegrityBundle } from "./proof-bundle-repository";
+import {
+  getEncryptedProofBundle,
+  storeEncryptedPayrollIntegrityBundle,
+} from "./proof-bundle-repository";
+import {
+  completeExceptionAuthorizationJob,
+  deferExceptionAuthorizationJob,
+  enqueueExceptionAuthorization,
+  leaseExceptionAuthorizationJobs,
+  recordExceptionAuthorizationSubmission,
+} from "./exception-authorization-repository";
 import {
   enqueueFxPublication,
   enqueueHistoricalFxRenewal,
@@ -71,6 +113,13 @@ import {
   recordProofVerificationProgress,
   recordProofVerificationSubmission,
 } from "./proof-verification-repository";
+import {
+  advancePayrollAuthorizationJob,
+  completePayrollAuthorizationJob,
+  enqueuePayrollAuthorization,
+  leasePayrollAuthorizationJobs,
+  recordPayrollAuthorizationSubmission,
+} from "./payroll-authorization-repository";
 import {
   applySettlementObservation,
   cancelSettlementApproval,
@@ -98,17 +147,25 @@ import {
   auditEvents,
   confirmationJobs,
   disclosureGrants,
+  exceptionAuthorizationJobs,
+  employerStatements,
   fxPublicationJobs,
   organizationMembers,
+  obligationClaimAccessGrants,
   obligationSchedules,
+  obligationSnapshotPlans,
   organizations,
   payrollRuns,
+  payrollAuthorizationJobs,
+  payrollStatementEvidenceGrants,
   proofBundles,
   proofVerificationJobs,
   receipts,
   settlements,
   vaultRecords,
   vaultKeyGrants,
+  wageRemediations,
+  workerClaims,
 } from "./schema";
 
 const testDatabaseUrl = process.env.PAYO_TEST_DATABASE_URL;
@@ -133,11 +190,19 @@ async function resetDatabase() {
       ready_auth_sessions,
       ready_principal_links,
       ready_auth_challenges,
+      payroll_authorization_jobs,
+      exception_authorization_jobs,
+      wage_remediations,
+      worker_claims,
+      payroll_statement_evidence_grants,
+      employer_statements,
+      obligation_claim_access_grants,
       proof_verification_jobs,
       confirmation_jobs,
       settlements,
       proof_bundles,
       payroll_runs,
+      obligation_snapshot_plans,
       obligation_schedules,
       vault_key_grants,
       vault_records,
@@ -284,6 +349,162 @@ function preparePhase3ExceptionProof(input: {
       envelope,
     },
   };
+}
+
+function setU256PublicInput(
+  calldata: string[],
+  publicInputOffset: number,
+  inputIndex: number,
+  value: string | bigint,
+) {
+  const parsed = BigInt(value);
+  const u128Mask = (1n << 128n) - 1n;
+  calldata[publicInputOffset + 1 + inputIndex * 2] = `0x${(parsed & u128Mask).toString(16)}`;
+  calldata[publicInputOffset + 2 + inputIndex * 2] = `0x${(parsed >> 128n).toString(16)}`;
+}
+
+function setLinkedPayrollPublicInput(calldata: string[], inputIndex: number, value: string | bigint) {
+  const firstHeader = Number(BigInt(calldata[0]));
+  if (firstHeader === PAYROLL_INTEGRITY_PUBLIC_INPUT_COUNT) {
+    setU256PublicInput(calldata, 0, inputIndex, value);
+    return;
+  }
+  const baseCalldataLength = firstHeader;
+  setU256PublicInput(calldata, 1, inputIndex, value);
+  setU256PublicInput(calldata, baseCalldataLength + 1, inputIndex, value);
+}
+
+/**
+ * Persistence-only fixture. Its public-input bytes are rewritten so repository
+ * binding and race behavior can be tested without pretending the altered proof
+ * is cryptographically valid. Real-proof validity stays covered by the Noir,
+ * Garaga and Cairo exception integration vectors.
+ */
+function preparePayrollAuthorizationPersistenceFixture() {
+  const nowSeconds = Math.floor(Date.now() / 1_000);
+  const validityStart = String(nowSeconds - 30);
+  const validityExpiry = String(nowSeconds + 1_800);
+  const snapshotProof = readFileSync(
+    new URL("../../contracts/exception_vnext_integration/tests/obligation_snapshot_v5.txt", import.meta.url),
+    "utf8",
+  ).trim().split(/\s+/);
+  setU256PublicInput(snapshotProof, 0, 20, validityStart);
+  setU256PublicInput(snapshotProof, 0, 21, validityExpiry);
+  const parsedSnapshot = parseExceptionPublicInputsFromGaragaCalldata(snapshotProof);
+  const payrollShards = ([0, 1] as const).map((shardIndex) => {
+    const calldata = readFileSync(
+      new URL(`../../evidence/phase3-devnet-fixtures/advanced-shard-${shardIndex}.txt`, import.meta.url),
+      "utf8",
+    ).trim().split(/\s+/);
+    const linkedValues: Array<[number, string]> = [
+      [4, parsedSnapshot.agreementRootHigh],
+      [5, parsedSnapshot.agreementRootLow],
+      [8, parsedSnapshot.policyRootHigh],
+      [9, parsedSnapshot.policyRootLow],
+      [12, parsedSnapshot.subjectNullifierHigh],
+      [13, parsedSnapshot.subjectNullifierLow],
+      [14, validityStart],
+      [15, validityExpiry],
+    ];
+    linkedValues.forEach(([index, value]) => setLinkedPayrollPublicInput(calldata, index, value));
+    return calldata;
+  }) as [string[], string[]];
+  const shardInputs = payrollShards.map(parsePayrollPublicInputsFromGaragaCalldata) as [
+    ReturnType<typeof parsePayrollPublicInputsFromGaragaCalldata>,
+    ReturnType<typeof parsePayrollPublicInputsFromGaragaCalldata>,
+  ];
+  const { shardIndex, chainId, sealAddress, ...decimalPayrollInputs } = shardInputs[0];
+  if (shardIndex !== "0") throw new Error("The first payroll proof shard must have index zero.");
+  const commonInputs = {
+    chainId: `0x${BigInt(chainId).toString(16)}`,
+    sealAddress: `0x${BigInt(sealAddress).toString(16)}`,
+    ...decimalPayrollInputs,
+  };
+  const publicInputs = {
+    ...parsedSnapshot,
+    chainId: `0x${BigInt(parsedSnapshot.chainId).toString(16)}`,
+    sealAddress: `0x${BigInt(parsedSnapshot.sealAddress).toString(16)}`,
+  };
+  return {
+    payrollProofBundleId: generateUuidV7(),
+    snapshotProofBundleId: generateUuidV7(),
+    payrollShards,
+    snapshotProof,
+    commonInputs,
+    publicInputs,
+    payrollMetadata: {
+      schemaVersion: 1 as const,
+      proofType: "payroll_integrity" as const,
+      proofVersion: "2",
+      circuitSha256: ADVANCED_OBLIGATION_CIRCUIT_SHA256,
+      verificationKeySha256: ADVANCED_OBLIGATION_VERIFICATION_KEY_SHA256,
+      publicInputsHash: hashCanonicalJson([
+        { ...commonInputs, shardIndex: "0" },
+        { ...commonInputs, shardIndex: "1" },
+      ]),
+      shardCalldataHashes: payrollShards.map(hashProofCalldata) as [string, string],
+    },
+    snapshotMetadata: {
+      schemaVersion: 2 as const,
+      proofType: "obligation_snapshot" as const,
+      proofVersion: "5" as const,
+      circuitSha256: OBLIGATION_SNAPSHOT_LINK_CIRCUIT_SHA256,
+      verificationKeySha256: OBLIGATION_SNAPSHOT_LINK_VERIFICATION_KEY_SHA256,
+      publicInputsHash: hashCanonicalJson(publicInputs),
+      proofCalldataHash: hashProofCalldata(snapshotProof),
+    },
+  };
+}
+
+/**
+ * Persistence/authorization fixture. The validity public inputs are rewritten
+ * so database state transitions can be exercised at the current clock. Noir,
+ * Garaga and Cairo suites separately verify the unmodified proof cryptography.
+ */
+function prepareWorkerClaimV6PersistenceFixture() {
+  const nowSeconds = Math.floor(Date.now() / 1_000);
+  const proofCalldata = readFileSync(
+    new URL("../../contracts/exception_vnext_integration/tests/wage_claim_v6.txt", import.meta.url),
+    "utf8",
+  ).trim().split(/\s+/);
+  setU256PublicInput(proofCalldata, 0, 20, String(nowSeconds - 30));
+  setU256PublicInput(proofCalldata, 0, 21, String(nowSeconds + 1_800));
+  const parsedInputs = parseExceptionPublicInputsFromGaragaCalldata(proofCalldata);
+  const publicInputs = {
+    ...parsedInputs,
+    chainId: `0x${BigInt(parsedInputs.chainId).toString(16)}`,
+    sealAddress: `0x${BigInt(parsedInputs.sealAddress).toString(16)}`,
+  };
+  const snapshotInputs = parseExceptionPublicInputsFromGaragaCalldata(readFileSync(
+    new URL("../../contracts/exception_vnext_integration/tests/obligation_snapshot_v5.txt", import.meta.url),
+    "utf8",
+  ).trim().split(/\s+/));
+  return { nowSeconds, proofCalldata, publicInputs, snapshotInputs };
+}
+
+
+function prepareWageRemediationV7PersistenceFixture() {
+  const nowSeconds = Math.floor(Date.now() / 1_000);
+  const proofCalldata = readFileSync(
+    new URL("../../contracts/exception_vnext_integration/tests/wage_remediation_v7.txt", import.meta.url),
+    "utf8",
+  ).trim().split(/\s+/);
+  setU256PublicInput(proofCalldata, 0, 20, String(nowSeconds - 30));
+  setU256PublicInput(proofCalldata, 0, 21, String(nowSeconds + 1_800));
+  const parsedInputs = parseExceptionPublicInputsFromGaragaCalldata(proofCalldata);
+  return {
+    nowSeconds,
+    proofCalldata,
+    publicInputs: {
+      ...parsedInputs,
+      chainId: `0x${BigInt(parsedInputs.chainId).toString(16)}`,
+      sealAddress: `0x${BigInt(parsedInputs.sealAddress).toString(16)}`,
+    },
+  };
+}
+
+function combineRoot(high: string, low: string): `0x${string}` {
+  return `0x${BigInt(high).toString(16).padStart(32, "0")}${BigInt(low).toString(16).padStart(32, "0")}`;
 }
 
 databaseSuite("PostgreSQL durability integration", () => {
@@ -438,6 +659,970 @@ databaseSuite("PostgreSQL durability integration", () => {
     expect(decryptVaultRecord(storedLine!.envelope as typeof lineEnvelope, vaultPrincipal))
       .toMatchObject({ netAtomic: "123456789" });
   });
+
+  it("binds one registered pre-payday snapshot to exactly one immutable payroll run", async () => {
+    const owner: AuthenticatedPrincipal = {
+      ...admin,
+      walletAddress: "0x123",
+      chainId: READY_AUTH_CHAIN_ID,
+    };
+    const organizationId = await seedOrganization(owner);
+    const vaultPrincipal = generateVaultPrincipal(owner.principalId);
+    const claimant = generateVaultPrincipal("worker:snapshot-once");
+    const planId = generateUuidV7();
+    const runId = generateUuidV7();
+    const payeeId = generateUuidV7();
+    const dueAt = BigInt(Math.floor(Date.now() / 1_000) - 60);
+    const snapshot = {
+      schemaVersion: 2 as const,
+      runNullifier: `0x${"55".repeat(32)}`,
+      baseAgreementRoot: `0x${"11".repeat(32)}`,
+      obligationRoot: `0x${"66".repeat(32)}`,
+      policyRoot: `0x${"33".repeat(32)}`,
+      ownerAddress: owner.walletAddress!,
+      dueAt: dueAt.toString(),
+      graceEndsAt: (dueAt + 3_600n).toString(),
+      claimEndsAt: (dueAt + 86_400n).toString(),
+      availabilityCommitment: `0x${"66".repeat(32)}`,
+    };
+    const snapshotCommitment = obligationSnapshotCommitmentV2(snapshot);
+    const privatePlan = {
+      format: "payo-obligation-snapshot-plan-v1" as const,
+      planId,
+      runId,
+      organizationId,
+      cycleId: "cycle:snapshot-once",
+      payrollRevision: 1,
+      snapshot,
+      snapshotCommitment,
+      agreementBindings: [{
+        agreementId: "agreement:snapshot-once",
+        payeeId,
+        agreementCommitment: snapshot.baseAgreementRoot,
+        recipientCommitment: `0x${"77".repeat(32)}`,
+        scheduleCommitment: `0x${"88".repeat(32)}`,
+        claimCapabilityCommitment: `0x${"99".repeat(32)}`,
+      }],
+      createdAt: new Date(Number(dueAt - 3_600n) * 1_000).toISOString(),
+    };
+    const planEnvelope = encryptVaultRecord(
+      privatePlan,
+      {
+        schemaVersion: 1,
+        organizationId,
+        recordType: "obligation-snapshot-plan",
+        recordId: planId,
+        revision: 1,
+      },
+      [vaultPrincipal],
+    );
+    const claimAccessId = generateUuidV7();
+    const claimAccessEnvelope = encryptVaultRecord(
+      { snapshotPlanId: planId, runId, agreementId: "agreement:snapshot-once" },
+      {
+        schemaVersion: 1,
+        organizationId,
+        recordType: "obligation-claim-access",
+        recordId: claimAccessId,
+        revision: 1,
+      },
+      [claimant],
+    );
+    const planCreate = {
+      id: planId,
+      runId,
+      organizationId,
+      cycleId: privatePlan.cycleId,
+      payrollRevision: 1,
+      ownerAddress: owner.walletAddress!,
+      snapshot,
+      snapshotCommitment,
+      claimAccessGrants: [{
+        id: claimAccessId,
+        claimantPrincipalId: claimant.principalId,
+        envelope: claimAccessEnvelope,
+      }],
+      envelope: planEnvelope,
+    };
+    await expect(createObligationSnapshotPlan({
+      plan: planCreate,
+      principal: { ...owner, walletAddress: "0x124" },
+      now: new Date(Number(dueAt - 3_600n) * 1_000),
+    })).rejects.toMatchObject({ code: "SNAPSHOT_OWNER_MISMATCH" });
+    await expect(createObligationSnapshotPlan({
+      plan: planCreate,
+      principal: owner,
+      now: new Date(Number(dueAt - 3_600n) * 1_000),
+    })).resolves.toMatchObject({ id: planId, runId, state: "prepared", replayed: false });
+    await markObligationSnapshotRegistered({
+      planId,
+      transactionHash: "0xabc",
+      registeredAt: new Date(Number(dueAt - 120n) * 1_000),
+    });
+
+    const workerClaimId = generateUuidV7();
+    const workerClaimProofBundleId = generateUuidV7();
+    const workerClaimEnvelope = encryptVaultRecord(
+      { format: "payo-worker-wage-claim-v2", privateKind: "missing_obligation" },
+      {
+        schemaVersion: 1,
+        organizationId,
+        recordType: "wage-claim-v2",
+        recordId: workerClaimId,
+        revision: 1,
+      },
+      [claimant, vaultPrincipal],
+    );
+    const workerClaimCreate = {
+      id: workerClaimId,
+      claimAccessGrantId: claimAccessId,
+      organizationId,
+      runId,
+      revision: 1 as const,
+      proofBundleId: workerClaimProofBundleId,
+      claimSubjectNullifier: `0x${"ab".repeat(32)}`,
+      claimFactCommitment: `0x${"cd".repeat(32)}`,
+      envelope: workerClaimEnvelope,
+    };
+    await expect(createWorkerClaim({
+      claim: workerClaimCreate,
+      principal: { principalId: claimant.principalId, sessionId: "session:worker" },
+    })).resolves.toMatchObject({ id: workerClaimId, replayed: false, state: "prepared" });
+    await expect(createWorkerClaim({
+      claim: workerClaimCreate,
+      principal: { principalId: claimant.principalId, sessionId: "session:worker" },
+    })).resolves.toMatchObject({ id: workerClaimId, replayed: true });
+    await expect(listWorkerClaims({
+      principal: { principalId: claimant.principalId, sessionId: "session:worker" },
+    })).resolves.toEqual([expect.objectContaining({ id: workerClaimId })]);
+    await expect(getWorkerClaim(workerClaimId, owner))
+      .resolves.toMatchObject({ id: workerClaimId, claimantPrincipalId: claimant.principalId });
+    await expect(getWorkerClaim(workerClaimId, {
+      principalId: "worker:unrelated",
+      sessionId: "session:unrelated",
+    })).rejects.toMatchObject({ code: "ORG_FORBIDDEN" });
+    expect(await getDatabase().select().from(workerClaims)).toHaveLength(1);
+
+    const lineId = generateUuidV7();
+    const runEnvelope = encryptVaultRecord(
+      { cycleId: privatePlan.cycleId, obligationSnapshotPlanId: planId },
+      { schemaVersion: 1, organizationId, recordType: "payroll-run", recordId: runId, revision: 1 },
+      [vaultPrincipal],
+    );
+    const lineEnvelope = encryptVaultRecord(
+      { agreementId: "agreement:snapshot-once", netAtomic: "10" },
+      { schemaVersion: 1, organizationId, recordType: "payroll-line", recordId: lineId, revision: 1 },
+      [vaultPrincipal],
+    );
+    const runCreate = {
+      id: runId,
+      organizationId,
+      cycleId: privatePlan.cycleId,
+      revision: 1,
+      dueAt: new Date(Number(dueAt) * 1_000).toISOString(),
+      ciphertext: runEnvelope.ciphertext,
+      envelope: runEnvelope,
+      agreementRoot: snapshot.baseAgreementRoot,
+      manifestRoot: `0x${"22".repeat(32)}`,
+      policyRoot: snapshot.policyRoot,
+      fxRoot: `0x${"44".repeat(32)}`,
+      runNullifier: snapshot.runNullifier,
+      obligationSnapshotPlanId: planId,
+      lineRecords: [{ id: lineId, revision: 1 as const, envelope: lineEnvelope }],
+    };
+    await expect(createEncryptedRun({
+      ...runCreate,
+      agreementRoot: `0x${"aa".repeat(32)}`,
+    }, owner)).rejects.toMatchObject({ code: "SNAPSHOT_PAYROLL_BINDING_MISMATCH" });
+    expect(await getDatabase().select().from(payrollRuns)).toEqual([expect.objectContaining({
+      id: runId,
+      state: "draft",
+      manifestRoot: null,
+      fxRoot: null,
+      obligationSnapshotPlanId: planId,
+    })]);
+    expect((await getDatabase().select().from(obligationSnapshotPlans))[0].state).toBe("registered");
+
+    const attempts = await Promise.allSettled([
+      createEncryptedRun(runCreate, owner),
+      createEncryptedRun(runCreate, owner),
+    ]);
+    expect(attempts.filter(({ status }) => status === "fulfilled")).toHaveLength(2);
+    expect(attempts.filter(({ status }) => status === "rejected")).toHaveLength(0);
+    expect(attempts.map((attempt) => attempt.status === "fulfilled" && attempt.value.replayed).sort())
+      .toEqual([false, true]);
+    const [storedPlan] = await getDatabase().select().from(obligationSnapshotPlans);
+    const [storedRun] = await getDatabase().select().from(payrollRuns);
+    expect(storedPlan).toMatchObject({ id: planId, runId, state: "consumed" });
+    expect(storedPlan.consumedAt).toBeInstanceOf(Date);
+    expect(storedRun).toMatchObject({ id: runId, obligationSnapshotPlanId: planId });
+  });
+
+
+  it("stores one complete employer statement and exposes registered evidence only to its worker", async () => {
+    const owner: AuthenticatedPrincipal = {
+      ...admin,
+      walletAddress: "0x456",
+      chainId: READY_AUTH_CHAIN_ID,
+    };
+    const worker: AuthenticatedPrincipal = {
+      principalId: "worker:statement-evidence",
+      sessionId: "session:statement-evidence",
+    };
+    const organizationId = await seedOrganization(owner);
+    const ownerVault = generateVaultPrincipal(owner.principalId);
+    const workerVault = generateVaultPrincipal(worker.principalId);
+    const planId = generateUuidV7();
+    const runId = generateUuidV7();
+    const claimAccessGrantId = generateUuidV7();
+    const nowSeconds = BigInt(Math.floor(Date.now() / 1_000));
+    const dueAt = nowSeconds + 600n;
+    const snapshot = {
+      schemaVersion: 2 as const,
+      runNullifier: "0x" + "a1".repeat(32),
+      baseAgreementRoot: "0x" + "a2".repeat(32),
+      obligationRoot: "0x" + "a3".repeat(32),
+      policyRoot: "0x" + "a4".repeat(32),
+      ownerAddress: owner.walletAddress!,
+      dueAt: dueAt.toString(),
+      graceEndsAt: (dueAt + 600n).toString(),
+      claimEndsAt: (dueAt + 86_400n).toString(),
+      availabilityCommitment: "0x" + "a3".repeat(32),
+    };
+    const snapshotCommitment = obligationSnapshotCommitmentV2(snapshot);
+    const snapshotEnvelope = encryptVaultRecord(
+      { format: "statement-test-snapshot", snapshotCommitment },
+      {
+        schemaVersion: 1,
+        organizationId,
+        recordType: "obligation-snapshot-plan",
+        recordId: planId,
+        revision: 1,
+      },
+      [ownerVault],
+    );
+    const accessEnvelope = encryptVaultRecord(
+      { format: "statement-test-access", snapshotCommitment },
+      {
+        schemaVersion: 1,
+        organizationId,
+        recordType: "obligation-claim-access",
+        recordId: claimAccessGrantId,
+        revision: 1,
+      },
+      [workerVault],
+    );
+    await createObligationSnapshotPlan({
+      plan: {
+        id: planId,
+        runId,
+        organizationId,
+        cycleId: "employer-statement-test",
+        payrollRevision: 1,
+        ownerAddress: owner.walletAddress!,
+        snapshot,
+        snapshotCommitment,
+        claimAccessGrants: [{
+          id: claimAccessGrantId,
+          claimantPrincipalId: worker.principalId,
+          envelope: accessEnvelope,
+        }],
+        envelope: snapshotEnvelope,
+      },
+      principal: owner,
+      now: new Date(Number(nowSeconds) * 1_000),
+    });
+    await markObligationSnapshotRegistered({
+      planId,
+      transactionHash: "0xe001",
+      registeredAt: new Date(Number(dueAt - 120n) * 1_000),
+    });
+
+    const statementId = generateUuidV7();
+    const evidenceId = generateUuidV7();
+    const statement = {
+      schemaVersion: 2 as const,
+      runNullifier: snapshot.runNullifier,
+      snapshotCommitment,
+      manifestRoot: "0x" + "b1".repeat(32),
+      fxRoot: "0x" + "b2".repeat(32),
+      availabilityCommitment: "0x" + "b3".repeat(32),
+      observedAt: (dueAt + 30n).toString(),
+      source: "employer_statement" as const,
+    };
+    const statementCommitment = payrollStatementCommitmentV2(statement);
+    const statementEnvelope = encryptVaultRecord(
+      { format: "payo-employer-statement-v2", statement, statementCommitment },
+      {
+        schemaVersion: 1,
+        organizationId,
+        recordType: "employer-statement-v2",
+        recordId: statementId,
+        revision: 1,
+      },
+      [ownerVault],
+    );
+    const evidenceEnvelope = encryptVaultRecord(
+      { format: "payo-payroll-statement-evidence-v1", statementCommitment },
+      {
+        schemaVersion: 1,
+        organizationId,
+        recordType: "payroll-statement-evidence",
+        recordId: evidenceId,
+        revision: 1,
+      },
+      [workerVault],
+    );
+    const create = {
+      id: statementId,
+      snapshotPlanId: planId,
+      organizationId,
+      runId,
+      revision: 1 as const,
+      ownerAddress: owner.walletAddress!,
+      statement,
+      statementCommitment,
+      evidenceGrants: [{
+        id: evidenceId,
+        claimAccessGrantId,
+        claimantPrincipalId: worker.principalId,
+        envelope: evidenceEnvelope,
+      }],
+      envelope: statementEnvelope,
+    };
+
+    await expect(createEmployerStatement({
+      statement: create,
+      principal: { ...owner, walletAddress: "0x457" },
+      now: new Date(Number(dueAt + 40n) * 1_000),
+    })).rejects.toMatchObject({ code: "STATEMENT_OWNER_MISMATCH" });
+    await expect(createEmployerStatement({
+      statement: create,
+      principal: owner,
+      now: new Date(Number(dueAt + 40n) * 1_000),
+    })).resolves.toMatchObject({
+      id: statementId,
+      state: "prepared",
+      replayed: false,
+    });
+    await expect(createEmployerStatement({
+      statement: create,
+      principal: owner,
+      now: new Date(Number(dueAt + 40n) * 1_000),
+    })).resolves.toMatchObject({ id: statementId, replayed: true });
+    await expect(listPayrollStatementEvidenceGrants(worker)).resolves.toEqual([]);
+
+    await expect(recordEmployerStatementSubmission({
+      statementId,
+      transactionHash: "0xe002",
+      principal: owner,
+    })).resolves.toMatchObject({ state: "submitted", replayed: false });
+    await expect(recordEmployerStatementSubmission({
+      statementId,
+      transactionHash: "0xe002",
+      principal: owner,
+    })).resolves.toMatchObject({ state: "submitted", replayed: true });
+    await expect(recordEmployerStatementSubmission({
+      statementId,
+      transactionHash: "0xe003",
+      principal: owner,
+    })).rejects.toMatchObject({ code: "STATEMENT_TRANSACTION_CONFLICT" });
+    await markEmployerStatementRegistered({
+      statementId,
+      transactionHash: "0xe002",
+      registeredAt: new Date(Number(dueAt + 45n) * 1_000),
+    });
+
+    await expect(listPayrollStatementEvidenceGrants(worker)).resolves.toEqual([
+      expect.objectContaining({
+        id: evidenceId,
+        statementId,
+        claimAccessGrantId,
+        claimantPrincipalId: worker.principalId,
+        statement: expect.objectContaining({
+          statementFact: statementCommitment,
+          state: "registered",
+          source: "employer_statement",
+        }),
+        envelope: evidenceEnvelope,
+      }),
+    ]);
+    await expect(listPayrollStatementEvidenceGrants(owner)).resolves.toEqual([]);
+    expect(await getDatabase().select().from(employerStatements)).toEqual([
+      expect.objectContaining({
+        id: statementId,
+        state: "registered",
+        registrationTransactionHash: "0xe002",
+      }),
+    ]);
+    expect(await getDatabase().select().from(payrollStatementEvidenceGrants))
+      .toEqual([expect.objectContaining({ id: evidenceId, statementId })]);
+  });
+
+  it("authorizes an exact worker-owned Claim v6 and rejects employer or unrelated submission", async () => {
+    const owner: AuthenticatedPrincipal = {
+      ...admin,
+      walletAddress: "0xabc",
+      chainId: READY_AUTH_CHAIN_ID,
+    };
+    const worker: AuthenticatedPrincipal = {
+      principalId: "worker:claim-v6",
+      sessionId: "session:worker-v6",
+    };
+    const outsider: AuthenticatedPrincipal = {
+      principalId: "worker:claim-v6-outsider",
+      sessionId: "session:worker-v6-outsider",
+    };
+    const organizationId = await seedOrganization(owner);
+    const ownerVault = generateVaultPrincipal(owner.principalId);
+    const workerVault = generateVaultPrincipal(worker.principalId);
+    const fixture = prepareWorkerClaimV6PersistenceFixture();
+    const planId = generateUuidV7();
+    const runId = generateUuidV7();
+    const grantId = generateUuidV7();
+    const claimId = generateUuidV7();
+    const proofBundleId = generateUuidV7();
+    const agreementRoot = combineRoot(
+      fixture.publicInputs.agreementRootHigh,
+      fixture.publicInputs.agreementRootLow,
+    );
+    const policyRoot = combineRoot(
+      fixture.publicInputs.policyRootHigh,
+      fixture.publicInputs.policyRootLow,
+    );
+    const runNullifier = combineRoot(
+      fixture.publicInputs.parentNullifierHigh,
+      fixture.publicInputs.parentNullifierLow,
+    );
+    const claimRoot = combineRoot(
+      fixture.snapshotInputs.manifestRootHigh,
+      fixture.snapshotInputs.manifestRootLow,
+    );
+    const snapshot = {
+      schemaVersion: 2 as const,
+      runNullifier,
+      baseAgreementRoot: agreementRoot,
+      obligationRoot: claimRoot,
+      policyRoot,
+      ownerAddress: owner.walletAddress!,
+      dueAt: "1000",
+      graceEndsAt: "1100",
+      claimEndsAt: "1500",
+      availabilityCommitment: claimRoot,
+    };
+    const snapshotCommitment = obligationSnapshotCommitmentV2(snapshot);
+    expect(snapshotCommitment).toBe(combineRoot(
+      fixture.publicInputs.parentFactCommitmentHigh,
+      fixture.publicInputs.parentFactCommitmentLow,
+    ));
+    const planEnvelope = encryptVaultRecord(
+      { format: "payo-v6-persistence-snapshot", snapshot },
+      {
+        schemaVersion: 1,
+        organizationId,
+        recordType: "obligation-snapshot-plan",
+        recordId: planId,
+        revision: 1,
+      },
+      [ownerVault],
+    );
+    const claimAccessEnvelope = encryptVaultRecord(
+      { format: "payo-v6-persistence-claim-access", snapshotCommitment },
+      {
+        schemaVersion: 1,
+        organizationId,
+        recordType: "obligation-claim-access",
+        recordId: grantId,
+        revision: 1,
+      },
+      [workerVault],
+    );
+    await createObligationSnapshotPlan({
+      plan: {
+        id: planId,
+        runId,
+        organizationId,
+        cycleId: "claim-v6-persistence",
+        payrollRevision: 1,
+        ownerAddress: owner.walletAddress!,
+        snapshot,
+        snapshotCommitment,
+        claimAccessGrants: [{
+          id: grantId,
+          claimantPrincipalId: worker.principalId,
+          envelope: claimAccessEnvelope,
+        }],
+        envelope: planEnvelope,
+      },
+      principal: owner,
+      now: new Date(700_000),
+    });
+    await markObligationSnapshotRegistered({
+      planId,
+      transactionHash: "0x500",
+      registeredAt: new Date(900_000),
+    });
+
+    const claimSubjectNullifier = combineRoot(
+      fixture.publicInputs.subjectNullifierHigh,
+      fixture.publicInputs.subjectNullifierLow,
+    );
+    const claimFactCommitment = combineRoot(
+      fixture.publicInputs.factCommitmentHigh,
+      fixture.publicInputs.factCommitmentLow,
+    );
+    const claimEnvelope = encryptVaultRecord(
+      { format: "payo-worker-wage-claim-v2", privateKind: "missing_obligation" },
+      {
+        schemaVersion: 1,
+        organizationId,
+        recordType: "wage-claim-v2",
+        recordId: claimId,
+        revision: 1,
+      },
+      [workerVault, ownerVault],
+    );
+    await expect(createWorkerClaim({
+      claim: {
+        id: claimId,
+        claimAccessGrantId: grantId,
+        organizationId,
+        runId,
+        revision: 1,
+        proofBundleId,
+        claimSubjectNullifier,
+        claimFactCommitment,
+        envelope: claimEnvelope,
+      },
+      principal: worker,
+    })).resolves.toMatchObject({ state: "prepared", replayed: false });
+
+    const proofEnvelope = encryptVaultRecord(
+      { format: "payo-worker-claim-v6-proof", proofCalldata: fixture.proofCalldata },
+      {
+        schemaVersion: 1,
+        organizationId,
+        recordType: "proof-bundle",
+        recordId: proofBundleId,
+        revision: 1,
+      },
+      [workerVault, ownerVault],
+    );
+    const bundle = {
+      id: proofBundleId,
+      organizationId,
+      runId,
+      revision: 1,
+      proofType: "wage_claim" as const,
+      subjectRecordId: claimId,
+      proofVersion: "6" as const,
+      circuitSha256: WAGE_CLAIM_VNEXT_CIRCUIT_SHA256,
+      verificationKeySha256: WAGE_CLAIM_VNEXT_VERIFICATION_KEY_SHA256,
+      publicInputsHash: hashCanonicalJson(fixture.publicInputs),
+      publicInputs: fixture.publicInputs,
+      proofCalldataHash: hashProofCalldata(fixture.proofCalldata),
+      envelope: proofEnvelope,
+    };
+    const deployment = {
+      chainId: `0x${BigInt(fixture.publicInputs.chainId).toString(16)}`,
+      sealAddress: `0x${BigInt(fixture.publicInputs.sealAddress).toString(16)}`,
+    };
+    await expect(storeEncryptedPayrollIntegrityBundle({
+      bundle,
+      deployment,
+      principal: worker,
+    })).resolves.toMatchObject({ replayed: false, verificationState: "locally_verified" });
+    expect((await getDatabase().select().from(workerClaims))[0].state).toBe("proved");
+    await expect(getEncryptedProofBundle({ proofBundleId, principal: worker }))
+      .resolves.toMatchObject({
+        id: proofBundleId,
+        proofVersion: "6",
+        revision: 1,
+        envelope: proofEnvelope,
+      });
+    await expect(getEncryptedProofBundle({ proofBundleId, principal: owner }))
+      .resolves.toMatchObject({ id: proofBundleId, proofType: "wage_claim" });
+    await expect(getEncryptedProofBundle({ proofBundleId, principal: outsider }))
+      .rejects.toMatchObject({ code: "PROOF_BUNDLE_FORBIDDEN" });
+    await expect(storeEncryptedPayrollIntegrityBundle({
+      bundle,
+      deployment,
+      principal: owner,
+    })).rejects.toMatchObject({ code: "WORKER_CLAIM_FORBIDDEN" });
+    await expect(enqueueExceptionAuthorization({
+      proofBundleId,
+      proofCalldata: fixture.proofCalldata,
+      principal: outsider,
+    })).rejects.toMatchObject({ code: "WORKER_CLAIM_FORBIDDEN" });
+    await expect(enqueueExceptionAuthorization({
+      proofBundleId,
+      proofCalldata: fixture.proofCalldata,
+      principal: owner,
+    })).rejects.toMatchObject({ code: "WORKER_CLAIM_FORBIDDEN" });
+
+    await expect(enqueueExceptionAuthorization({
+      proofBundleId,
+      proofCalldata: fixture.proofCalldata,
+      principal: worker,
+    })).resolves.toMatchObject({
+      workflowType: "wage_claim",
+      subjectRecordId: claimId,
+      state: "pending",
+      replayed: false,
+    });
+    expect((await getDatabase().select().from(workerClaims))[0].state).toBe("authorization_pending");
+    expect(await getDatabase().select().from(exceptionAuthorizationJobs)).toHaveLength(1);
+
+    const firstLeaseAt = new Date(Date.now() + 10_000);
+    const [firstLease] = await leaseExceptionAuthorizationJobs("claim-v6-relayer", 1, firstLeaseAt);
+    expect(firstLease).toMatchObject({ proofBundleId, transactionHash: null });
+    await recordExceptionAuthorizationSubmission(firstLease, "0xc600", firstLeaseAt);
+    const [confirmationLease] = await leaseExceptionAuthorizationJobs(
+      "claim-v6-relayer",
+      1,
+      new Date(firstLeaseAt.getTime() + 2_000),
+    );
+    expect(confirmationLease).toMatchObject({ proofBundleId, transactionHash: "0xc600" });
+    await completeExceptionAuthorizationJob(
+      confirmationLease,
+      new Date(firstLeaseAt.getTime() + 3_000),
+    );
+    expect((await getDatabase().select().from(workerClaims))[0].state).toBe("accepted");
+    expect((await getDatabase().select().from(proofBundles))[0]).toMatchObject({
+      id: proofBundleId,
+      verificationState: "onchain_verified",
+      verificationTransactionHash: "0xc600",
+    });
+    await expect(enqueueExceptionAuthorization({
+      proofBundleId,
+      proofCalldata: fixture.proofCalldata,
+      principal: worker,
+    })).resolves.toMatchObject({ state: "complete", replayed: true });
+    expect(await getDatabase().select().from(obligationClaimAccessGrants)).toHaveLength(1);
+
+    const remediationFixture = prepareWageRemediationV7PersistenceFixture();
+    expect(combineRoot(
+      remediationFixture.publicInputs.parentNullifierHigh,
+      remediationFixture.publicInputs.parentNullifierLow,
+    )).toBe(claimSubjectNullifier);
+    expect(combineRoot(
+      remediationFixture.publicInputs.parentFactCommitmentHigh,
+      remediationFixture.publicInputs.parentFactCommitmentLow,
+    )).toBe(claimFactCommitment);
+    const remediationId = generateUuidV7();
+    const remediationProofBundleId = generateUuidV7();
+    const remediationSubjectNullifier = combineRoot(
+      remediationFixture.publicInputs.subjectNullifierHigh,
+      remediationFixture.publicInputs.subjectNullifierLow,
+    );
+    const remediationFactCommitment = combineRoot(
+      remediationFixture.publicInputs.factCommitmentHigh,
+      remediationFixture.publicInputs.factCommitmentLow,
+    );
+    const actionCommitment = combineRoot(
+      remediationFixture.publicInputs.manifestRootHigh,
+      remediationFixture.publicInputs.manifestRootLow,
+    );
+    const remediationFxRoot = combineRoot(
+      remediationFixture.publicInputs.fxRootHigh,
+      remediationFixture.publicInputs.fxRootLow,
+    );
+    const remediationEnvelope = encryptVaultRecord(
+      { format: "payo-wage-remediation-v2", privateAmountAtomic: "1000000" },
+      {
+        schemaVersion: 1,
+        organizationId,
+        recordType: "wage-remediation-v2",
+        recordId: remediationId,
+        revision: 1,
+      },
+      [workerVault, ownerVault],
+    );
+    const remediationCreate = {
+      id: remediationId,
+      workerClaimId: claimId,
+      organizationId,
+      runId,
+      revision: 1 as const,
+      proofBundleId: remediationProofBundleId,
+      claimSubjectNullifier,
+      claimFactCommitment,
+      remediationSubjectNullifier,
+      remediationFactCommitment,
+      actionCommitment,
+      fxRoot: remediationFxRoot,
+      validityExpiry: remediationFixture.publicInputs.validityExpiry,
+      envelope: remediationEnvelope,
+    };
+    await expect(createWageRemediation({
+      remediation: remediationCreate,
+      principal: owner,
+    })).resolves.toMatchObject({ state: "prepared", replayed: false });
+    await expect(createWageRemediation({
+      remediation: remediationCreate,
+      principal: owner,
+    })).resolves.toMatchObject({ state: "prepared", replayed: true });
+
+    const remediationProofEnvelope = encryptVaultRecord(
+      {
+        format: "payo-remediation-v7-proof",
+        proofCalldata: remediationFixture.proofCalldata,
+      },
+      {
+        schemaVersion: 1,
+        organizationId,
+        recordType: "proof-bundle",
+        recordId: remediationProofBundleId,
+        revision: 1,
+      },
+      [workerVault, ownerVault],
+    );
+    const remediationBundle = {
+      id: remediationProofBundleId,
+      organizationId,
+      runId,
+      revision: 1,
+      proofType: "wage_remediation" as const,
+      subjectRecordId: remediationId,
+      proofVersion: "7" as const,
+      circuitSha256: WAGE_REMEDIATION_VNEXT_CIRCUIT_SHA256,
+      verificationKeySha256: WAGE_REMEDIATION_VNEXT_VERIFICATION_KEY_SHA256,
+      publicInputsHash: hashCanonicalJson(remediationFixture.publicInputs),
+      publicInputs: remediationFixture.publicInputs,
+      proofCalldataHash: hashProofCalldata(remediationFixture.proofCalldata),
+      envelope: remediationProofEnvelope,
+    };
+    await expect(storeEncryptedPayrollIntegrityBundle({
+      bundle: remediationBundle,
+      deployment,
+      principal: owner,
+    })).resolves.toMatchObject({
+      replayed: false,
+      verificationState: "locally_verified",
+    });
+    expect((await getDatabase().select().from(wageRemediations))[0].state)
+      .toBe("proved");
+    await expect(getEncryptedProofBundle({
+      proofBundleId: remediationProofBundleId,
+      principal: worker,
+    })).resolves.toMatchObject({
+      id: remediationProofBundleId,
+      proofVersion: "7",
+      envelope: remediationProofEnvelope,
+    });
+    await expect(getEncryptedProofBundle({
+      proofBundleId: remediationProofBundleId,
+      principal: owner,
+    })).resolves.toMatchObject({ id: remediationProofBundleId });
+
+    await expect(enqueueExceptionAuthorization({
+      proofBundleId: remediationProofBundleId,
+      proofCalldata: remediationFixture.proofCalldata,
+      principal: worker,
+    })).rejects.toMatchObject({ code: "ORG_FORBIDDEN" });
+    await expect(enqueueExceptionAuthorization({
+      proofBundleId: remediationProofBundleId,
+      proofCalldata: remediationFixture.proofCalldata,
+      principal: owner,
+    })).resolves.toMatchObject({
+      workflowType: "wage_remediation",
+      subjectRecordId: remediationId,
+      state: "pending",
+    });
+    const remediationLeaseAt = new Date(Date.now() + 20_000);
+    const [timedOutRemediationLease] = await leaseExceptionAuthorizationJobs(
+      "remediation-v7-relayer",
+      1,
+      remediationLeaseAt,
+    );
+    await deferExceptionAuthorizationJob(
+      { ...timedOutRemediationLease, attempts: 79 },
+      {
+        errorCode: "EXCEPTION_STATE_RPC_FAILURE",
+        errorMessage: "Temporary RPC outage exhausted the first authorization attempt.",
+      },
+      remediationLeaseAt,
+    );
+    expect((await getDatabase().select().from(wageRemediations))[0])
+      .toMatchObject({ state: "failed", lastErrorCode: "EXCEPTION_AUTHORIZATION_TIMEOUT" });
+    await expect(enqueueExceptionAuthorization({
+      proofBundleId: remediationProofBundleId,
+      proofCalldata: remediationFixture.proofCalldata,
+      principal: owner,
+    })).resolves.toMatchObject({
+      state: "pending",
+      replayed: false,
+      requeued: true,
+    });
+    const [remediationLease] = await leaseExceptionAuthorizationJobs(
+      "remediation-v7-relayer",
+      1,
+      new Date(remediationLeaseAt.getTime() + 1_000),
+    );
+    await recordExceptionAuthorizationSubmission(
+      remediationLease,
+      "0xc700",
+      new Date(remediationLeaseAt.getTime() + 1_000),
+    );
+    const [remediationConfirmation] = await leaseExceptionAuthorizationJobs(
+      "remediation-v7-relayer",
+      1,
+      new Date(remediationLeaseAt.getTime() + 3_000),
+    );
+    await completeExceptionAuthorizationJob(
+      remediationConfirmation,
+      new Date(remediationLeaseAt.getTime() + 4_000),
+    );
+    expect((await getDatabase().select().from(wageRemediations))[0])
+      .toMatchObject({ state: "authorized", authorizedAt: expect.any(Date) });
+
+    const totals = { STRK: "0", USDC: "1000000" };
+    const tokenTotalsCommitment = commitTokenTotals({
+      organizationId,
+      runId,
+      totals,
+    });
+    const createPrivatePayment = async (settlementId: string) => {
+      const settlementEnvelope = encryptVaultRecord(
+        { tokenTotals: totals, tokenTotalsCommitment },
+        {
+          schemaVersion: 1,
+          organizationId,
+          recordType: "settlement",
+          recordId: settlementId,
+          revision: 1,
+        },
+        [ownerVault],
+      );
+      return createSettlementIntent({
+        id: settlementId,
+        organizationId,
+        runId,
+        workflowType: "wage_remediation",
+        subjectRecordId: remediationId,
+        walletRequestId: generateUuidV7(),
+        idempotencyKey: "remediation-v7:" + settlementId,
+        tokenTotalsCommitment,
+        envelope: settlementEnvelope,
+        principal: owner,
+      });
+    };
+
+    const cancelledSettlementId = generateUuidV7();
+    await expect(createPrivatePayment(cancelledSettlementId)).resolves.toMatchObject({
+      id: cancelledSettlementId,
+      state: "approval_pending",
+    });
+    await expect(cancelSettlementApproval({
+      settlementId: cancelledSettlementId,
+      principal: owner,
+    })).resolves.toMatchObject({
+      id: cancelledSettlementId,
+      state: "failed",
+      transactionHash: null,
+    });
+    expect((await getDatabase().select().from(wageRemediations))[0])
+      .toMatchObject({
+        state: "authorized",
+        settlementId: null,
+        lastErrorCode: "WALLET_APPROVAL_CANCELLED",
+      });
+
+    const settlementId = generateUuidV7();
+    await expect(createPrivatePayment(settlementId)).resolves.toMatchObject({
+      id: settlementId,
+      state: "approval_pending",
+    });
+    expect((await getDatabase().select().from(wageRemediations))[0])
+      .toMatchObject({ state: "payment_pending", settlementId });
+
+    const privateActionSelector =
+      "0x35aecaf019d9809fd216be64aa8e5f6f6feda13fa33ae33e886585668aaa28f";
+    const felt = (value: string | bigint) => `0x${BigInt(value).toString(16)}`;
+    const eventKeys = [
+      privateActionSelector,
+      "0x3",
+      felt(remediationFixture.publicInputs.subjectNullifierHigh),
+      felt(remediationFixture.publicInputs.subjectNullifierLow),
+    ];
+    const eventData = [
+      felt(remediationFixture.publicInputs.factCommitmentHigh),
+      felt(remediationFixture.publicInputs.factCommitmentLow),
+      felt(remediationFixture.publicInputs.manifestRootHigh),
+      felt(remediationFixture.publicInputs.manifestRootLow),
+    ];
+
+    await persistIndexedBlock({
+      chainId: deployment.chainId,
+      consumer: "payo-v7-seal",
+      blockNumber: 698n,
+      blockHash: "0xc698",
+      parentHash: "0xc697",
+      events: [{
+        transactionHash: "0xc7001",
+        eventIndex: 0,
+        contractAddress: deployment.sealAddress,
+        eventName: privateActionSelector,
+        payload: {
+          keys: eventKeys,
+          data: [
+            ...eventData.slice(0, 3),
+            felt(BigInt(remediationFixture.publicInputs.manifestRootLow) + 1n),
+          ],
+        },
+      }],
+    });
+    await expect(recoverApprovalSubmissionsFromSealEvents({
+      chainId: deployment.chainId,
+      sealAddress: deployment.sealAddress,
+    })).resolves.toEqual({ recovered: 0 });
+    expect((await getDatabase().select().from(settlements))
+      .find(({ id }) => id === settlementId)).toMatchObject({
+      state: "approval_pending",
+      transactionHash: null,
+    });
+
+    await persistIndexedBlock({
+      chainId: deployment.chainId,
+      consumer: "payo-v7-seal",
+      blockNumber: 699n,
+      blockHash: "0xc699",
+      parentHash: "0xc698",
+      events: [{
+        transactionHash: "0xc701",
+        eventIndex: 0,
+        contractAddress: deployment.sealAddress,
+        eventName: privateActionSelector,
+        payload: { keys: eventKeys, data: eventData },
+      }],
+    });
+    await expect(recoverApprovalSubmissionsFromSealEvents({
+      chainId: deployment.chainId,
+      sealAddress: deployment.sealAddress,
+    })).resolves.toEqual({ recovered: 1 });
+    expect((await getDatabase().select().from(settlements))
+      .find(({ id }) => id === settlementId)).toMatchObject({
+      state: "submitted",
+      transactionHash: "0xc701",
+    });
+    const [privatePaymentJob] = await leaseConfirmationJobs(
+      "remediation-v7-confirmation",
+      1,
+      new Date(Date.now() + 40_000),
+    );
+    await applySettlementObservation(privatePaymentJob, {
+      state: "confirmed",
+      confirmationDepth: 1,
+      blockNumber: 700n,
+      blockHash: "0xc701",
+    }, new Date(Date.now() + 41_000));
+    expect((await getDatabase().select().from(wageRemediations))[0])
+      .toMatchObject({
+        state: "payment_confirmed",
+        paymentConfirmedAt: expect.any(Date),
+        reconciledAt: null,
+      });
+  }, 45_000);
 
   it("serves the latest re-encrypted run envelope after a vault key rotation", async () => {
     const organizationId = await seedOrganization();
@@ -1525,6 +2710,166 @@ databaseSuite("PostgreSQL durability integration", () => {
     });
   }, 30_000);
 
+  it("serializes staged payroll authorization and recovers every submission step durably", async () => {
+    const organizationId = await seedOrganization();
+    const runId = generateUuidV7();
+    const fixture = preparePayrollAuthorizationPersistenceFixture();
+    const payrollPackage = {
+      ...fixture.payrollMetadata,
+      envelopeRecordId: fixture.payrollProofBundleId,
+      envelopeRevision: 1,
+      subjectRecordId: runId,
+      commonInputs: fixture.commonInputs,
+    };
+    const snapshotPackage = {
+      ...fixture.snapshotMetadata,
+      envelopeRecordId: fixture.snapshotProofBundleId,
+      envelopeRevision: 1,
+      subjectRecordId: runId,
+      publicInputs: fixture.publicInputs,
+    };
+    await getDatabase().insert(payrollRuns).values({
+      id: runId,
+      organizationId,
+      cycleId: "staged-payroll-authorization",
+      revision: 1,
+      state: "proven",
+      dueAt: new Date(Date.now() + 300_000),
+      agreementRoot: combineRoot(fixture.commonInputs.agreementRootHigh, fixture.commonInputs.agreementRootLow),
+      manifestRoot: combineRoot(fixture.commonInputs.manifestRootHigh, fixture.commonInputs.manifestRootLow),
+      policyRoot: combineRoot(fixture.commonInputs.policyRootHigh, fixture.commonInputs.policyRootLow),
+      fxRoot: combineRoot(fixture.commonInputs.fxRootHigh, fixture.commonInputs.fxRootLow),
+      runNullifier: combineRoot(fixture.commonInputs.runNullifierHigh, fixture.commonInputs.runNullifierLow),
+    });
+    await getDatabase().insert(proofBundles).values([{
+      id: fixture.payrollProofBundleId,
+      organizationId,
+      runId,
+      proofType: "payroll_integrity",
+      proofVersion: "2",
+      subjectRecordId: runId,
+      proofPackage: payrollPackage,
+      proofHash: `0x${"91".repeat(32)}`,
+      verificationState: "locally_verified",
+    }, {
+      id: fixture.snapshotProofBundleId,
+      organizationId,
+      runId,
+      proofType: "obligation_snapshot",
+      proofVersion: "5",
+      subjectRecordId: runId,
+      proofPackage: snapshotPackage,
+      proofHash: `0x${"92".repeat(32)}`,
+      verificationState: "locally_verified",
+    }]);
+    const request = {
+      payrollProofBundleId: fixture.payrollProofBundleId,
+      snapshotProofBundleId: fixture.snapshotProofBundleId,
+      payrollShards: fixture.payrollShards,
+      snapshotProof: fixture.snapshotProof,
+    };
+    await expect(enqueuePayrollAuthorization({
+      runId,
+      request,
+      principal: { principalId: "admin:other", sessionId: "other" },
+    })).rejects.toMatchObject({ code: "ORG_FORBIDDEN" });
+    const tamperedRequest = {
+      ...request,
+      payrollShards: [
+        request.payrollShards[0].map((felt, index) => index === 100 ? "0x1" : felt),
+        request.payrollShards[1],
+      ] as [string[], string[]],
+    };
+    await expect(enqueuePayrollAuthorization({ runId, request: tamperedRequest, principal: admin }))
+      .rejects.toMatchObject({ code: "PROOF_CALLDATA_HASH_MISMATCH" });
+    const queued = await Promise.all([
+      enqueuePayrollAuthorization({ runId, request, principal: admin }),
+      enqueuePayrollAuthorization({ runId, request, principal: admin }),
+    ]);
+    expect(queued.filter(({ replayed }) => replayed)).toHaveLength(1);
+    expect(queued.filter(({ replayed }) => !replayed)).toHaveLength(1);
+    expect(await getDatabase().select().from(payrollAuthorizationJobs)).toHaveLength(1);
+
+    const leaseStartedAt = new Date();
+    const concurrentLeases = await Promise.all([
+      leasePayrollAuthorizationJobs("payroll-worker-a", 1, leaseStartedAt),
+      leasePayrollAuthorizationJobs("payroll-worker-b", 1, leaseStartedAt),
+    ]);
+    expect(concurrentLeases.flat()).toHaveLength(1);
+    await expect(leasePayrollAuthorizationJobs(
+      "payroll-worker-before-expiry",
+      1,
+      new Date(leaseStartedAt.getTime() + 119_000),
+    )).resolves.toEqual([]);
+    const [recovered] = await leasePayrollAuthorizationJobs(
+      "payroll-worker-after-restart",
+      1,
+      new Date(leaseStartedAt.getTime() + 120_001),
+    );
+    expect(recovered).toMatchObject({ activeStep: "begin", transactionHash: null });
+
+    let stepTime = new Date(leaseStartedAt.getTime() + 120_001);
+    await recordPayrollAuthorizationSubmission(recovered, "begin", "0x100", stepTime);
+    stepTime = new Date(stepTime.getTime() + 1_501);
+    let [stepJob] = await leasePayrollAuthorizationJobs("payroll-worker-begin-confirmed", 1, stepTime);
+    expect(stepJob).toMatchObject({ activeStep: "begin", transactionHash: "0x100" });
+    await advancePayrollAuthorizationJob(stepJob, "snapshot", stepTime);
+
+    stepTime = new Date(stepTime.getTime() + 1);
+    [stepJob] = await leasePayrollAuthorizationJobs("payroll-worker-snapshot", 1, stepTime);
+    await recordPayrollAuthorizationSubmission(stepJob, "snapshot", "0x101", stepTime);
+    stepTime = new Date(stepTime.getTime() + 1_501);
+    [stepJob] = await leasePayrollAuthorizationJobs("payroll-worker-snapshot-confirmed", 1, stepTime);
+    await advancePayrollAuthorizationJob(stepJob, "shard0", stepTime);
+
+    stepTime = new Date(stepTime.getTime() + 1);
+    [stepJob] = await leasePayrollAuthorizationJobs("payroll-worker-shard-zero", 1, stepTime);
+    await recordPayrollAuthorizationSubmission(stepJob, "shard0", "0x102", stepTime);
+    stepTime = new Date(stepTime.getTime() + 1_501);
+    [stepJob] = await leasePayrollAuthorizationJobs("payroll-worker-shard-zero-confirmed", 1, stepTime);
+    await advancePayrollAuthorizationJob(stepJob, "shard1", stepTime);
+
+    stepTime = new Date(stepTime.getTime() + 1);
+    [stepJob] = await leasePayrollAuthorizationJobs("payroll-worker-shard-one", 1, stepTime);
+    await recordPayrollAuthorizationSubmission(stepJob, "shard1", "0x103", stepTime);
+    stepTime = new Date(stepTime.getTime() + 1_501);
+    [stepJob] = await leasePayrollAuthorizationJobs("payroll-worker-completer", 1, stepTime);
+    await completePayrollAuthorizationJob(stepJob, stepTime);
+
+    const [completed] = await getDatabase().select().from(payrollAuthorizationJobs);
+    expect(completed).toMatchObject({
+      state: "complete",
+      beginTransactionHash: "0x100",
+      snapshotTransactionHash: "0x101",
+      shard0TransactionHash: "0x102",
+      shard1TransactionHash: "0x103",
+      transactionHash: "0x103",
+      authorizedAt: expect.any(Date),
+    });
+    const verified = await getDatabase().select({
+      id: proofBundles.id,
+      verificationState: proofBundles.verificationState,
+      verificationTransactionHash: proofBundles.verificationTransactionHash,
+    }).from(proofBundles);
+    expect(verified).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: fixture.payrollProofBundleId,
+        verificationState: "onchain_verified",
+        verificationTransactionHash: "0x103",
+      }),
+      expect.objectContaining({
+        id: fixture.snapshotProofBundleId,
+        verificationState: "onchain_verified",
+        verificationTransactionHash: "0x101",
+      }),
+    ]));
+    await expect(leasePayrollAuthorizationJobs(
+      "payroll-worker-after-complete",
+      1,
+      new Date(stepTime.getTime() + 300_000),
+    )).resolves.toEqual([]);
+  }, 30_000);
+
   it("renews an expired FX root only from finalized and on-chain-verified payroll evidence", async () => {
     const organizationId = await seedOrganization();
     const runId = generateUuidV7();
@@ -1584,6 +2929,15 @@ databaseSuite("PostgreSQL durability integration", () => {
       transactionHash: "0x7102",
     });
     const evidence = await getHistoricalFxRenewalEvidence({ runId, principal: admin });
+    const employerStatementEvidence = await getHistoricalFxRenewalEvidence({
+      runId,
+      principal: admin,
+      workflowType: "employer_statement",
+    });
+    expect(employerStatementEvidence).toMatchObject({
+      catalogRoot: fxRoot,
+      authorizationNullifier: runNullifier,
+    });
     const renewed = await enqueueHistoricalFxRenewal({
       evidence,
       observedAt: 2_000,

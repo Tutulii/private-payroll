@@ -4,6 +4,11 @@ use payo_contracts::commitments::{
     build_fixed_merkle_root_v1, derive_run_nullifier_v1, hash_deductions_commitment,
     hash_payroll_leaf_v1, hash_recipient_commitment, hash_text_commitment,
 };
+use payo_contracts::exception_commitments::{
+    claim_capability_commitment_v2, claim_fact_commitment_v2, claim_subject_nullifier_v2,
+    obligation_snapshot_commitment_v2, payroll_statement_commitment_v2,
+    remediation_fact_commitment_v2, remediation_subject_nullifier_v2,
+};
 use payo_contracts::advanced_bundle_verifier::{
     IAdvancedBundleVerifierDispatcher, IAdvancedBundleVerifierDispatcherTrait,
 };
@@ -88,6 +93,99 @@ fn cairo_commitments_match_typescript_and_noir_golden_vector() {
             0x3333333333333333333333333333333333333333333333333333333333333333, @cycle_id, 1,
         ) == 0x3ede22d5b89481904d24ad09eae7666c741f14346daf50c5832a5b4aad4ab9ca,
         'nullifier vector',
+    );
+}
+
+#[test]
+fn exception_v2_commitments_match_typescript_golden_vectors() {
+    let run_nullifier =
+        0x1111111111111111111111111111111111111111111111111111111111111111;
+    let snapshot = obligation_snapshot_commitment_v2(
+        2,
+        run_nullifier,
+        0x2121212121212121212121212121212121212121212121212121212121212121,
+        0x2222222222222222222222222222222222222222222222222222222222222222,
+        0x3333333333333333333333333333333333333333333333333333333333333333,
+        0x1234,
+        100,
+        200,
+        500,
+        0x4444444444444444444444444444444444444444444444444444444444444444,
+    );
+    assert(
+        snapshot == 0xf75739a62e3338d68af1c30c98d7029bd32ba29fc61fb9aefdb560d5d6ac8ac4,
+        'exception snapshot vector',
+    );
+    assert(
+        payroll_statement_commitment_v2(
+            2,
+            run_nullifier,
+            snapshot,
+            0x5555555555555555555555555555555555555555555555555555555555555555,
+            0x6666666666666666666666666666666666666666666666666666666666666666,
+            0x7777777777777777777777777777777777777777777777777777777777777777,
+            210,
+            2,
+        ) == 0xa7968d6d92db5ff5e29c8cda2ec1cf714de4885e67b1d353a7428a0a46b5a86b,
+        'exception statement vector',
+    );
+    let capability_secret =
+        0x8888888888888888888888888888888888888888888888888888888888888888;
+    assert(
+        claim_capability_commitment_v2(capability_secret)
+            == 0x17e2a10450e47c5a34a1ef9c3e42b67dd936cb0224c8e574c4b0aee3edbe6062,
+        'claim capability vector',
+    );
+    let claim_subject = claim_subject_nullifier_v2(
+        capability_secret,
+        run_nullifier,
+        0x9999999999999999999999999999999999999999999999999999999999999999,
+        1,
+    );
+    assert(
+        claim_subject == 0xff1d73feb9ab45e78c03fd6deba118c17681c574d0aa474a663683590c74609a,
+        'claim subject vector',
+    );
+    let claim_fact = claim_fact_commitment_v2(
+        claim_subject,
+        run_nullifier,
+        snapshot,
+        0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,
+        0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,
+        0x9999999999999999999999999999999999999999999999999999999999999999,
+        4,
+        1,
+        250000,
+        2,
+        0,
+        2,
+    );
+    assert(
+        claim_fact == 0xa6ed511782bfe75f9faa7c42c55e1670f9098bcf08ce97b7cb088c0b4a92c2ac,
+        'claim fact vector',
+    );
+    let remediation_subject = remediation_subject_nullifier_v2(
+        claim_subject,
+        0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc,
+    );
+    assert(
+        remediation_subject
+            == 0x78b13525f3b40079e59fc98daaf2215cfeb32afed8e350681214da9312109e7d,
+        'remediation subject vector',
+    );
+    assert(
+        remediation_fact_commitment_v2(
+            remediation_subject,
+            claim_subject,
+            claim_fact,
+            0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd,
+            0,
+            1000000000000000000,
+            300000,
+            2,
+            0x6666666666666666666666666666666666666666666666666666666666666666,
+        ) == 0xd65c00b4c1991ccb248de82827784c7f54fcf52b48f21a180e0518dbed96f625,
+        'remediation fact vector',
     );
 }
 

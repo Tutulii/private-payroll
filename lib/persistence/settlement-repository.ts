@@ -25,17 +25,33 @@ import {
   proofVerificationJobs,
   settlements,
   vaultRecords,
+  wageRemediations,
 } from "./schema";
 
 const PAYROLL_SEALED_EVENT_SELECTOR = "0x1b9fd7bf429246efa243b5f4b5eb036c1ab31a548ec13cc42f97a03b34f38ea";
+const PRIVATE_ACTION_INVOKED_EVENT_SELECTOR = "0x35aecaf019d9809fd216be64aa8e5f6f6feda13fa33ae33e886585668aaa28f";
 
 type SealRecoveryBinding = {
+  eventSelector: typeof PAYROLL_SEALED_EVENT_SELECTOR;
   mode: bigint;
   proofVersion: bigint;
   runNullifierHigh: bigint;
   runNullifierLow: bigint;
   shardCalldataHashes: readonly [bigint, bigint];
 };
+
+type PrivateActionRecoveryBinding = {
+  eventSelector: typeof PRIVATE_ACTION_INVOKED_EVENT_SELECTOR;
+  mode: bigint;
+  subjectHigh: bigint;
+  subjectLow: bigint;
+  factHigh: bigint;
+  factLow: bigint;
+  actionHigh: bigint;
+  actionLow: bigint;
+};
+
+type ApprovalRecoveryBinding = SealRecoveryBinding | PrivateActionRecoveryBinding;
 
 type SealRecoveryCandidate = {
   workflowType: SettlementWorkflow;
@@ -94,12 +110,57 @@ function sealRecoveryBinding(candidate: SealRecoveryCandidate): SealRecoveryBind
     || shard1Hash === null
   ) return null;
   return {
+    eventSelector: PAYROLL_SEALED_EVENT_SELECTOR,
     mode: profile.mode,
     proofVersion,
     runNullifierHigh,
     runNullifierLow,
     shardCalldataHashes: [shard0Hash, shard1Hash],
   };
+}
+
+function privateActionRecoveryBinding(
+  candidate: SealRecoveryCandidate,
+): PrivateActionRecoveryBinding | null {
+  if (
+    candidate.workflowType !== "wage_remediation"
+    || candidate.proofType !== "wage_remediation"
+    || candidate.proofVersion !== "7"
+  ) return null;
+  const proofPackage = record(candidate.proofPackage);
+  const publicInputs = record(proofPackage?.publicInputs);
+  if (
+    proofPackage?.schemaVersion !== 2
+    || proofPackage.proofType !== "wage_remediation"
+    || proofPackage.subjectRecordId !== candidate.subjectRecordId
+    || proofPackage.proofVersion !== "7"
+    || publicInputs?.proofVersion !== "7"
+    || publicInputs.schemaVersion !== "2"
+    || publicInputs.shardIndex !== "0"
+  ) return null;
+  const values = [
+    publicInputs.subjectNullifierHigh,
+    publicInputs.subjectNullifierLow,
+    publicInputs.factCommitmentHigh,
+    publicInputs.factCommitmentLow,
+    publicInputs.manifestRootHigh,
+    publicInputs.manifestRootLow,
+  ].map(bigintValue);
+  if (values.some((value) => value === null)) return null;
+  return {
+    eventSelector: PRIVATE_ACTION_INVOKED_EVENT_SELECTOR,
+    mode: 3n,
+    subjectHigh: values[0]!,
+    subjectLow: values[1]!,
+    factHigh: values[2]!,
+    factLow: values[3]!,
+    actionHigh: values[4]!,
+    actionLow: values[5]!,
+  };
+}
+
+function approvalRecoveryBinding(candidate: SealRecoveryCandidate): ApprovalRecoveryBinding | null {
+  return privateActionRecoveryBinding(candidate) ?? sealRecoveryBinding(candidate);
 }
 
 function payrollSealedEventMatches(payload: unknown, binding: SealRecoveryBinding): boolean {
@@ -115,6 +176,32 @@ function payrollSealedEventMatches(payload: unknown, binding: SealRecoveryBindin
     && values[3] === binding.shardCalldataHashes[0]
     && values[4] === binding.shardCalldataHashes[1]
     && values[5] === binding.proofVersion;
+}
+
+function privateActionEventMatches(
+  payload: unknown,
+  binding: PrivateActionRecoveryBinding,
+): boolean {
+  const event = record(payload);
+  const keys = event?.keys;
+  const data = event?.data;
+  if (!Array.isArray(keys) || keys.length < 4 || !Array.isArray(data) || data.length < 4) return false;
+  const values = [keys[0], keys[1], keys[2], keys[3], ...data.slice(0, 4)].map(bigintValue);
+  return values.every((value) => value !== null)
+    && values[0] === BigInt(binding.eventSelector)
+    && values[1] === binding.mode
+    && values[2] === binding.subjectHigh
+    && values[3] === binding.subjectLow
+    && values[4] === binding.factHigh
+    && values[5] === binding.factLow
+    && values[6] === binding.actionHigh
+    && values[7] === binding.actionLow;
+}
+
+function approvalEventMatches(payload: unknown, binding: ApprovalRecoveryBinding): boolean {
+  return binding.eventSelector === PRIVATE_ACTION_INVOKED_EVENT_SELECTOR
+    ? privateActionEventMatches(payload, binding)
+    : payrollSealedEventMatches(payload, binding);
 }
 
 const IDEMPOTENCY_LOCK_MS = 60_000;
@@ -196,13 +283,54 @@ export async function createSettlementIntent(input: {
       throw new ApiError(404, "Payroll run not found in this organization.", "RUN_NOT_FOUND");
     }
 
+    let routedWageRemediation: typeof wageRemediations.$inferSelect | undefined;
     if (workflowType === "payroll") {
       if (input.subjectRecordId !== input.runId) {
         throw new ApiError(400, "Payroll settlement subject must be the payroll run.", "SETTLEMENT_SUBJECT_INVALID");
       }
+    } else if (workflowType === "wage_remediation") {
+      const [route] = await transaction.select({
+        remediation: wageRemediations,
+        proofType: proofBundles.proofType,
+        proofVersion: proofBundles.proofVersion,
+        verificationState: proofBundles.verificationState,
+        verificationTransactionHash: proofBundles.verificationTransactionHash,
+        recordType: vaultRecords.recordType,
+      }).from(wageRemediations).innerJoin(
+        proofBundles,
+        eq(proofBundles.id, wageRemediations.proofBundleId),
+      ).innerJoin(vaultRecords, and(
+        eq(vaultRecords.organizationId, wageRemediations.organizationId),
+        eq(vaultRecords.id, wageRemediations.id),
+        eq(vaultRecords.recordType, "wage-remediation-v2"),
+        isNull(vaultRecords.supersededAt),
+      )).where(and(
+        eq(wageRemediations.id, input.subjectRecordId),
+        eq(wageRemediations.organizationId, input.organizationId),
+        eq(wageRemediations.runId, input.runId),
+      )).limit(1).for("update");
+      if (
+        !route
+        || !["authorized", "payment_pending"].includes(route.remediation.state)
+        || route.remediation.validityExpiresAt.getTime() <= now.getTime()
+        || (route.remediation.settlementId
+          && route.remediation.settlementId !== input.id)
+        || route.proofType !== "wage_remediation"
+        || route.proofVersion !== "7"
+        || route.verificationState !== "onchain_verified"
+        || !route.verificationTransactionHash
+        || route.recordType !== "wage-remediation-v2"
+      ) {
+        throw new ApiError(
+          409,
+          "Private remediation requires one unexpired on-chain authorized Remediation v7 attempt.",
+          "REMEDIATION_AUTHORIZATION_REQUIRED",
+        );
+      }
+      routedWageRemediation = route.remediation;
     } else {
       const expectedProofType = workflowType;
-      const expectedRecordType = workflowType === "wage_claim" ? "wage-claim" : "remediation";
+      const expectedRecordType = "wage-claim";
       const [subject] = await transaction
         .select({ id: vaultRecords.id })
         .from(vaultRecords)
@@ -230,6 +358,7 @@ export async function createSettlementIntent(input: {
         throw new ApiError(409, "A locally verified exception proof is required before approval.", "EXCEPTION_PROOF_REQUIRED");
       }
     }
+
 
     const [insertedRequest] = await transaction
       .insert(idempotencyRequests)
@@ -290,7 +419,7 @@ export async function createSettlementIntent(input: {
       : workflowType === "wage_claim"
         ? "confirmed"
         : "disputed";
-    if (run.state !== requiredRunState) {
+    if (!routedWageRemediation && run.state !== requiredRunState) {
       throw new ApiError(
         409,
         `${workflowType} requires a ${requiredRunState} payroll; current state is ${run.state}.`,
@@ -322,6 +451,24 @@ export async function createSettlementIntent(input: {
         tokenTotalsCommitment: input.tokenTotalsCommitment.toLowerCase(),
       })
       .returning();
+    if (routedWageRemediation) {
+      const [updatedRemediation] = await transaction.update(wageRemediations).set({
+        settlementId: settlement.id,
+        state: "payment_pending",
+        updatedAt: now,
+      }).where(and(
+        eq(wageRemediations.id, routedWageRemediation.id),
+        eq(wageRemediations.state, "authorized"),
+        isNull(wageRemediations.settlementId),
+      )).returning({ id: wageRemediations.id });
+      if (!updatedRemediation && routedWageRemediation.settlementId !== settlement.id) {
+        throw new ApiError(
+          409,
+          "Remediation state changed before private payment approval.",
+          "REMEDIATION_STATE_CONFLICT",
+        );
+      }
+    }
     if (workflowType === "payroll") {
       const [updatedRun] = await transaction
         .update(payrollRuns)
@@ -415,10 +562,10 @@ export async function recordSettlementSubmission(input: {
 /**
  * Recovers a wallet submission when Ready executed the atomic STRK20 request
  * but did not resolve `wallet_strk20InvokeTransaction` with its transaction
- * hash. Only a canonical PayrollSealed event whose public nullifier, workflow
- * mode, proof version, and both proof-calldata hashes match the locally stored
- * proof bundle is accepted; salary, token totals, and recipients are neither
- * indexed nor inspected.
+ * hash. Legacy workflows require their exact canonical PayrollSealed binding;
+ * Remediation v7 requires the canonical PrivateActionInvoked mode, subject,
+ * fact, and action commitments. Salary, token totals, and recipients are
+ * neither indexed nor inspected.
  */
 export async function recoverApprovalSubmissionsFromSealEvents(input: {
   chainId: string;
@@ -481,7 +628,10 @@ export async function recoverApprovalSubmissionsFromSealEvents(input: {
     .where(and(
       eq(indexedChainEvents.chainId, input.chainId),
       eq(indexedChainEvents.contractAddress, normalizedSeal),
-      eq(indexedChainEvents.eventName, PAYROLL_SEALED_EVENT_SELECTOR),
+      or(
+        eq(indexedChainEvents.eventName, PAYROLL_SEALED_EVENT_SELECTOR),
+        eq(indexedChainEvents.eventName, PRIVATE_ACTION_INVOKED_EVENT_SELECTOR),
+      ),
       eq(indexedChainEvents.canonical, true),
     ))
     .orderBy(desc(indexedChainEvents.blockNumber))
@@ -491,10 +641,10 @@ export async function recoverApprovalSubmissionsFromSealEvents(input: {
   const matches = candidates.flatMap((candidate) => {
     const workflowType = settlementWorkflowSchema.safeParse(candidate.workflowType);
     if (!workflowType.success) return [];
-    const binding = sealRecoveryBinding({ ...candidate, workflowType: workflowType.data });
+    const binding = approvalRecoveryBinding({ ...candidate, workflowType: workflowType.data });
     if (!binding) return [];
     return events
-      .filter(({ payload }) => payrollSealedEventMatches(payload, binding))
+      .filter(({ payload }) => approvalEventMatches(payload, binding))
       .map((event) => ({ candidate: { ...candidate, workflowType: workflowType.data }, event }));
   });
   const settlementMatchCounts = new Map<string, number>();
@@ -751,6 +901,45 @@ export async function cancelSettlementApproval(input: {
         .where(and(eq(payrollRuns.id, existing.runId), eq(payrollRuns.state, "approval_pending")))
         .returning({ id: payrollRuns.id });
       if (!run) throw new ApiError(409, "Payroll state changed during cancellation.", "RUN_STATE_CONFLICT");
+    } else if (existing.workflowType === "wage_remediation") {
+      const [remediation] = await transaction
+        .select({ id: wageRemediations.id, state: wageRemediations.state })
+        .from(wageRemediations)
+        .where(and(
+          eq(wageRemediations.id, existing.subjectRecordId),
+          eq(wageRemediations.settlementId, existing.id),
+        ))
+        .limit(1)
+        .for("update");
+      if (remediation) {
+        const [released] = await transaction
+          .update(wageRemediations)
+          .set({
+            state: sql`CASE
+              WHEN ${wageRemediations.validityExpiresAt} <= ${now.toISOString()}::timestamptz
+                THEN 'expired'::wage_remediation_state
+              ELSE 'authorized'::wage_remediation_state
+            END`,
+            settlementId: null,
+            paymentConfirmedAt: null,
+            lastErrorCode: "WALLET_APPROVAL_CANCELLED",
+            lastErrorMessage: "Ready approval was cancelled before PAYO recorded a transaction hash.",
+            updatedAt: now,
+          })
+          .where(and(
+            eq(wageRemediations.id, remediation.id),
+            eq(wageRemediations.state, "payment_pending"),
+            eq(wageRemediations.settlementId, existing.id),
+          ))
+          .returning({ id: wageRemediations.id });
+        if (!released) {
+          throw new ApiError(
+            409,
+            "Remediation state changed during cancellation.",
+            "REMEDIATION_STATE_CONFLICT",
+          );
+        }
+      }
     }
     await transaction.insert(auditEvents).values({
       id: generateUuidV7(),
@@ -995,6 +1184,37 @@ export async function applySettlementObservation(
           eq(payrollRuns.id, current.runId),
           or(eq(payrollRuns.state, "submitted"), eq(payrollRuns.state, "confirmed")),
         ));
+    }
+
+    if (current.workflowType === "wage_remediation") {
+      if (settlementState === "confirmed" || settlementState === "finalized") {
+        await transaction.update(wageRemediations).set({
+          state: "payment_confirmed",
+          paymentConfirmedAt: now,
+          lastErrorCode: null,
+          lastErrorMessage: null,
+          updatedAt: now,
+        }).where(and(
+          eq(wageRemediations.id, current.subjectRecordId),
+          eq(wageRemediations.settlementId, current.id),
+        ));
+      } else if (settlementState === "failed" || settlementState === "reorged") {
+        await transaction.update(wageRemediations).set({
+          state: sql`CASE
+            WHEN ${wageRemediations.validityExpiresAt} <= ${now.toISOString()}::timestamptz
+              THEN 'expired'::wage_remediation_state
+            ELSE 'authorized'::wage_remediation_state
+          END`,
+          settlementId: null,
+          paymentConfirmedAt: null,
+          lastErrorCode: observation.errorCode ?? settlementState.toUpperCase(),
+          lastErrorMessage: observation.errorMessage ?? null,
+          updatedAt: now,
+        }).where(and(
+          eq(wageRemediations.id, current.subjectRecordId),
+          eq(wageRemediations.settlementId, current.id),
+        ));
+      }
     }
 
     const terminal = settlementState === "finalized" || settlementState === "failed";

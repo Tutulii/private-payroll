@@ -218,7 +218,7 @@ export async function getHistoricalFxRenewalEvidence(input: {
   runId: string;
   principal: AuthenticatedPrincipal;
 } & ({
-  workflowType?: "wage_claim";
+  workflowType?: "wage_claim" | "employer_statement";
 } | {
   workflowType: "wage_remediation";
   claimId: string;

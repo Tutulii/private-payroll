@@ -12,8 +12,21 @@ import {
 } from "@/lib/domain/payroll";
 import type { FxSnapshot, PragmaProtectedFxSnapshot } from "@/lib/domain/fx";
 import type { DueObligationSignal, ObligationScheduleItem, ObligationScheduleRegistration } from "@/lib/domain/obligation-schedule";
+import type {
+  ObligationClaimAccessGrantSummary,
+  ObligationSnapshotPlanCreate,
+  ObligationSnapshotPlanPublic,
+  ObligationSnapshotPlanSummary,
+} from "@/lib/domain/obligation-snapshot-plan";
 import { generateUuidV7, payrollLineRecordSchema } from "@/lib/domain/records";
-import type { EncryptedPayrollIntegrityBundleCreate } from "@/lib/domain/proof-bundle";
+import type { EncryptedPayoProofBundleCreate } from "@/lib/domain/proof-bundle";
+import type { WorkerClaimCreate, WorkerClaimSummary } from "@/lib/domain/worker-claim";
+import type { WageRemediationCreate, WageRemediationSummary } from "@/lib/domain/wage-remediation";
+import type {
+  EmployerStatementCreate,
+  EmployerStatementSummary,
+  PayrollStatementEvidenceGrantSummary,
+} from "@/lib/domain/employer-statement";
 import type {
   PayoReadinessRequest,
   PayoReadinessResult,
@@ -21,12 +34,57 @@ import type {
 import type { VaultRotationRequest } from "@/lib/domain/vault-lifecycle";
 import type { SignedCapability } from "@/lib/domain/capability";
 import { decodeRemoteProofJobResponse, decodeRemoteProofResponse, type RemoteProofRequest } from "@/lib/proof/remote-prover";
-import type { ProofWorkerSuccess } from "@/lib/proof/protocol";
+import type {
+  ExceptionProofWorkerSuccess,
+  PayoProofWorkerSuccess,
+  ProofWorkerSuccess,
+} from "@/lib/proof/protocol";
 import type { SerializedPayrollIntegrityBuildRequest } from "@/lib/proof/input-builder";
 import type { ReadySessionPayload } from "@/lib/auth/ready-session";
 import type { TypedData } from "starknet";
 
 type AccessTokenProvider = () => Promise<string | null>;
+
+export type ExceptionAuthorizationStatus = {
+  id: string;
+  organizationId: string;
+  runId: string;
+  proofBundleId: string;
+  workflowType: "wage_claim" | "wage_remediation";
+  subjectRecordId: string;
+  state: "pending" | "leased" | "complete" | "dead";
+  transactionHash: string | null;
+  attempts: number;
+  lastErrorCode: string | null;
+  lastErrorMessage: string | null;
+  authorizedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  replayed?: boolean;
+  requeued?: boolean;
+};
+
+export type PayrollAuthorizationStatus = {
+  id: string;
+  organizationId: string;
+  runId: string;
+  payrollProofBundleId: string;
+  snapshotProofBundleId: string;
+  state: "pending" | "leased" | "complete" | "dead";
+  activeStep: "begin" | "snapshot" | "shard0" | "shard1";
+  transactionHash: string | null;
+  beginTransactionHash: string | null;
+  snapshotTransactionHash: string | null;
+  shard0TransactionHash: string | null;
+  shard1TransactionHash: string | null;
+  attempts: number;
+  lastErrorCode: string | null;
+  lastErrorMessage: string | null;
+  authorizedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  replayed?: boolean;
+};
 
 export class PayoApiError extends Error {
   constructor(
@@ -87,6 +145,7 @@ export type PreparedEncryptedRun = {
   policyRoot: `0x${string}`;
   fxRoot: `0x${string}`;
   runNullifier: `0x${string}`;
+  obligationSnapshotPlanId?: string;
   lineRecords: Array<{
     id: string;
     revision: number;
@@ -116,6 +175,7 @@ export function prepareEncryptedPayrollRun(input: {
     fxRoot: `0x${string}`;
     runNullifier: `0x${string}`;
   };
+  obligationSnapshotPlanId?: string;
   claimProofSource: {
     buildInput: SerializedPayrollIntegrityBuildRequest;
   };
@@ -146,6 +206,9 @@ export function prepareEncryptedPayrollRun(input: {
       cycleId: input.cycleId,
       dueAt: input.dueAt,
       ...input.proofBinding,
+      ...(input.obligationSnapshotPlanId
+        ? { obligationSnapshotPlanId: input.obligationSnapshotPlanId }
+        : {}),
       manifest,
       claimProofSource: input.claimProofSource,
     },
@@ -218,6 +281,9 @@ export function prepareEncryptedPayrollRun(input: {
     ciphertext: envelope.ciphertext,
     envelope,
     lineRecords,
+    ...(input.obligationSnapshotPlanId
+      ? { obligationSnapshotPlanId: input.obligationSnapshotPlanId }
+      : {}),
     ...input.proofBinding,
   };
 }
@@ -387,9 +453,175 @@ export class PayoClient {
         policyRoot: input.policyRoot,
         fxRoot: input.fxRoot,
         runNullifier: input.runNullifier,
+        ...(input.obligationSnapshotPlanId
+          ? { obligationSnapshotPlanId: input.obligationSnapshotPlanId }
+          : {}),
         lineRecords: input.lineRecords,
       }),
     });
+  }
+
+  async listObligationClaimAccessGrants() {
+    return this.request<{ grants: ObligationClaimAccessGrantSummary[] }>(
+      "/api/v1/claim-access",
+    );
+  }
+
+  async createWorkerClaim(input: WorkerClaimCreate) {
+    return this.request<{ claim: WorkerClaimSummary & { replayed: boolean } }>(
+      "/api/v1/worker-claims",
+      { method: "POST", body: JSON.stringify(input) },
+    );
+  }
+
+  async listWorkerClaims(organizationId?: string) {
+    const query = organizationId
+      ? "?" + new URLSearchParams({ organizationId }).toString()
+      : "";
+    return this.request<{ claims: WorkerClaimSummary[] }>(
+      "/api/v1/worker-claims" + query,
+    );
+  }
+
+
+  async createWageRemediation(input: WageRemediationCreate) {
+    return this.request<{
+      remediation: WageRemediationSummary & { replayed: boolean };
+    }>("/api/v1/wage-remediations", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async listWageRemediations(organizationId?: string) {
+    const query = organizationId
+      ? "?" + new URLSearchParams({ organizationId }).toString()
+      : "";
+    return this.request<{ remediations: WageRemediationSummary[] }>(
+      "/api/v1/wage-remediations" + query,
+    );
+  }
+
+  async getWageRemediation(remediationId: string) {
+    return this.request<{ remediation: WageRemediationSummary }>(
+      "/api/v1/wage-remediations/" + encodeURIComponent(remediationId),
+    );
+  }
+
+  async attachWageRemediationSettlement(input: {
+    remediationId: string;
+    settlementId: string;
+  }) {
+    return this.request<{ remediation: WageRemediationSummary }>(
+      "/api/v1/wage-remediations/" + encodeURIComponent(input.remediationId),
+      {
+        method: "PATCH",
+        body: JSON.stringify({ settlementId: input.settlementId }),
+      },
+    );
+  }
+
+  async createObligationSnapshotPlan(input: ObligationSnapshotPlanCreate) {
+    return this.request<{
+      plan: ObligationSnapshotPlanSummary & { replayed: boolean };
+    }>("/api/v1/obligation-snapshots", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async listObligationSnapshotPlans(organizationId: string) {
+    const query = new URLSearchParams({ organizationId });
+    return this.request<{ plans: ObligationSnapshotPlanSummary[] }>(
+      `/api/v1/obligation-snapshots?${query.toString()}`,
+    );
+  }
+
+  async findRegisteredObligationSnapshotPlan(input: {
+    organizationId: string;
+    cycleId: string;
+    agreementRoot: `0x${string}`;
+  }) {
+    const query = new URLSearchParams(input);
+    return this.request<{ plan: ObligationSnapshotPlanPublic }>(
+      `/api/v1/obligation-snapshots?${query.toString()}`,
+    );
+  }
+
+  async getObligationSnapshotPlan(planId: string) {
+    return this.request<{ plan: ObligationSnapshotPlanPublic }>(
+      `/api/v1/obligation-snapshots/${encodeURIComponent(planId)}`,
+    );
+  }
+
+  async recordObligationSnapshotSubmission(input: {
+    planId: string;
+    transactionHash: string;
+  }) {
+    return this.request<{
+      plan: ObligationSnapshotPlanSummary & { replayed: boolean };
+    }>(`/api/v1/obligation-snapshots/${encodeURIComponent(input.planId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ transactionHash: input.transactionHash }),
+    });
+  }
+
+  async reconcileObligationSnapshotPlan(planId: string) {
+    return this.request<{
+      plan: ObligationSnapshotPlanSummary & { replayed: boolean };
+      blockNumber: number;
+    }>(`/api/v1/obligation-snapshots/${encodeURIComponent(planId)}`, {
+      method: "PUT",
+    });
+  }
+
+  async createEmployerStatement(input: EmployerStatementCreate) {
+    return this.request<{
+      statement: EmployerStatementSummary & { replayed: boolean };
+    }>("/api/v1/employer-statements", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async listEmployerStatements(organizationId: string) {
+    const query = new URLSearchParams({ organizationId });
+    return this.request<{ statements: EmployerStatementSummary[] }>(
+      "/api/v1/employer-statements?" + query.toString(),
+    );
+  }
+
+  async getEmployerStatement(statementId: string) {
+    return this.request<{ statement: EmployerStatementSummary }>(
+      "/api/v1/employer-statements/" + encodeURIComponent(statementId),
+    );
+  }
+
+  async recordEmployerStatementSubmission(input: {
+    statementId: string;
+    transactionHash: string;
+  }) {
+    return this.request<{
+      statement: EmployerStatementSummary & { replayed: boolean };
+    }>("/api/v1/employer-statements/" + encodeURIComponent(input.statementId), {
+      method: "PATCH",
+      body: JSON.stringify({ transactionHash: input.transactionHash }),
+    });
+  }
+
+  async reconcileEmployerStatement(statementId: string) {
+    return this.request<{
+      statement: EmployerStatementSummary & { replayed: boolean };
+      blockNumber: number;
+    }>("/api/v1/employer-statements/" + encodeURIComponent(statementId), {
+      method: "PUT",
+    });
+  }
+
+  async listPayrollStatementEvidence() {
+    return this.request<{ evidence: PayrollStatementEvidenceGrantSummary[] }>(
+      "/api/v1/statement-evidence",
+    );
   }
 
   async listPayrollRuns(organizationId: string) {
@@ -409,6 +641,8 @@ export class PayoClient {
         policyRoot: string | null;
         fxRoot: string | null;
         runNullifier: string | null;
+        obligationSnapshotPlanId: string | null;
+        transactionHash: string | null;
         envelope: EncryptedVaultRecord;
       };
     }>(`/api/v1/runs/${encodeURIComponent(runId)}`);
@@ -540,7 +774,7 @@ export class PayoClient {
   async renewHistoricalFxRoot(input: {
     organizationId: string;
     runId: string;
-    workflowType: "wage_claim";
+    workflowType: "wage_claim" | "employer_statement";
   } | {
     organizationId: string;
     runId: string;
@@ -602,9 +836,9 @@ export class PayoClient {
     };
   }
 
-  async provePayrollIntegrityRemotely(input: Omit<RemoteProofRequest, "version" | "requestId"> & {
+  private async provePayoRemotely(input: Omit<RemoteProofRequest, "version" | "requestId"> & {
     proverBaseUrl: string;
-  }): Promise<ProofWorkerSuccess> {
+  }): Promise<PayoProofWorkerSuccess> {
     const endpoint = new URL("/api/v1/prove-payroll", input.proverBaseUrl);
     if (endpoint.protocol !== "https:" && endpoint.hostname !== "127.0.0.1" && endpoint.hostname !== "localhost") {
       throw new Error("The self-hosted prover must use HTTPS.");
@@ -622,6 +856,7 @@ export class PayoClient {
       requestId,
       encryptedWitness: input.encryptedWitness,
       principal: input.principal,
+      ...(input.claimAccessGrantId ? { claimAccessGrantId: input.claimAccessGrantId } : {}),
     });
     let accepted = false;
     let initialFailures = 0;
@@ -708,6 +943,34 @@ export class PayoClient {
     } finally {
       window.clearTimeout(timeout);
     }
+  }
+
+  async provePayrollIntegrityRemotely(input: Omit<RemoteProofRequest, "version" | "requestId"> & {
+    proverBaseUrl: string;
+  }): Promise<ProofWorkerSuccess> {
+    const proof = await this.provePayoRemotely(input);
+    if (proof.type !== "proof-complete") {
+      throw new PayoApiError(
+        "The prover returned an exception proof for a payroll request.",
+        "PROVER_PROFILE_MISMATCH",
+        502,
+      );
+    }
+    return proof;
+  }
+
+  async proveExceptionRemotely(input: Omit<RemoteProofRequest, "version" | "requestId"> & {
+    proverBaseUrl: string;
+  }): Promise<ExceptionProofWorkerSuccess> {
+    const proof = await this.provePayoRemotely(input);
+    if (proof.type !== "exception-proof-complete") {
+      throw new PayoApiError(
+        "The prover returned a payroll proof for an exception request.",
+        "PROVER_PROFILE_MISMATCH",
+        502,
+      );
+    }
+    return proof;
   }
 
   async checkDeploymentReadiness(input: PayoReadinessRequest) {
@@ -991,11 +1254,76 @@ export class PayoClient {
     });
   }
 
-  async storeEncryptedProofBundle(input: EncryptedPayrollIntegrityBundleCreate) {
+  async storeEncryptedProofBundle(input: EncryptedPayoProofBundleCreate) {
     return this.request<{ proofBundle: Record<string, unknown> }>("/api/v1/proof-packages", {
       method: "POST",
       body: JSON.stringify(input),
     });
+  }
+
+  async getEncryptedProofBundle(proofBundleId: string) {
+    return this.request<{ proofBundle: {
+      id: string;
+      organizationId: string;
+      runId: string;
+      proofType: string;
+      proofVersion: string;
+      subjectRecordId: string;
+      proofPackage: unknown;
+      verificationState: string;
+      verificationTransactionHash: string | null;
+      createdAt: string;
+      revision: number;
+      envelope: EncryptedVaultRecord;
+    } }>(
+      `/api/v1/proof-packages/${encodeURIComponent(proofBundleId)}`,
+    );
+  }
+
+  async enqueueExceptionAuthorization(input: {
+    proofBundleId: string;
+    proofCalldata: string[];
+  }) {
+    return this.request<{ authorization: ExceptionAuthorizationStatus }>(
+      `/api/v1/proof-packages/${encodeURIComponent(input.proofBundleId)}/authorization`,
+      {
+        method: "POST",
+        body: JSON.stringify({ proofCalldata: input.proofCalldata }),
+      },
+    );
+  }
+
+  async getExceptionAuthorization(proofBundleId: string) {
+    return this.request<{ authorization: ExceptionAuthorizationStatus }>(
+      `/api/v1/proof-packages/${encodeURIComponent(proofBundleId)}/authorization`,
+    );
+  }
+
+  async enqueuePayrollAuthorization(input: {
+    runId: string;
+    payrollProofBundleId: string;
+    snapshotProofBundleId: string;
+    payrollShards: [string[], string[]];
+    snapshotProof: string[];
+  }) {
+    return this.request<{ authorization: PayrollAuthorizationStatus }>(
+      `/api/v1/runs/${encodeURIComponent(input.runId)}/payroll-authorization`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          payrollProofBundleId: input.payrollProofBundleId,
+          snapshotProofBundleId: input.snapshotProofBundleId,
+          payrollShards: input.payrollShards,
+          snapshotProof: input.snapshotProof,
+        }),
+      },
+    );
+  }
+
+  async getPayrollAuthorization(runId: string) {
+    return this.request<{ authorization: PayrollAuthorizationStatus }>(
+      `/api/v1/runs/${encodeURIComponent(runId)}/payroll-authorization`,
+    );
   }
 
   async recordSettlementSubmission(settlementId: string, transactionHash: string) {

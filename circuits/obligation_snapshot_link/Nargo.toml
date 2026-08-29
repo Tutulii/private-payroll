@@ -1,0 +1,9 @@
+[package]
+name = "payo_obligation_snapshot_link"
+type = "bin"
+authors = ["PAYO contributors"]
+compiler_version = ">=1.0.0"
+
+[dependencies]
+exception_protocol = { path = "../exception_protocol" }
+payroll_types = { path = "../payroll_proof_types" }

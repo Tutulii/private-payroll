@@ -44,8 +44,24 @@ function assertProofBoundAction(
   ) {
     throw new Error("Payroll contains an unapproved PAYO seal action.");
   }
-  if (payoAction.calldata.length !== 19 || BigInt(String(payoAction.calldata[0])) !== BigInt(expectedMode)) {
-    throw new Error(`PAYO action is not the expected proof mode ${expectedMode}.`);
+  let mode: bigint;
+  try {
+    mode = BigInt(String(payoAction.calldata[0]));
+    for (const field of payoAction.calldata) {
+      const value = BigInt(String(field));
+      if (value < 0n) throw new Error("negative");
+    }
+  } catch {
+    throw new Error("PAYO action calldata is not canonical.");
+  }
+  const legacyAction = payoAction.calldata.length === 19;
+  const vNextAuthorizedAction = payoAction.calldata.length === 7
+    && (expectedMode === 0 || expectedMode === 3);
+  if (
+    mode !== BigInt(expectedMode)
+    || (!legacyAction && !vNextAuthorizedAction)
+  ) {
+    throw new Error(`PAYO action is not the expected proof mode ${expectedMode} or ABI.`);
   }
   return normalizedSeal;
 }

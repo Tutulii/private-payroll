@@ -238,7 +238,12 @@ scope.addEventListener("message", async (event: MessageEvent<ProofWorkerRequest>
     } else {
       let profile: CircuitProfile = "payroll";
       let circuitInputs: [InputMap, InputMap];
-      if ("circuitProfile" in payload) {
+      if ("exceptionCircuitProfile" in payload) {
+        // vNext exception proofs use their own 23-field/single-proof worker
+        // protocol. Refuse them here instead of mis-parsing them as legacy
+        // linked payroll shards.
+        throw new WorkerProofError("INVALID_REQUEST");
+      } else if ("circuitProfile" in payload) {
         profile = payload.circuitProfile;
         circuitInputs = payload.circuitInputs;
       } else if ("buildInput" in payload) {

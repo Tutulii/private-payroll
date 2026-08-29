@@ -281,6 +281,9 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
       state: "confirmed",
       dueAt: "2026-08-26T00:00:00.000Z",
       updatedAt: "2026-08-26T00:01:00.000Z",
+      transactionHash: "0x789",
+      fxRoot: `0x${"77".repeat(32)}`,
+      obligationSnapshotPlanId: "018f1000-0000-7000-8000-000000000037",
       lines: [{ agreementId }],
     }]);
   }, { runId, agreementId: recurringAgreement.id });
@@ -334,6 +337,22 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
     });
   });
   await page.goto("/payo-browser-evidence/activity");
+
+  const workerProtection = page.locator(".wage-vnext-section").filter({
+    hasText: "Your protected paydays",
+  });
+  for (const claimType of ["Missing obligation", "Below FX floor", "Incomplete final pay"]) {
+    await expect(workerProtection.getByRole("button", { name: claimType })).toBeVisible();
+  }
+  await workerProtection.getByRole("button", { name: "Missing obligation" }).click();
+  await expect(page.locator(".private-exception-feedback--error")).toContainText(
+    "Connect Ready on Starknet Mainnet",
+  );
+
+  const employerEvidence = page.getByRole("button", { name: "Register payroll evidence" });
+  await expect(employerEvidence).toBeVisible();
+  await employerEvidence.click();
+  await expect(page.locator(".private-exception-feedback--error")).toContainText("Connect the snapshot-owner Ready wallet");
 
   const identityDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "Share my public identity" }).click();
@@ -431,6 +450,8 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
       productionTeamControls: true,
       productionScheduleRegistration: true,
       productionActivityControls: true,
+      employerEvidenceControl: true,
+      vNextClaimControls: true,
       publicIdentityExchange: true,
       readableProofPackageInspector: true,
       liveProofReceiptCheck: true,
