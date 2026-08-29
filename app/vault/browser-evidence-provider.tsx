@@ -16,7 +16,6 @@ import {
   type VaultPrincipalKeyPair,
 } from "@/lib/crypto/vault";
 import { hashCanonicalJson } from "@/lib/crypto/digest";
-import { wageClaimRecordSchema } from "@/lib/domain/records";
 
 const ORGANIZATION_ID = "018f1000-0000-7000-8000-000000000030";
 const ORGANIZATION_SECRET = `0x${"30".repeat(32)}`;
@@ -68,7 +67,6 @@ declare global {
       reset: () => void;
       exportState: () => BrowserEvidenceExport;
       setRuns: (runs: Array<Record<string, unknown>>) => void;
-      markLatestClaimSubmitted: () => void;
     };
   }
 }
@@ -378,43 +376,6 @@ export function PayoBrowserEvidenceProvider({ children }: { children: ReactNode 
       },
       setRuns(runs) {
         mutate((state) => ({ ...state, runs }));
-      },
-      markLatestClaimSubmitted() {
-        mutate((state) => {
-          const claimRecord = latestRecords(state)
-            .filter(({ recordType }) => recordType === "wage-claim")
-            .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
-          if (!claimRecord) throw new Error("Create a claim through the Activity UI first.");
-          const claim = wageClaimRecordSchema.parse(
-            decryptVaultRecord(claimRecord.envelope, SYNTHETIC_PRINCIPAL),
-          );
-          const revision = claim.revision + 1;
-          const submitted = wageClaimRecordSchema.parse({
-            ...claim,
-            revision,
-            updatedAt: new Date().toISOString(),
-            claimNullifier: `0x${"31".repeat(32)}`,
-            shortfallAtomic: "3",
-            token: "STRK",
-            proofBundleId: "018f1000-0000-7000-8000-000000000032",
-            settlementId: "018f1000-0000-7000-8000-000000000033",
-            state: "submitted",
-          });
-          const envelope = encryptVaultRecord(submitted, {
-            schemaVersion: 1,
-            organizationId: ORGANIZATION_ID,
-            recordType: "wage-claim",
-            recordId: submitted.id,
-            revision,
-          }, [SYNTHETIC_PRINCIPAL]);
-          return storeRecord(state, {
-            id: submitted.id,
-            recordType: "wage-claim",
-            revision,
-            envelope,
-            createdAt: new Date().toISOString(),
-          });
-        });
       },
     };
     return () => {

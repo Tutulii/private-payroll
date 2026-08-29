@@ -259,8 +259,9 @@ export function WageClaimsVNextCard() {
       setSuccess(claimLabel(kind) + " accepted on-chain. No salary or claim type was published.");
       await refresh();
     } catch (cause) {
-      setError(workflowError(cause));
+      const message = workflowError(cause);
       await refresh();
+      setError(message);
     } finally {
       setActiveId("");
       setStage("");
@@ -308,8 +309,9 @@ export function WageClaimsVNextCard() {
       setSuccess("Claim v6 authorization recovered and accepted on-chain.");
       await refresh();
     } catch (cause) {
-      setError(workflowError(cause));
+      const message = workflowError(cause);
       await refresh();
+      setError(message);
     } finally {
       setActiveId("");
       setStage("");
@@ -374,8 +376,9 @@ export function WageClaimsVNextCard() {
       setSuccess("Remediation v7 authorized. Ready can now settle exactly one bound private payment.");
       await refresh();
     } catch (cause) {
-      setError(workflowError(cause));
+      const message = workflowError(cause);
       await refresh();
+      setError(message);
     } finally {
       setActiveId("");
       setStage("");
@@ -442,8 +445,9 @@ export function WageClaimsVNextCard() {
       }
       await refresh();
     } catch (cause) {
-      setError(workflowError(cause));
+      const message = workflowError(cause);
       await refresh();
+      setError(message);
     } finally {
       setActiveId("");
       setStage("");
@@ -505,8 +509,9 @@ export function WageClaimsVNextCard() {
       );
       await refresh();
     } catch (cause) {
-      setError(workflowError(cause));
+      const message = workflowError(cause);
       await refresh();
+      setError(message);
     } finally {
       setActiveId("");
       setStage("");

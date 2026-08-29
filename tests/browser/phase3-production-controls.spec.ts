@@ -158,7 +158,20 @@ async function addContributor(page: Page, workflow: (typeof workflows)[number], 
   await form.getByLabel("Registered Starknet address").fill(`0x${(0x500 + index).toString(16)}`);
   await form.getByLabel("Private token").selectOption(workflow.token);
   await form.getByLabel("Jurisdiction").fill("US");
-  await form.getByRole("button", { name: "Encrypt contributor" }).click();
+  const identity = createPayoPublicIdentity(
+    generateVaultPrincipal(`browser-worker:${index}`),
+  );
+  await form.locator("input.proof-package-file-input").setInputFiles({
+    name: `payo-worker-${index}.json`,
+    mimeType: "application/json",
+    buffer: Buffer.from(`${JSON.stringify(identity)}\n`),
+  });
+  await expect(form.getByText(/Claim identity verified/)).toContainText(
+    "vNext claims enabled",
+  );
+  const submit = form.getByRole("button", { name: "Encrypt contributor" });
+  await expect(submit).toBeEnabled();
+  await submit.click();
   await expect(page.locator(".member-card").filter({ hasText: workflow.name })).toBeVisible();
 }
 
@@ -391,59 +404,27 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
   await expect(inspector).toContainText("On-chain proof verified");
   await expect(inspector).toContainText("current revocation and issuer identity require a fresh authenticated record");
 
-  const claimButton = page.getByRole("button", { name: "Draft private claim" });
-  await expect(claimButton).toBeEnabled();
-  await claimButton.click();
-  const claimForm = page.locator("form.receipt-disclosure-form").filter({ hasText: "This creates a salted" });
-  const agreementSelect = claimForm.getByLabel("Committed agreement");
-  const runSelect = claimForm.getByLabel("Payroll run");
-  await runSelect.selectOption(runId);
-  await expect(agreementSelect.locator(`option[value="${recurringAgreement.id}"]`))
-    .toHaveText(/Agreement \d+ · Recurring worker/);
-  await expect(agreementSelect.locator("option")).toHaveCount(2);
-  await expect(runSelect.locator(`option[value="${runId}"]`)).toHaveText(/Payday 1 · Aug 26/);
-  await agreementSelect.selectOption(recurringAgreement.id);
-  await claimForm.getByLabel("Claim type").selectOption("missing_obligation");
-  await claimForm.getByRole("button", { name: "Encrypt claim draft" }).click();
-  await expect(page.locator(".private-exception-row").filter({ hasText: "missing obligation" })).toContainText("draft");
-  const claimDraftState = await evidenceState(page);
-  const claimDraft = claimDraftState.records.find(({ recordType }) => recordType === "wage-claim");
-  expect(claimDraft).toBeTruthy();
-
-  await page.evaluate(() => window.__PAYO_BROWSER_EVIDENCE__?.markLatestClaimSubmitted());
-  await page.getByRole("button", { name: "Refresh records" }).click();
-  await expect(page.locator(".private-exception-row").filter({ hasText: "missing obligation" })).toContainText("submitted");
-
-  const remediationButton = page.getByRole("button", { name: "Draft remediation" });
-  await expect(remediationButton).toBeEnabled();
-  await remediationButton.click();
-  const remediationForm = page.locator("form.receipt-disclosure-form").last();
-  await expect(remediationForm).toBeVisible();
-  await remediationForm.getByLabel("Encrypted claim").selectOption({ index: 1 });
-  await remediationForm.getByLabel("Remediation amount (token atomic units)").fill("3");
-  await remediationForm.getByRole("button", { name: "Encrypt remediation draft" }).click();
-  await expect(page.locator(".private-exception-row").filter({ hasText: "remediation" })).toContainText("draft");
-
+  await expect(page.getByRole("button", { name: "Legacy drafting closed" }))
+    .toBeDisabled();
+  await expect(page.getByRole("button", { name: "Legacy remediation closed" }))
+    .toBeDisabled();
   const activityState = await evidenceState(page);
-  const remediation = activityState.records.find(({ recordType }) => recordType === "remediation");
-  expect(remediation).toBeTruthy();
-  expect((remediation!.plaintext as { claimId: string }).claimId)
-    .toBe((claimDraft!.plaintext as { id: string }).id);
 
   const artifact = {
-    schemaVersion: "payo.phase3.rendered-browser-origin.v1",
+    schemaVersion: "payo.phase3.rendered-browser-origin.v2",
     generatedAt: new Date().toISOString(),
     routeGuard: "PAYO_BROWSER_EVIDENCE_MODE=1",
     renderedProductionPages: ["app/team/page.tsx", "app/activity/page.tsx"],
     productionControls: [
       "Encrypt contributor",
       "Encrypt proof-bound agreement",
-      "Encrypt claim draft",
-      "Encrypt remediation draft",
+      "Missing obligation",
+      "Below FX floor",
+      "Incomplete final pay",
+      "Register payroll evidence",
     ],
     workflowPlans: workflows.map(({ name, plan, option }) => ({ name, plan, option })),
     teamState,
-    claimDraft,
     activityState,
     checks: {
       eightRenderedAgreementForms: true,
@@ -458,7 +439,7 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
       liveProofSealStateCheck: true,
       clientEncryptedRoundTrips: true,
       statutoryFxClassificationProfile: true,
-      claimToRemediationBinding: true,
+      legacyDraftingClosed: true,
     },
   };
   const outputPath = testInfo.outputPath("phase3-rendered-browser-origin.json");
