@@ -386,6 +386,8 @@ jobs:
             circuits/payroll_integrity/target/devnet-shard-0/vk
           node scripts/test-phase2-devnet.mjs verify
 
+          # Force a clean pinned build before the artifact freshness gate.
+          (cd contracts && scarb clean && scarb build)
           npm run phase4:policy:check-artifacts
           npm run phase4:policy:lifecycle
 
