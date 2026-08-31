@@ -140,6 +140,16 @@ function assertRuntime(sdk: unknown, codecs: unknown): asserts sdk is PrivacySdk
 let cached: Promise<PinnedPrivacySdk> | undefined;
 
 /**
+ * Keep audited absolute file-URL imports native at runtime. Next/Webpack must
+ * not turn these into a build-time context module: the production image owns
+ * the pinned SDK files, while the server bundle is built in a different
+ * filesystem layer.
+ */
+function importPinnedRuntimeModule(specifier: string): Promise<unknown> {
+  return import(/* webpackIgnore: true */ specifier);
+}
+
+/**
  * Loads only the audited SDK build. A directory name or package version is not
  * enough: all executable entrypoints used by PAYO are digest-bound.
  */
@@ -167,8 +177,12 @@ export function loadPinnedPrivacySdk(
     }
     packageSchema.parse(packageJson);
     const [sdk, codecs] = await Promise.all([
-      import(`${pathToFileURL(indexPath).href}?payo=${PAYO_PRIVACY_SDK_INDEX_SHA256}`),
-      import(`${pathToFileURL(channelPath).href}?payo=${PAYO_PRIVACY_SDK_CHANNEL_SHA256}`),
+      importPinnedRuntimeModule(
+        `${pathToFileURL(indexPath).href}?payo=${PAYO_PRIVACY_SDK_INDEX_SHA256}`,
+      ),
+      importPinnedRuntimeModule(
+        `${pathToFileURL(channelPath).href}?payo=${PAYO_PRIVACY_SDK_CHANNEL_SHA256}`,
+      ),
     ]);
     assertRuntime(sdk, codecs);
     return {
