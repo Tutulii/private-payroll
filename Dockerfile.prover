@@ -29,8 +29,8 @@ ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 ENV PAYO_BB_PATH=/usr/local/bin/payo-bb
-RUN apt-get update \
 ENV PAYO_PRIVACY_SDK_ROOT=/app/node_modules/@starkware-libs/starknet-privacy-sdk
+RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl \
   && curl --fail --location --retry 3 \
     https://github.com/AztecProtocol/barretenberg/releases/download/v3.0.0-nightly.20251104/barretenberg-amd64-linux.tar.gz \
@@ -42,8 +42,8 @@ ENV PAYO_PRIVACY_SDK_ROOT=/app/node_modules/@starkware-libs/starknet-privacy-sdk
   && rm -f /tmp/bb /tmp/payo-bb.tar.gz \
   && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
 COPY vendor ./vendor
+RUN npm ci --omit=dev && npm cache clean --force
 COPY --chown=node:node --from=builder /app/.next ./.next
 COPY --chown=node:node --from=builder /app/public ./public
 COPY --chown=node:node --from=builder /app/next.config.ts ./next.config.ts
