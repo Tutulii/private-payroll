@@ -11,6 +11,10 @@ import { assertPayrollTransition } from "@/lib/domain/payroll";
 import { generateUuidV7 } from "@/lib/domain/records";
 import type { AuthenticatedPrincipal } from "@/lib/server/auth";
 import { ApiError } from "@/lib/server/auth";
+import {
+  decryptCapabilityPolicy,
+  encryptCapabilityPolicy,
+} from "@/lib/server/capability-policy-crypto";
 import { getDatabase, type DatabaseExecutor } from "./db";
 import {
   auditEvents,
@@ -52,6 +56,20 @@ export async function requireOrganizationRoleWith(
   principal: AuthenticatedPrincipal,
   allowed: readonly OrganizationRole[],
 ) {
+  if (principal.authKind === "agent_capability") {
+    if (
+      principal.capabilityOrganizationId !== organizationId
+      || principal.capabilityPrincipalId !== principal.principalId
+      || !principal.capabilityId
+      || !allowed.includes("operator")
+    ) {
+      throw new ApiError(403, "The scoped agent credential cannot access this organization action.", "AGENT_ORG_SCOPE_DENIED");
+    }
+    // The request authenticator has already checked the signed action and
+    // capability route. This virtual operator role never enters the member
+    // table and therefore cannot be reused by Ready or administrative routes.
+    return { role: "operator" as const };
+  }
   const [membership] = await database
     .select({ role: organizationMembers.role })
     .from(organizationMembers)
@@ -376,6 +394,7 @@ export async function listPayrollRuns(organizationId: string, principal: Authent
       fxRoot: payrollRuns.fxRoot,
       manifestRoot: payrollRuns.manifestRoot,
       runNullifier: payrollRuns.runNullifier,
+      obligationSnapshotPlanId: payrollRuns.obligationSnapshotPlanId,
       transactionHash: payrollRuns.transactionHash,
       createdAt: payrollRuns.createdAt,
       updatedAt: payrollRuns.updatedAt,
@@ -503,6 +522,13 @@ export async function registerAgentCapability(
   ) throw new ApiError(400, "Encrypted capability AAD does not match its policy identity.", "AAD_MISMATCH");
   const capabilityHash = hashCapability(capability);
   const envelopeHash = payloadHash(envelope);
+  const policyContext = {
+    capabilityId: capability.id,
+    organizationId: capability.organizationId,
+    principalId: capability.principalId,
+    capabilityHash,
+  };
+  const encryptedPolicy = encryptCapabilityPolicy(signedCapability, policyContext);
   const database = getDatabase();
   return database.transaction(async (transaction) => {
     await requireOrganizationRoleWith(transaction, capability.organizationId, principal, ["admin"]);
@@ -551,7 +577,7 @@ export async function registerAgentCapability(
         organizationId: capability.organizationId,
         principalId: capability.principalId,
         capabilityHash,
-        policy: signedCapability,
+        policy: encryptedPolicy,
         expiresAt: new Date(capability.expiresAt),
       })
       .returning({
@@ -588,7 +614,12 @@ export async function getAgentCapability(capabilityId: string, principal: Authen
   if (stored.expiresAt.getTime() <= Date.now()) {
     throw new ApiError(410, "Agent capability expired.", "CAPABILITY_EXPIRED");
   }
-  return stored.policy as SignedCapability;
+  return decryptCapabilityPolicy(stored.policy, {
+    capabilityId: stored.id,
+    organizationId: stored.organizationId,
+    principalId: stored.principalId,
+    capabilityHash: stored.capabilityHash,
+  });
 }
 
 export async function revokeAgentCapability(input: {

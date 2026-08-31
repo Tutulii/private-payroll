@@ -2,14 +2,26 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
-import { BackendType, UltraHonkBackend } from "@aztec/bb.js";
+import { isAbsolute, resolve } from "node:path";
+import {
+  BackendType,
+  UltraHonkBackend,
+  UltraHonkVerifierBackend,
+} from "@aztec/bb.js";
 import { getZKHonkCallData, init as initGaraga } from "garaga";
 import { Noir, type CompiledCircuit, type InputMap } from "@noir-lang/noir_js";
 import { decryptVaultRecord, type EncryptedVaultRecord, type VaultPrincipalKeyPair } from "@/lib/crypto/vault";
 import { buildAdvancedObligationInputs } from "./advanced-obligation-input";
 import { buildPayrollIntegrityInputsFromSerialized } from "./input-builder";
 import { mapExceptionPublicInputsV2 } from "@/lib/domain/exception-protocol";
+import {
+  buildSettlementMatchInputs,
+  settlementTransactionReference,
+  type SettlementEmittedNote,
+  type SettlementMatchPublicInputs,
+  type SettlementPayrollNote,
+} from "./settlement-match";
+import { settlementMatchWitnessSchema } from "./settlement-request";
 import {
   ADVANCED_OBLIGATION_CIRCUIT_SHA256,
   ADVANCED_OBLIGATION_VERIFICATION_KEY_SHA256,
@@ -18,6 +30,9 @@ import {
   PAYROLL_INTEGRITY_VERIFICATION_KEY_SHA256,
   PAYROLL_SERVER_WASM_MAXIMUM_PAGES,
   PAYO_MAX_PROOF_CALLDATA_FELTS,
+  PAYO_SETTLEMENT_MATCH_PUBLIC_INPUT_COUNT,
+  SETTLEMENT_MATCH_CIRCUIT_SHA256,
+  SETTLEMENT_MATCH_VERIFICATION_KEY_SHA256,
   OBLIGATION_SNAPSHOT_LINK_CIRCUIT_SHA256,
   OBLIGATION_SNAPSHOT_LINK_VERIFICATION_KEY_SHA256,
   WAGE_CLAIM_CIRCUIT_SHA256,
@@ -34,6 +49,7 @@ import {
   type PayoProofWorkerSuccess,
   type PayrollIntegrityShardProof,
   type ProofWorkerSuccess,
+  type SettlementMatchProofWorkerSuccess,
 } from "./protocol";
 import {
   decodeVerificationKeyHex,
@@ -41,6 +57,7 @@ import {
   normalizeGaragaProofCalldata,
   serializePayrollPublicInputs,
   serializeExceptionPublicInputs,
+  serializeSettlementMatchPublicInputs,
 } from "./starknet-calldata";
 import { parseProverThreadCount } from "./prover-runtime";
 
@@ -52,9 +69,41 @@ type PinnedAssets = {
 
 const assetCache = new Map<string, Promise<PinnedAssets>>();
 let garagaReady: Promise<unknown> | undefined;
+let settlementBbReady: Promise<string> | undefined;
+
+const SETTLEMENT_BB_BINARY_SHA256: Partial<Record<NodeJS.Architecture, string>> = {
+  arm64: "0x0d5df6541bf9a8235305b380e48d7cdcb71e9525eef955946c0d8ac7f2f3277f",
+  x64: "0x1c28d0bcd137ee1101eb12df8274c9118a4dda48b74872bae067e3c63879a7d0",
+};
 
 function sha256(value: string | Uint8Array): string {
   return `0x${createHash("sha256").update(value).digest("hex")}`;
+}
+
+async function loadPinnedSettlementBb(): Promise<string> {
+  settlementBbReady ??= (async () => {
+    const configured = process.env.PAYO_BB_PATH?.trim();
+    if (!configured || !isAbsolute(configured)) {
+      throw new Error("PAYO_BB_PATH must be the absolute path to PAYO's pinned native bb binary.");
+    }
+    const expected = SETTLEMENT_BB_BINARY_SHA256[process.arch];
+    if (!expected) {
+      throw new Error("SettlementMatch native proving is unsupported on this architecture.");
+    }
+    const binary = await readFile(configured);
+    try {
+      if (sha256(binary) !== expected) {
+        throw new Error("The SettlementMatch native bb binary does not match PAYO's pinned digest.");
+      }
+    } finally {
+      binary.fill(0);
+    }
+    return configured;
+  })().catch((error) => {
+    settlementBbReady = undefined;
+    throw error;
+  });
+  return settlementBbReady;
 }
 
 type CircuitProfile = "payroll" | "advanced" | "wage_claim" | "wage_remediation";
@@ -141,6 +190,61 @@ async function loadPinnedAssets(profile: CircuitProfile): Promise<PinnedAssets> 
     }));
   }
   return assetCache.get(profile)!;
+}
+
+async function loadSettlementPinnedAssets(): Promise<PinnedAssets> {
+  const cacheKey = "settlement-match-v8";
+  if (!assetCache.has(cacheKey)) {
+    assetCache.set(cacheKey, Promise.all([
+      readFile(resolve(process.cwd(), "public/circuits/settlement_match-v8.json"), "utf8"),
+      readFile(resolve(process.cwd(), "public/circuits/settlement_match-v8.vk.hex"), "utf8"),
+    ]).then(([circuitText, verificationKeyHex]) => {
+      const verificationKey = decodeVerificationKeyHex(verificationKeyHex);
+      if (sha256(circuitText) !== SETTLEMENT_MATCH_CIRCUIT_SHA256) {
+        throw new Error("The self-hosted SettlementMatch circuit does not match its pinned hash.");
+      }
+      if (sha256(verificationKey) !== SETTLEMENT_MATCH_VERIFICATION_KEY_SHA256) {
+        throw new Error("The self-hosted SettlementMatch verification key does not match its pinned hash.");
+      }
+      return {
+        circuit: JSON.parse(circuitText) as CompiledCircuit,
+        verificationKey,
+        circuitSha256: SETTLEMENT_MATCH_CIRCUIT_SHA256,
+      };
+    }));
+  }
+  return assetCache.get(cacheKey)!;
+}
+
+function orderedSettlementPublicInputs(input: SettlementMatchPublicInputs): string[] {
+  return [
+    input.proofVersion,
+    input.manifestRootHigh,
+    input.manifestRootLow,
+    input.runNullifierHigh,
+    input.runNullifierLow,
+    input.transactionReferenceHigh,
+    input.transactionReferenceLow,
+    input.settlementRootHigh,
+    input.settlementRootLow,
+    input.chunkIndex,
+    input.chunkCount,
+  ];
+}
+
+function assertSettlementPublicInputs(
+  actual: readonly string[],
+  expected: SettlementMatchPublicInputs,
+): void {
+  const ordered = orderedSettlementPublicInputs(expected);
+  if (actual.length !== PAYO_SETTLEMENT_MATCH_PUBLIC_INPUT_COUNT) {
+    throw new Error("SettlementMatch returned the wrong public-input count.");
+  }
+  ordered.forEach((value, index) => {
+    if (BigInt(actual[index]) !== BigInt(value)) {
+      throw new Error("SettlementMatch returned a substituted public input at index " + index + ".");
+    }
+  });
 }
 
 async function proveLinkedCircuit(input: {
@@ -268,6 +372,141 @@ async function proveExceptionCircuit(input: {
     witnessToErase?.fill(0);
     input.circuitInput = {};
     await backend.destroy();
+  }
+}
+
+export async function proveSettlementMatchOnSelfHostedNode(input: {
+  requestId: string;
+  encryptedPayrollWitness: EncryptedVaultRecord;
+  encryptedSettlementWitness: EncryptedVaultRecord;
+  principal: VaultPrincipalKeyPair;
+}): Promise<SettlementMatchProofWorkerSuccess> {
+  if (
+    input.encryptedPayrollWitness.aad.organizationId
+      !== input.encryptedSettlementWitness.aad.organizationId
+    || input.encryptedSettlementWitness.aad.recordType
+      !== "settlement-match-proof-request"
+  ) {
+    throw new Error("SettlementMatch proof envelopes cross an organization or record boundary.");
+  }
+  let settlementPayload = settlementMatchWitnessSchema.parse(
+    decryptVaultRecord<unknown>(input.encryptedSettlementWitness, input.principal),
+  );
+  if (settlementPayload.executionId !== input.requestId) {
+    throw new Error("SettlementMatch witness belongs to another execution.");
+  }
+  let payrollPayload = decryptVaultRecord<EncryptedPayrollWitness>(
+    input.encryptedPayrollWitness,
+    input.principal,
+  );
+  const payroll = "advancedBuildInput" in payrollPayload
+    ? await buildPayrollIntegrityInputsFromSerialized(payrollPayload.advancedBuildInput.payroll)
+    : "buildInput" in payrollPayload
+      ? await buildPayrollIntegrityInputsFromSerialized(payrollPayload.buildInput)
+      : undefined;
+  payrollPayload = { circuitInputs: [{}, {}] };
+  if (!payroll) {
+    throw new Error(
+      "SettlementMatch requires a serialized payroll build, not opaque circuit inputs.",
+    );
+  }
+  payroll.witness.circuitInputs = [{}, {}];
+  const transactionReference = settlementTransactionReference({
+    chainId: settlementPayload.chainId,
+    policyAccountAddress: settlementPayload.policyAccountAddress,
+    poolAddress: settlementPayload.poolAddress,
+    poolCalldata: settlementPayload.poolCalldata,
+  });
+  const built = buildSettlementMatchInputs({
+    payroll,
+    senderAddress: settlementPayload.policyAccountAddress,
+    viewingKey: settlementPayload.viewingKey,
+    transactionReference,
+    payrollNotes: settlementPayload.payrollNotes as SettlementPayrollNote[],
+    emittedNotes: settlementPayload.emittedNotes as SettlementEmittedNote[],
+  });
+  settlementPayload = {
+    ...settlementPayload,
+    viewingKey: "0x0",
+    payrollNotes: settlementPayload.payrollNotes.map((note) => ({
+      ...note,
+      amountAtomic: "0",
+      salt: "0",
+    })),
+  };
+
+  garagaReady ??= initGaraga();
+  const [assets, bbPath] = await Promise.all([
+    loadSettlementPinnedAssets(),
+    loadPinnedSettlementBb(),
+    garagaReady,
+  ]).then(([pinnedAssets, pinnedBb]) => [pinnedAssets, pinnedBb] as const);
+  const nativeOptions = {
+    backend: BackendType.NativeUnixSocket,
+    threads: parseProverThreadCount(process.env.PAYO_PROVER_THREADS),
+    bbPath,
+  };
+  const noir = new Noir(assets.circuit);
+  const backend = new UltraHonkBackend(assets.circuit.bytecode, nativeOptions);
+  const verifier = new UltraHonkVerifierBackend(nativeOptions);
+  const startedAt = performance.now();
+  let witnessToErase: Uint8Array | undefined;
+  try {
+    const chunks: SettlementMatchProofWorkerSuccess["chunks"] = [];
+    for (let chunkIndex = 0; chunkIndex < built.circuitInputs.length; chunkIndex += 1) {
+      const circuitInput = built.circuitInputs[chunkIndex];
+      const { witness } = await noir.execute(circuitInput);
+      witnessToErase = witness;
+      built.circuitInputs[chunkIndex] = {};
+      const proofData = await backend.generateProof(witness, { keccakZK: true });
+      witness.fill(0);
+      witnessToErase = undefined;
+      const expectedPublicInputs = built.publicInputs[chunkIndex];
+      assertSettlementPublicInputs(proofData.publicInputs, expectedPublicInputs);
+      if (!await verifier.verifyProof({
+        ...proofData,
+        verificationKey: assets.verificationKey,
+      }, { keccakZK: true })) {
+        proofData.proof.fill(0);
+        throw new Error("SettlementMatch chunk " + chunkIndex + " failed local verification.");
+      }
+      const proofCalldata = normalizeGaragaProofCalldata(getZKHonkCallData(
+        proofData.proof,
+        serializeSettlementMatchPublicInputs(proofData.publicInputs),
+        assets.verificationKey,
+      ));
+      proofData.proof.fill(0);
+      if (proofCalldata.length > PAYO_MAX_PROOF_CALLDATA_FELTS) {
+        throw new Error(
+          "SettlementMatch chunk " + chunkIndex + " has " + proofCalldata.length
+            + " calldata felts; Starknet submissions permit at most "
+            + PAYO_MAX_PROOF_CALLDATA_FELTS + ".",
+        );
+      }
+      chunks.push({
+        chunkIndex,
+        chunkCount: built.circuitInputs.length,
+        proofCalldata,
+        calldataHash: hashProofCalldata(proofCalldata),
+        publicInputs: expectedPublicInputs,
+      });
+    }
+    return {
+      version: 8,
+      type: "settlement-proof-complete",
+      requestId: input.requestId,
+      scheme: "ultra_keccak_zk_honk",
+      circuitSha256: assets.circuitSha256,
+      verificationKeySha256: SETTLEMENT_MATCH_VERIFICATION_KEY_SHA256,
+      settlementRoot: built.settlementRoot,
+      transactionReference: built.transactionReference,
+      provingTimeMs: Math.round(performance.now() - startedAt),
+      chunks,
+    };
+  } finally {
+    witnessToErase?.fill(0);
+    built.circuitInputs.fill({});
+    await Promise.all([backend.destroy(), verifier.destroy()]);
   }
 }
 

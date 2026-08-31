@@ -14,8 +14,12 @@
     "cairo": "2.16.1",
     "sierra": "1.7.0",
     "starknetFoundry": "0.57.0",
+    "universalSierraCompiler": "2.10.0",
+    "universalSierraCompilerLinuxArm64Sha256": "41adc3a802a74e181484847de91a1360b02afc29451ad50375fe12b7b0d66ee9",
+    "universalSierraCompilerLinuxX64Sha256": "eafa433885c32947fbe640937a12543d468a0e2905b62c177f0fd8099285c1b9",
     "starknetDevnet": "0.9.2",
     "starknetDevnetRpc": "0.10.2",
+    "starknetDevnetLinuxArm64Sha256": "b476319fc851a65d7018e2f819861ab0a8bdf36e12e054d742b91cd0e6eef291",
     "starknetDevnetLinuxX64Sha256": "bef54224c6161673a5c1f3d9674d791878c20e46549b6e3d8917f7a233353784"
   },
   "proof": {

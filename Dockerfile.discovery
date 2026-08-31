@@ -1,0 +1,25 @@
+FROM rust:1-bookworm AS builder
+
+ARG STARKNET_PRIVACY_REVISION=66e3caae8c0201227a6719696d004e30d90aea65
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends git libssl-dev pkg-config \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+RUN git clone --filter=blob:none https://github.com/starkware-libs/starknet-privacy.git . \
+  && git checkout "${STARKNET_PRIVACY_REVISION}"
+
+COPY patches/starknet-privacy-discovery-rustls.patch /tmp/discovery-rustls.patch
+RUN git apply --check /tmp/discovery-rustls.patch \
+  && git apply /tmp/discovery-rustls.patch \
+  && cargo build --locked --release -p discovery-service
+
+FROM gcr.io/distroless/cc-debian12
+
+COPY --from=builder /app/target/release/discovery-service /usr/local/bin/discovery-service
+
+USER nonroot
+ENV API_HOST=[::]:8080
+EXPOSE 8080
+ENTRYPOINT ["discovery-service"]

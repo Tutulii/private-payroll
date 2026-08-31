@@ -193,6 +193,7 @@ export const settlementRecordSchema = recordHeaderSchema.extend({
     USDC: atomicAmountSchema,
   }).strict(),
   tokenTotalsCommitment: commitmentSchema,
+  agentPlanCommitment: commitmentSchema.optional(),
   transactionHash: starknetAddressSchema.optional(),
   state: settlementStateSchema,
   submittedAt: z.string().datetime().optional(),

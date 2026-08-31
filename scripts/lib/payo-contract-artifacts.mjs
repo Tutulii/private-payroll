@@ -104,6 +104,24 @@ export const payoWageClaimArtifactDefinitions = Object.freeze({
   }),
 });
 
+export const payoPhase4ArtifactDefinitions = Object.freeze({
+  settlementVerifier: Object.freeze({
+    sierra: "contracts/settlement_verifier_v8/target/dev/settlement_verifier_v8_PayoSettlementMatchV8Verifier.contract_class.json",
+    casm: "contracts/settlement_verifier_v8/target/dev/settlement_verifier_v8_PayoSettlementMatchV8Verifier.compiled_contract_class.json",
+    sourceDirectory: "contracts/settlement_verifier_v8",
+  }),
+  payrollSeal: Object.freeze({
+    sierra: "contracts/target/dev/payo_contracts_PayoPayrollSeal.contract_class.json",
+    casm: "contracts/target/dev/payo_contracts_PayoPayrollSeal.compiled_contract_class.json",
+    sourceDirectory: "contracts",
+  }),
+  policyAccount: Object.freeze({
+    sierra: "contracts/target/dev/payo_contracts_PayoPolicyAccount.contract_class.json",
+    casm: "contracts/target/dev/payo_contracts_PayoPolicyAccount.compiled_contract_class.json",
+    sourceDirectory: "contracts",
+  }),
+});
+
 async function filesRecursively(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   const nested = await Promise.all(entries.map((entry) => {
@@ -272,6 +290,41 @@ export async function readAllPayoWageClaimDeployArtifacts() {
     Object.keys(payoWageClaimArtifactDefinitions).map(async (name) => [
       name,
       await readPayoWageClaimDeployArtifact(name),
+    ]),
+  );
+  return Object.fromEntries(entries);
+}
+
+export async function assertFreshPayoPhase4DeployArtifacts() {
+  await assertFreshDefinitions(payoPhase4ArtifactDefinitions);
+}
+
+export async function readPayoPhase4DeployArtifact(name) {
+  const definition = payoPhase4ArtifactDefinitions[name];
+  if (!definition) throw new Error(`Unknown PAYO Phase 4 artifact ${name}.`);
+  const [sierraSource, casmSource] = await Promise.all([
+    readFile(resolve(repositoryRoot, definition.sierra), "utf8"),
+    readFile(resolve(repositoryRoot, definition.casm), "utf8"),
+  ]);
+  const sierra = JSON.parse(sierraSource);
+  const casm = JSON.parse(casmSource);
+  return {
+    name,
+    definition,
+    sierra,
+    casm,
+    classHash: num.toHex(BigInt(hash.computeContractClassHash(sierra))),
+    compiledClassHash: num.toHex(BigInt(hash.computeCompiledClassHash(casm))),
+    sierraSha256: sha256(sierraSource),
+    casmSha256: sha256(casmSource),
+  };
+}
+
+export async function readAllPayoPhase4DeployArtifacts() {
+  const entries = await Promise.all(
+    Object.keys(payoPhase4ArtifactDefinitions).map(async (name) => [
+      name,
+      await readPayoPhase4DeployArtifact(name),
     ]),
   );
   return Object.fromEntries(entries);

@@ -1,0 +1,271 @@
+{
+  "schemaVersion": 1,
+  "network": "starknet-mainnet",
+  "plan": {
+    "schemaVersion": 1,
+    "generatedAt": "2026-08-31T06:20:27.255Z",
+    "network": "starknet-mainnet",
+    "chainId": "0x534e5f4d41494e",
+    "deployerAddress": "0x126a7a572cf8935d069af937e9f7b27a24949e271e1fbccfe4de0c0d8dc8ea9",
+    "dependencies": {
+      "pool": {
+        "address": "0x40337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+        "classHash": "0x67dddd89d80fedadc06b6f160798f94800a4a70164e5a24301cd0d6076b554d"
+      },
+      "policyRegistry": {
+        "address": "0x34701f573096b7bab0e5678e1ed2f17a87c8d56eb5f4d70bcf2197bab8e4477",
+        "classHash": "0x6366141e5ae47f2e170409c6babaa4d6ae220b5b255f8dcbf9b0173f8681cfd"
+      },
+      "obligationRegistry": {
+        "address": "0x44b22f1a17d2710c2f51ed0b37b8b0ff8435262d3c8c0f2f17be07c84ac23b5",
+        "classHash": "0x50ac78b67fd69d7e2a892dc51014159d7e69fe1770c3f4f33add21131aa2a0b"
+      },
+      "previousPayrollSeal": {
+        "address": "0x603c607bf001e279365fd141901ba09b95f72f5a72506742b30f6db32c36ac7",
+        "classHash": "0x1500b1e66ef8c1528f5ea301cbb0420b28a19742d927c5d595ce567b0266148"
+      }
+    },
+    "settlementCircuit": {
+      "proofVersion": 8,
+      "circuitSha256": "0xa208f7c548a5205e9e777f4926e282510e918bee4ce7902db3bb8b2d46454033",
+      "verificationKeySha256": "0x4dba54029e3b3b507baad28f6f4f416b9eca9651f98cbad9312d91a637528e23",
+      "publicInputCount": 11,
+      "measuredProofCalldataFelts": 3247,
+      "maximumProofCalldataFelts": 4992
+    },
+    "verifierProfile": {
+      "mode": 1,
+      "proofVersion": 8,
+      "validityDays": 365
+    },
+    "contracts": {
+      "settlementVerifier": {
+        "salt": "0x7061796f2d7068617365342d736574746c656d656e742d7638",
+        "constructorCalldata": [],
+        "classHash": "0x17ecc3317283c824c542e0aa059cbfe498475bf1063f374654d0c05f647657a",
+        "compiledClassHash": "0x3200ee4525c19d6e3b89079916935b4e7ebd0194c04b13b129aba31b35c7ab4",
+        "sierraSha256": "e220be67c4a856b497f48554286ab122517407ac2f1dbd9f2281581cd1998588",
+        "casmSha256": "d22d3daccbf28e5390348acb3fb3927babc3f447c6c899fa490156e90fc09bf9",
+        "address": "0x4e45d14e253cb845144711a81f4e6b9945e910da487e8f291f4a0ec84567060"
+      },
+      "payrollSeal": {
+        "salt": "0x7061796f2d7068617365342d706179726f6c6c2d7365616c",
+        "constructorCalldata": [
+          "0x40337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+          "0x34701f573096b7bab0e5678e1ed2f17a87c8d56eb5f4d70bcf2197bab8e4477",
+          "0x44b22f1a17d2710c2f51ed0b37b8b0ff8435262d3c8c0f2f17be07c84ac23b5",
+          "0x534e5f4d41494e"
+        ],
+        "classHash": "0x760530190cc8c5851d16325ba45c4c4604f8c7636ea8cca8702775646b36c84",
+        "compiledClassHash": "0x2db5bca1d6409da82021d9fb7cf0846eeed93958176c42826ed5f78a5de112e",
+        "sierraSha256": "a3186517749901d8e24c7b2b0a1ea8a4025d9b652b8c8196f86cee434ec1107d",
+        "casmSha256": "9de4ec6dc27f22ff1e4d7d736e0d3791ea6de23047abb3e68c4ad23eb990a543",
+        "address": "0x1b0208114f33ea0ac800f6474307680a0cf239d13ac11818523f70cba49c84a"
+      },
+      "policyAccount": {
+        "salt": "0x7061796f2d7068617365342d706f6c6963792d6163636f756e74",
+        "constructorCalldata": [
+          "0x6e3e81271a762ead3ac1efc8c1193397882a7851f10ce7deea7ec83433da8ef"
+        ],
+        "ownerPublicKey": "0x6e3e81271a762ead3ac1efc8c1193397882a7851f10ce7deea7ec83433da8ef",
+        "classHash": "0x282ed1d7682b465e1189877a1286776e0134030a84cef22101be038812bae8a",
+        "compiledClassHash": "0x28594af6e51ca7f3838d1946897da8337d66ba1b357729a72e38e9a7219d508",
+        "sierraSha256": "cc1a020658fa051f872e06ab031d03c945281bf6ab3b5da9c007cc72d279d1d6",
+        "casmSha256": "c6d032f418c3d5fde429aa43c8b23723633841ff0801d9d3d8d366f9630d0b84",
+        "address": "0x656928a6f3aeb62c2e62ff7457d351a41ed987ceed07c514539165662ecb7e0"
+      }
+    },
+    "source": "circuits/payroll_integrity/target/payo-phase4-mainnet-plan.json"
+  },
+  "declarations": {
+    "settlementVerifier": {
+      "transactionHash": "0x2e222a81c86fd8445384e1e2be76f8f0900457f1d10d8763081e37ea309218d",
+      "classHash": "0x17ecc3317283c824c542e0aa059cbfe498475bf1063f374654d0c05f647657a",
+      "nonce": "0x4f",
+      "tip": "1",
+      "recoveredFromWaitError": false,
+      "simulatedFeeFri": "361676849612820456750",
+      "actualFeeFri": "146132065078799913307",
+      "blockNumber": 14135751
+    },
+    "payrollSeal": {
+      "transactionHash": "0xbd1d018a65e52b1f709fa8c5be6c0830f4787fdb54d5f242e4aa003345218d",
+      "classHash": "0x760530190cc8c5851d16325ba45c4c4604f8c7636ea8cca8702775646b36c84",
+      "nonce": "0x50",
+      "tip": "1",
+      "recoveredFromWaitError": true,
+      "simulatedFeeFri": "98401989943074155982",
+      "actualFeeFri": "39758384700543421851",
+      "blockNumber": 14135777
+    },
+    "policyAccount": {
+      "transactionHash": "0x65778eb3256bcd10c8e5e2c042647cdb8a7c6ab872a1fc7048bc6a90674dcce",
+      "classHash": "0x282ed1d7682b465e1189877a1286776e0134030a84cef22101be038812bae8a",
+      "nonce": "0x51",
+      "tip": "1",
+      "recoveredFromWaitError": true,
+      "simulatedFeeFri": "131077082972786423406",
+      "actualFeeFri": "52960442400965346779",
+      "blockNumber": 14135798
+    }
+  },
+  "updatedAt": "2026-08-31T11:17:18.122Z",
+  "deployment": {
+    "names": [
+      "settlementVerifier",
+      "payrollSeal",
+      "policyAccount"
+    ],
+    "transactionHash": "0x2d5ec390f90738186c4113795499fa93d49770cb4703711eae90f982b2fd359",
+    "nonce": "0x52",
+    "tip": "1",
+    "recoveredFromWaitError": false,
+    "simulatedFeeFri": "466925819757392955",
+    "actualFeeFri": "188646064251877865",
+    "blockNumber": 14135844
+  },
+  "proofVerification": {
+    "passed": true,
+    "verifierAddress": "0x4e45d14e253cb845144711a81f4e6b9945e910da487e8f291f4a0ec84567060",
+    "calldataFelts": 3247,
+    "publicInputCount": 11,
+    "proofVersion": "8",
+    "chunkIndex": "0",
+    "chunkCount": "1",
+    "tamperRejected": true,
+    "durationMs": 2921
+  },
+  "activation": {
+    "transactionHash": "0x43e5aa59456ca0fd2b6cefee88f5d2a0ae546f76d25169a3cd6c840c52ea5b0",
+    "nonce": "0x53",
+    "tip": "1",
+    "recoveredFromWaitError": false,
+    "simulatedFeeFri": "207729527532629697",
+    "actualFeeFri": "83904085329347585",
+    "blockNumber": 14135889,
+    "validAfter": 1788157713,
+    "expiresAt": 1819693713
+  },
+  "verification": {
+    "passed": true,
+    "observedAt": "2026-08-31T11:17:18.115Z",
+    "blockNumber": 14146148,
+    "dependencies": [
+      {
+        "name": "pool",
+        "expectedClassHash": "0x67dddd89d80fedadc06b6f160798f94800a4a70164e5a24301cd0d6076b554d",
+        "actualClassHash": "0x67dddd89d80fedadc06b6f160798f94800a4a70164e5a24301cd0d6076b554d",
+        "passed": true
+      },
+      {
+        "name": "policyRegistry",
+        "expectedClassHash": "0x6366141e5ae47f2e170409c6babaa4d6ae220b5b255f8dcbf9b0173f8681cfd",
+        "actualClassHash": "0x6366141e5ae47f2e170409c6babaa4d6ae220b5b255f8dcbf9b0173f8681cfd",
+        "passed": true
+      },
+      {
+        "name": "obligationRegistry",
+        "expectedClassHash": "0x50ac78b67fd69d7e2a892dc51014159d7e69fe1770c3f4f33add21131aa2a0b",
+        "actualClassHash": "0x50ac78b67fd69d7e2a892dc51014159d7e69fe1770c3f4f33add21131aa2a0b",
+        "passed": true
+      },
+      {
+        "name": "previousPayrollSeal",
+        "expectedClassHash": "0x1500b1e66ef8c1528f5ea301cbb0420b28a19742d927c5d595ce567b0266148",
+        "actualClassHash": "0x1500b1e66ef8c1528f5ea301cbb0420b28a19742d927c5d595ce567b0266148",
+        "passed": true
+      },
+      {
+        "name": "policyAdmin",
+        "expectedAddress": "0x126a7a572cf8935d069af937e9f7b27a24949e271e1fbccfe4de0c0d8dc8ea9",
+        "actualAddress": "0x126a7a572cf8935d069af937e9f7b27a24949e271e1fbccfe4de0c0d8dc8ea9",
+        "passed": true
+      },
+      {
+        "name": "policyOwnerKey",
+        "expectedPublicKey": "0x6e3e81271a762ead3ac1efc8c1193397882a7851f10ce7deea7ec83433da8ef",
+        "actualPublicKey": "0x6e3e81271a762ead3ac1efc8c1193397882a7851f10ce7deea7ec83433da8ef",
+        "passed": true
+      }
+    ],
+    "status": {
+      "observedAt": "2026-08-31T11:17:14.287Z",
+      "blockNumber": 14146148,
+      "declarations": {
+        "settlementVerifier": true,
+        "payrollSeal": true,
+        "policyAccount": true
+      },
+      "contracts": {
+        "settlementVerifier": {
+          "address": "0x4e45d14e253cb845144711a81f4e6b9945e910da487e8f291f4a0ec84567060",
+          "expectedClassHash": "0x17ecc3317283c824c542e0aa059cbfe498475bf1063f374654d0c05f647657a",
+          "actualClassHash": "0x17ecc3317283c824c542e0aa059cbfe498475bf1063f374654d0c05f647657a",
+          "deployed": true
+        },
+        "payrollSeal": {
+          "address": "0x1b0208114f33ea0ac800f6474307680a0cf239d13ac11818523f70cba49c84a",
+          "expectedClassHash": "0x760530190cc8c5851d16325ba45c4c4604f8c7636ea8cca8702775646b36c84",
+          "actualClassHash": "0x760530190cc8c5851d16325ba45c4c4604f8c7636ea8cca8702775646b36c84",
+          "deployed": true
+        },
+        "policyAccount": {
+          "address": "0x656928a6f3aeb62c2e62ff7457d351a41ed987ceed07c514539165662ecb7e0",
+          "expectedClassHash": "0x282ed1d7682b465e1189877a1286776e0134030a84cef22101be038812bae8a",
+          "actualClassHash": "0x282ed1d7682b465e1189877a1286776e0134030a84cef22101be038812bae8a",
+          "deployed": true
+        }
+      },
+      "verifierProfile": {
+        "mode": 1,
+        "proofVersion": 8,
+        "validityDays": 365,
+        "active": true,
+        "address": "0x4e45d14e253cb845144711a81f4e6b9945e910da487e8f291f4a0ec84567060"
+      }
+    },
+    "bindings": [
+      {
+        "code": "seal.pool",
+        "actual": "0x40337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+        "expected": "0x40337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+        "passed": true
+      },
+      {
+        "code": "seal.policyRegistry",
+        "actual": "0x34701f573096b7bab0e5678e1ed2f17a87c8d56eb5f4d70bcf2197bab8e4477",
+        "expected": "0x34701f573096b7bab0e5678e1ed2f17a87c8d56eb5f4d70bcf2197bab8e4477",
+        "passed": true
+      },
+      {
+        "code": "seal.obligationRegistry",
+        "actual": "0x44b22f1a17d2710c2f51ed0b37b8b0ff8435262d3c8c0f2f17be07c84ac23b5",
+        "expected": "0x44b22f1a17d2710c2f51ed0b37b8b0ff8435262d3c8c0f2f17be07c84ac23b5",
+        "passed": true
+      },
+      {
+        "code": "policyAccount.owner",
+        "actual": "0x6e3e81271a762ead3ac1efc8c1193397882a7851f10ce7deea7ec83433da8ef",
+        "expected": "0x6e3e81271a762ead3ac1efc8c1193397882a7851f10ce7deea7ec83433da8ef",
+        "passed": true
+      },
+      {
+        "code": "policyAccount.unpaused",
+        "actual": "0x0",
+        "expected": "0x0",
+        "passed": true
+      }
+    ],
+    "proofVerification": {
+      "passed": true,
+      "verifierAddress": "0x4e45d14e253cb845144711a81f4e6b9945e910da487e8f291f4a0ec84567060",
+      "calldataFelts": 3247,
+      "publicInputCount": 11,
+      "proofVersion": "8",
+      "chunkIndex": "0",
+      "chunkCount": "1",
+      "tamperRejected": true,
+      "durationMs": 3256
+    }
+  }
+}

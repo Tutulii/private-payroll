@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertSettlementTransition,
+  commitAgentSettlementPlan,
   commitPayoActionTokenTotals,
   evaluateStarknetReceipt,
   tokenTotalsSchema,
@@ -67,5 +68,26 @@ describe("durable settlement state", () => {
       subjectRecordId: "remediation",
       totals: { STRK: "0", USDC: "0" },
     })).toThrow(/positive private settlement total/i);
+  });
+
+  it("commits the exact canonical agent recipients, tokens, amounts and purposes", () => {
+    const input = {
+      organizationId: "org",
+      runId: "run",
+      payments: [
+        { recipientAddress: "0x002", token: "USDC" as const, amountAtomic: "25", purposeCode: "private_payroll" },
+        { recipientAddress: "0x001", token: "STRK" as const, amountAtomic: "100", purposeCode: "private_payroll" },
+      ],
+    };
+    const commitment = commitAgentSettlementPlan(input);
+    expect(commitAgentSettlementPlan({ ...input, payments: [...input.payments].reverse() })).toBe(commitment);
+    expect(commitAgentSettlementPlan({
+      ...input,
+      payments: [{ ...input.payments[0], recipientAddress: "0x003" }, input.payments[1]],
+    })).not.toBe(commitment);
+    expect(() => commitAgentSettlementPlan({
+      ...input,
+      payments: [input.payments[0], { ...input.payments[0], amountAtomic: "26" }],
+    })).toThrow(/unique per token/i);
   });
 });

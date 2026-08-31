@@ -237,6 +237,11 @@ type StarknetWalletContextValue = {
     recipients: PayrollRecipient[],
     payoAction: STRK20_INVOKE_ACTION,
   ) => Promise<string>;
+  prepareProofBoundException: (
+    workflow: PrivateExceptionWorkflow,
+    recipients: PayrollRecipient[],
+    payoAction: STRK20_INVOKE_ACTION,
+  ) => Promise<() => Promise<string>>;
   assertPrivateActionAvailable: () => void;
   reconcilePayrollTransaction: (transactionHash: string) => Promise<void>;
   scheduleObligationRoot: (agreementRoot: string) => Promise<ObligationRootScheduleResult>;
@@ -1064,7 +1069,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     [assertPrivateActionAvailable, refreshBalanceForAccount, requestPrivateFeeQuote, submitPrivateActions, walletAccount],
   );
 
-  const runProofBoundException = useCallback(
+  const prepareProofBoundException = useCallback(
     async (
       workflow: PrivateExceptionWorkflow,
       recipients: PayrollRecipient[],
@@ -1100,20 +1105,32 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
         }
       }
       const singleFeeQuote = feeQuotes.length === 1 ? feeQuotes[0] : undefined;
-      return submitPrivateActions(
-        workflow,
-        workflow === "wage_claim" ? "Private wage claim" : "Private wage remediation",
-        actions,
-        {
-          totals,
-          feeReserves,
-          walletFee: singleFeeQuote?.walletFee,
-          feeToken: singleFeeQuote?.token,
-          feeQuoteExact: feeQuotes.every((quote) => quote.exact),
-        },
-      );
+      return () => submitPrivateActions(
+          workflow,
+          workflow === "wage_claim" ? "Private wage claim" : "Private wage remediation",
+          actions,
+          {
+            totals,
+            feeReserves,
+            walletFee: singleFeeQuote?.walletFee,
+            feeToken: singleFeeQuote?.token,
+            feeQuoteExact: feeQuotes.every((quote) => quote.exact),
+          },
+        );
     },
     [address, assertPrivateActionAvailable, refreshBalanceForAccount, requestPrivateFeeQuote, submitPrivateActions, walletAccount],
+  );
+
+  const runProofBoundException = useCallback(
+    async (
+      workflow: PrivateExceptionWorkflow,
+      recipients: PayrollRecipient[],
+      payoAction: STRK20_INVOKE_ACTION,
+    ) => {
+      const submit = await prepareProofBoundException(workflow, recipients, payoAction);
+      return submit();
+    },
+    [prepareProofBoundException],
   );
 
   const reconcilePayrollTransaction = useCallback(async (transactionHash: string) => {
@@ -1935,6 +1952,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     shieldStrk,
     runProofBoundPayroll,
     runProofBoundException,
+    prepareProofBoundException,
     assertPrivateActionAvailable,
     reconcilePayrollTransaction,
     scheduleObligationRoot,

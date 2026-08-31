@@ -401,9 +401,15 @@ This is why Phase 3 is not reported as complete:
   deployed and registry-active on Mainnet. Frozen-block class, profile,
   valid-proof and tampered-proof readback passed at block `14041891`; see
   `docs/wage-claim-mainnet-deployment.md` and
-  `evidence/phase3-wage-claim-mainnet.json`. P3-06 still requires the hosted
-  vNext rollout and one browser-origin claim/remediation cycle through
-  reconciled private payment.
+  `evidence/phase3-wage-claim-mainnet.json`. Exact commit
+  `66488bb5ec3191022f8b327ecc8f75fff21f0534` also passed PAYO CI and the full
+  proof-artifacts workflow, then shipped as Fly prover release 10 and web
+  release 44 from one identical image. Hosted health, route, bundle, protected
+  prover and indexer checks passed; see
+  `evidence/phase3-wage-claim-hosted-rollout.json`. P3-06 now requires only one
+  browser-origin Claim v6/remediation cycle through private-payment
+  confirmation. It must not be called reconciled without SettlementMatch or
+  worker-authorized Ready note/balance evidence.
 
 - The seven advanced matrix workflows now have official-pool private-value
   movements tied atomically to PAYO proof enforcement, but Devnet does not
@@ -411,8 +417,8 @@ This is why Phase 3 is not reported as complete:
   proof layer disabled is partial evidence under the strict no-mock/no-disabled
   completion rule.
 - The transaction-safe merged-v2 verifier is active and independently
-  proof-read-back verified on Mainnet. PAYO/Fly still must be rolled to the new
-  bundle and a fresh advanced payroll must reach Ready confirmation, durable
+  proof-read-back verified on Mainnet, and PAYO/Fly now serves the new bundle.
+  A fresh advanced payroll still must reach Ready confirmation, durable
   finality, both on-chain verifier shards, terminal UI state, and receiver-side
   private balance observation.
 - Phase 5 still separately requires the final public Mainnet demonstration set,

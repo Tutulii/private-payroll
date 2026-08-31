@@ -5,7 +5,15 @@ export class PayoApiClient {
   readonly accessToken: string;
 
   constructor(input: { baseUrl: string; accessToken: string }) {
-    this.baseUrl = input.baseUrl.replace(/\/$/, "");
+    const url = new URL(input.baseUrl);
+    const loopback = new Set(["localhost", "127.0.0.1", "[::1]"]);
+    if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback.has(url.hostname))) {
+      throw new Error("PAYO_API_URL must use HTTPS unless it targets loopback development.");
+    }
+    if (url.username || url.password || url.search || url.hash) {
+      throw new Error("PAYO_API_URL cannot contain credentials, a query, or a fragment.");
+    }
+    this.baseUrl = url.href.replace(/\/$/, "");
     this.accessToken = input.accessToken;
   }
 

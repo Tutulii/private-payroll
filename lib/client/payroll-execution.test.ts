@@ -200,6 +200,18 @@ function client(ready = true) {
     storeEncryptedProofBundle: vi.fn().mockResolvedValue({ proofBundle: {} }),
     createSettlementIntent: vi.fn().mockImplementation(({ id }: { id: string }) =>
       Promise.resolve({ settlement: { id } })),
+    linkAgentExecutionApproval: vi.fn().mockImplementation((input: {
+      capabilityId: string;
+      executionId: string;
+      settlementId: string;
+    }) => Promise.resolve({ execution: {
+      ...input,
+      runId: "",
+      state: "approval_pending",
+      requiresApproval: true,
+    } })),
+    cancelAgentExecutionApproval: vi.fn().mockResolvedValue({ execution: {} }),
+    cancelSettlementApproval: vi.fn().mockResolvedValue({ settlement: {} }),
     recordSettlementSubmission: vi.fn().mockResolvedValue({ settlement: {} }),
     enqueueProofVerification: vi.fn().mockResolvedValue({ proofVerification: {} }),
     enqueuePayrollAuthorization: vi.fn().mockImplementation(({ runId }: { runId: string }) =>
@@ -860,6 +872,54 @@ describe("proof-bound payroll browser orchestration", () => {
       transactionHash: "0xfeed",
       verificationQueued: true,
     });
+  });
+
+  it("links the exact MCP execution before opening Ready for human approval", async () => {
+    const mockClient = client();
+    const input = await snapshotExecutionInput(mockClient);
+    const capabilityId = generateUuidV7(now.getTime() + 30);
+    const executionId = generateUuidV7(now.getTime() + 31);
+    mockClient.linkAgentExecutionApproval.mockImplementationOnce((approval: {
+      capabilityId: string;
+      executionId: string;
+      settlementId: string;
+    }) => Promise.resolve({ execution: {
+      ...approval,
+      runId: input.snapshotPlan.runId,
+      state: "approval_pending" as const,
+      requiresApproval: true,
+    } }));
+
+    await executeProofBoundPayroll({
+      ...input,
+      humanAgentApproval: { capabilityId, executionId },
+    });
+
+    expect(mockClient.linkAgentExecutionApproval).toHaveBeenCalledWith({
+      capabilityId,
+      executionId,
+      settlementId: expect.any(String),
+    });
+    expect(mockClient.linkAgentExecutionApproval.mock.invocationCallOrder[0]).toBeLessThan(
+      input.submitPayroll.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("cancels both durable sides and never opens Ready when agent linking fails", async () => {
+    const mockClient = client();
+    const input = await snapshotExecutionInput(mockClient);
+    const capabilityId = generateUuidV7(now.getTime() + 32);
+    const executionId = generateUuidV7(now.getTime() + 33);
+    mockClient.linkAgentExecutionApproval.mockRejectedValue(new Error("approval binding rejected"));
+
+    await expect(executeProofBoundPayroll({
+      ...input,
+      humanAgentApproval: { capabilityId, executionId },
+    })).rejects.toThrow("could not prepare approval and proof delivery");
+
+    expect(input.submitPayroll).not.toHaveBeenCalled();
+    expect(mockClient.cancelSettlementApproval).toHaveBeenCalledOnce();
+    expect(mockClient.cancelAgentExecutionApproval).toHaveBeenCalledWith({ capabilityId, executionId });
   });
 
   it("fails closed without a Ready request when staged payroll authorization dies", async () => {

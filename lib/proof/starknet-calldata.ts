@@ -2,6 +2,7 @@ import { hash } from "starknet";
 import {
   PAYROLL_INTEGRITY_PUBLIC_INPUT_COUNT,
   PAYO_EXCEPTION_PUBLIC_INPUT_COUNT,
+  PAYO_SETTLEMENT_MATCH_PUBLIC_INPUT_COUNT,
   type PayrollIntegrityPublicInputs,
 } from "./protocol";
 import {
@@ -81,6 +82,29 @@ export function serializeExceptionPublicInputs(values: readonly string[]): Uint8
   const output = new Uint8Array(values.length * 32);
   values.forEach((value, index) => {
     let remaining = parseUnsigned(value, `Exception public input ${index}`, 1n << 256n);
+    for (let byte = 31; byte >= 0; byte -= 1) {
+      output[index * 32 + byte] = Number(remaining & 0xffn);
+      remaining >>= 8n;
+    }
+  });
+  return output;
+}
+
+/** Barretenberg encoding for SettlementMatch v8's fixed 11-field public ABI. */
+export function serializeSettlementMatchPublicInputs(values: readonly string[]): Uint8Array {
+  if (values.length !== PAYO_SETTLEMENT_MATCH_PUBLIC_INPUT_COUNT) {
+    throw new Error(
+      "Expected " + PAYO_SETTLEMENT_MATCH_PUBLIC_INPUT_COUNT
+        + " SettlementMatch public inputs; received " + values.length + ".",
+    );
+  }
+  const output = new Uint8Array(values.length * 32);
+  values.forEach((value, index) => {
+    let remaining = parseUnsigned(
+      value,
+      "SettlementMatch public input " + index,
+      1n << 256n,
+    );
     for (let byte = 31; byte >= 0; byte -= 1) {
       output[index * 32 + byte] = Number(remaining & 0xffn);
       remaining >>= 8n;

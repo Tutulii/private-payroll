@@ -1,0 +1,2 @@
+ALTER TABLE "direct_privacy_authorized_runs" ADD COLUMN "encrypted_witness" jsonb;--> statement-breakpoint
+ALTER TABLE "direct_privacy_authorized_runs" ADD COLUMN "witness_staged_at" timestamp with time zone;

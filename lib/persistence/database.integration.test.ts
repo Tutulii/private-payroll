@@ -16,6 +16,11 @@ import {
   payrollStatementCommitmentV2,
 } from "@/lib/domain/exception-protocol";
 import { prepareEncryptedAgentCapability } from "@/lib/client/agent-capabilities";
+import { encryptCapabilityPolicy } from "@/lib/server/capability-policy-crypto";
+import {
+  issueAgentAccessToken,
+  revokeAgentAccessTokens,
+} from "@/lib/server/agent-access-token";
 import {
   commitPayoActionTokenTotals,
   commitTokenTotals,
@@ -51,6 +56,14 @@ import {
   createReadyRecoveryLink,
   verifyReadyAuthenticationChallenge,
 } from "@/lib/server/ready-auth";
+import { registerAgentExecutionRepositoryIntegrationTests } from "./agent-execution-repository.integration-helper";
+import { registerAgentExecutionApprovalRepositoryIntegrationTests } from "./agent-execution-approval-repository.integration-helper";
+import { registerAgentExecutionWorkerRepositoryIntegrationTests } from "./agent-execution-worker-repository.integration-helper";
+import { registerDirectPrivacyRepositoryIntegrationTests } from "./direct-privacy-repository.integration-helper";
+import { registerDirectPrivacyPreparationRepositoryIntegrationTests } from "./direct-privacy-preparation-repository.integration-helper";
+import { registerDirectPrivacySubmissionRepositoryIntegrationTests } from "./direct-privacy-submission-repository.integration-helper";
+import { registerDirectPrivacyReconciliationRepositoryIntegrationTests } from "./direct-privacy-reconciliation-repository.integration-helper";
+import { registerDirectPrivacyPayrollAuthorizationRepositoryIntegrationTests } from "./direct-privacy-payroll-authorization-repository.integration-helper";
 import {
   reserveCapabilityPayment,
   transitionCapabilityReservation,
@@ -58,6 +71,7 @@ import {
 import {
   createEncryptedRun,
   getEncryptedRun,
+  listPayrollRuns,
   registerAgentCapability,
   revokeAgentCapability,
 } from "./repository";
@@ -144,6 +158,7 @@ import {
 } from "./vault-repository";
 import {
   agentCapabilities,
+  agentAccessTokens,
   auditEvents,
   confirmationJobs,
   disclosureGrants,
@@ -168,6 +183,8 @@ import {
   workerClaims,
 } from "./schema";
 
+process.env.PAYO_CAPABILITY_ENCRYPTION_KEY ??= `0x${"42".repeat(32)}`;
+process.env.PAYO_PRIVACY_KEY_ENCRYPTION_KEY ??= `0x${"43".repeat(32)}`;
 const testDatabaseUrl = process.env.PAYO_TEST_DATABASE_URL;
 const databaseSuite = testDatabaseUrl ? describe : describe.skip;
 const admin: AuthenticatedPrincipal = { principalId: "admin:test", sessionId: "session:admin" };
@@ -176,6 +193,15 @@ const agent: AuthenticatedPrincipal = { principalId: "agent:test", sessionId: "s
 async function resetDatabase() {
   await getDatabase().execute(sql`
     TRUNCATE TABLE
+      agent_executions,
+      direct_privacy_reconciliations,
+      direct_privacy_submissions,
+      direct_privacy_preparations,
+      direct_privacy_payroll_authorizations,
+      direct_privacy_run_materials,
+      direct_privacy_authorized_runs,
+      agent_access_tokens,
+      direct_privacy_accounts,
       audit_events,
       capability_reservations,
       agent_capabilities,
@@ -508,6 +534,14 @@ function combineRoot(high: string, low: string): `0x${string}` {
 }
 
 databaseSuite("PostgreSQL durability integration", () => {
+  registerAgentExecutionRepositoryIntegrationTests();
+  registerAgentExecutionApprovalRepositoryIntegrationTests();
+  registerAgentExecutionWorkerRepositoryIntegrationTests();
+  registerDirectPrivacyRepositoryIntegrationTests();
+  registerDirectPrivacyPreparationRepositoryIntegrationTests();
+  registerDirectPrivacySubmissionRepositoryIntegrationTests();
+  registerDirectPrivacyReconciliationRepositoryIntegrationTests();
+  registerDirectPrivacyPayrollAuthorizationRepositoryIntegrationTests();
   beforeEach(async () => {
     process.env.DATABASE_URL = testDatabaseUrl;
     process.env.PAYO_DB_POOL_SIZE = "8";
@@ -759,6 +793,14 @@ databaseSuite("PostgreSQL durability integration", () => {
       transactionHash: "0xabc",
       registeredAt: new Date(Number(dueAt - 120n) * 1_000),
     });
+    await expect(listPayrollRuns(organizationId, owner)).resolves.toEqual([
+      expect.objectContaining({
+        id: runId,
+        state: "draft",
+        manifestRoot: null,
+        obligationSnapshotPlanId: planId,
+      }),
+    ]);
 
     const workerClaimId = generateUuidV7();
     const workerClaimProofBundleId = generateUuidV7();
@@ -856,6 +898,13 @@ databaseSuite("PostgreSQL durability integration", () => {
     expect(storedPlan).toMatchObject({ id: planId, runId, state: "consumed" });
     expect(storedPlan.consumedAt).toBeInstanceOf(Date);
     expect(storedRun).toMatchObject({ id: runId, obligationSnapshotPlanId: planId });
+    await expect(listPayrollRuns(organizationId, owner)).resolves.toEqual([
+      expect.objectContaining({
+        id: runId,
+        manifestRoot: runCreate.manifestRoot,
+        obligationSnapshotPlanId: planId,
+      }),
+    ]);
   });
 
 
@@ -3282,6 +3331,8 @@ databaseSuite("PostgreSQL durability integration", () => {
         approvalThresholdAtomic: "3000",
       }],
       executionMode: "autonomous_bounded",
+      maxCallCount: 10,
+      usedCallCount: 0,
       validAfter: "2026-08-01T00:00:00.000Z",
       expiresAt: "2026-09-01T00:00:00.000Z",
       nonce: "capability-race-nonce-0001",
@@ -3292,12 +3343,19 @@ databaseSuite("PostgreSQL durability integration", () => {
       organizationId,
       principalId: agent.principalId,
       capabilityHash: "0x1234",
-      policy: signed,
+      policy: encryptCapabilityPolicy(signed, {
+        capabilityId: capability.id,
+        organizationId,
+        principalId: agent.principalId,
+        capabilityHash: "0x1234",
+      }),
       expiresAt: new Date(capability.expiresAt),
     });
     const intent = (id: string): PaymentIntent => ({
+      intentVersion: "payo-payment-intent-v1",
       intentId: id,
       organizationId,
+      runId: "payroll-run-race-0001",
       action: "request_execution",
       token: "STRK",
       recipientAddress: "0x123",
@@ -3305,6 +3363,7 @@ databaseSuite("PostgreSQL durability integration", () => {
       purposeCode: "monthly-payroll",
       capabilityNonce: capability.nonce,
       createdAt: "2026-08-24T10:00:00.000Z",
+      validUntil: "2026-08-24T10:05:00.000Z",
     });
     const results = await Promise.allSettled([
       reserveCapabilityPayment({
@@ -3411,6 +3470,106 @@ databaseSuite("PostgreSQL durability integration", () => {
       vaultPrincipal,
     )).toEqual(revokedRecord);
   });
+
+  it("issues capability-scoped MCP credentials and rejects replay, cross-tenant, and general API access", async () => {
+    const organizationId = await seedOrganization();
+    const now = new Date();
+    const vaultPrincipal = generateVaultPrincipal(admin.principalId);
+    const scopedAgentId = generateUuidV7(now.getTime() + 1);
+    const prepared = prepareEncryptedAgentCapability({
+      organizationId,
+      organizationSecret: "0x" + "53".repeat(32),
+      principalId: scopedAgentId,
+      recipientAddresses: ["0x123"],
+      limits: [{
+        token: "STRK",
+        maxPerPaymentAtomic: "1000",
+        maxPerPeriodAtomic: "1000",
+        approvalThresholdAtomic: "1001",
+      }],
+      vaultPrincipal,
+      executionMode: "autonomous_bounded",
+      maxCallCount: 1,
+      now,
+      expiresAt: new Date(now.getTime() + 60 * 60 * 1_000),
+    });
+    await registerAgentCapability({
+      signedCapability: prepared.signedCapability,
+      recordId: prepared.record.id,
+      revision: 1,
+      envelope: prepared.envelope,
+    }, admin);
+
+    await expect(issueAgentAccessToken({
+      capabilityId: prepared.record.id,
+      principal: agent,
+      now,
+    })).rejects.toMatchObject({ code: "ORG_FORBIDDEN" });
+    const first = await issueAgentAccessToken({
+      capabilityId: prepared.record.id,
+      principal: admin,
+      ttlSeconds: 1_800,
+      now,
+    });
+    expect(first.accessToken).toMatch(/^payo_agent_[A-Za-z0-9_-]{43}$/);
+    expect(JSON.stringify(await getDatabase().select().from(agentAccessTokens)))
+      .not.toContain(first.accessToken);
+
+    const requestFor = (token: string, path: string, method = "GET") => new Request(
+      "https://payo.test" + path,
+      { method, headers: { authorization: "Bearer " + token } },
+    );
+    const scoped = await requirePrincipal(requestFor(
+      first.accessToken,
+      "/api/v1/capabilities?capabilityId=" + encodeURIComponent(prepared.record.id),
+    ));
+    expect(scoped).toMatchObject({
+      principalId: scopedAgentId,
+      authKind: "agent_capability",
+      capabilityId: prepared.record.id,
+      capabilityOrganizationId: organizationId,
+    });
+    await expect(listPayrollRuns(organizationId, scoped)).resolves.toEqual([]);
+    await expect(requirePrincipal(requestFor(
+      first.accessToken,
+      "/api/v1/organizations",
+    ))).rejects.toMatchObject({ code: "AGENT_TOKEN_SCOPE_DENIED" });
+    await expect(requirePrincipal(requestFor(
+      first.accessToken,
+      "/api/v1/runs?organizationId=" + generateUuidV7(),
+    ))).rejects.toMatchObject({ code: "AGENT_TOKEN_ORG_MISMATCH" });
+    await expect(requirePrincipal(requestFor(
+      first.accessToken,
+      "/api/v1/capabilities/not-the-bound-capability/executions",
+      "POST",
+    ))).rejects.toMatchObject({ code: "AGENT_TOKEN_CAPABILITY_MISMATCH" });
+
+    const second = await issueAgentAccessToken({
+      capabilityId: prepared.record.id,
+      principal: admin,
+      ttlSeconds: 1_800,
+      now: new Date(now.getTime() + 1_000),
+    });
+    await expect(requirePrincipal(requestFor(
+      first.accessToken,
+      "/api/v1/capabilities?capabilityId=" + encodeURIComponent(prepared.record.id),
+    ))).rejects.toMatchObject({ code: "AGENT_TOKEN_INVALID" });
+    await expect(requirePrincipal(requestFor(
+      second.accessToken,
+      "/api/v1/capabilities?capabilityId=" + encodeURIComponent(prepared.record.id),
+    ))).resolves.toMatchObject({ capabilityId: prepared.record.id });
+
+    await expect(revokeAgentAccessTokens({
+      capabilityId: prepared.record.id,
+      principal: admin,
+      now: new Date(now.getTime() + 2_000),
+    })).resolves.toMatchObject({ revokedCount: 1 });
+    await expect(requirePrincipal(requestFor(
+      second.accessToken,
+      "/api/v1/capabilities?capabilityId=" + encodeURIComponent(prepared.record.id),
+    ))).rejects.toMatchObject({ code: "AGENT_TOKEN_INVALID" });
+  });
+
 
   it("rolls indexed blocks back and accepts the canonical replacement", async () => {
     await persistIndexedBlock({

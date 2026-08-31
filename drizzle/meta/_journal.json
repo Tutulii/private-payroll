@@ -162,6 +162,125 @@
       "when": 1787974281000,
       "tag": "0022_bent_gorgon",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1788081949892,
+      "tag": "0023_omniscient_randall_flagg",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1788086000134,
+      "tag": "0024_broad_rawhide_kid",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1788086092310,
+      "tag": "0025_jittery_gabe_jones",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1788087086635,
+      "tag": "0026_numerous_starhawk",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1788090135787,
+      "tag": "0027_next_punisher",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1788090906612,
+      "tag": "0028_mean_phalanx",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1788093002534,
+      "tag": "0029_exotic_barracuda",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1788094064143,
+      "tag": "0030_fine_ultimates",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1788094199482,
+      "tag": "0031_rapid_northstar",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1788094783343,
+      "tag": "0032_curvy_the_anarchist",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1788106572284,
+      "tag": "0033_stiff_bill_hollister",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1788133845144,
+      "tag": "0034_eager_brother_voodoo",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1788140449425,
+      "tag": "0035_agent_settlement_plan_binding",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1788142913183,
+      "tag": "0036_misty_scrambler",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1788144841111,
+      "tag": "0037_naive_joshua_kane",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1788167208549,
+      "tag": "0038_wealthy_luckman",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1788173061240,
+      "tag": "0039_mighty_psynapse",
+      "breakpoints": true
     }
   ]
 }

@@ -75,6 +75,14 @@ function proofResponse(proof: PayoProofWorkerSuccess, origin: string | null) {
 
 function jobResponse(job: ProverJobSnapshot, origin: string | null) {
   if (job.state === "complete" && job.result) {
+    if (job.result.type === "settlement-proof-complete") {
+      return Response.json({
+        error: {
+          code: "PROVER_JOB_TYPE_MISMATCH",
+          message: "This endpoint cannot return an autonomous settlement proof.",
+        },
+      }, { status: 500, headers: corsHeaders(origin) });
+    }
     return proofResponse(job.result, origin);
   }
   if (job.state === "failed") {

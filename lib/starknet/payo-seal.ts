@@ -187,6 +187,30 @@ export function buildPayoSealedPayroll(input: {
   return buildPayoSealedAction({ ...input, mode: PAYO_PROOF_MODE_PRECOMMIT });
 }
 
+/**
+ * Stages the hash-bound PayrollIntegrity proof before an autonomous payment.
+ * The call is permissionless and moves no funds; each committed shard must
+ * still pass the configured on-chain verifier before the policy account can
+ * atomically execute payment plus SettlementMatch FINALIZE.
+ */
+export function buildDirectPayrollPrecommitCall(input: {
+  sealAddress: string;
+  sealedPayroll: PayoSealedPayroll;
+}): Call {
+  const sealAddress = canonicalAddress(input.sealAddress, "PAYO seal address");
+  const calldata = input.sealedPayroll.invokeAction.calldata;
+  if (calldata.length !== 19 || BigInt(calldata[0]) !== BigInt(PAYO_PROOF_MODE_PRECOMMIT)) {
+    throw new Error("Direct payroll precommit requires one canonical PRECOMMIT action.");
+  }
+  // Drop mode and the two empty proof-span lengths. `precommit_direct` stages
+  // hashes only; the relayer submits each real shard in a bounded follow-up.
+  return {
+    contractAddress: sealAddress,
+    entrypoint: "precommit_direct",
+    calldata: calldata.slice(1, 17),
+  };
+}
+
 export function buildVerifySealedShardCall(input: {
   sealAddress: string;
   runNullifierHigh: string;

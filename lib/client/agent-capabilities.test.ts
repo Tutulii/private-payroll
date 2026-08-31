@@ -70,6 +70,21 @@ describe("encrypted agent capability lifecycle", () => {
     expect(request.envelope.aad.recordType).toBe("agent-capability");
   });
 
+  it("requires an explicit opt-in before issuing a bounded-autonomy policy", () => {
+    expect(prepareEncryptedAgentCapability(input()).signedCapability.capability.executionMode)
+      .toBe("request_approval");
+    const prepared = prepareEncryptedAgentCapability({
+      ...input(),
+      executionMode: "autonomous_bounded",
+      maxCallCount: 1,
+    });
+    expect(prepared.signedCapability.capability).toMatchObject({
+      executionMode: "autonomous_bounded",
+      maxCallCount: 1,
+      usedCallCount: 0,
+    });
+  });
+
   it("writes revocation as the next authenticated encrypted revision", async () => {
     const prepared = prepareEncryptedAgentCapability(input());
     const revoke = vi.fn().mockResolvedValue({

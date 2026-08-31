@@ -82,11 +82,11 @@ export async function executeAuthorizedRemediationPayment(input: {
   remediation: WageRemediationSummary;
   principal: VaultPrincipalKeyPair;
   sealAddress: string;
-  submit: (
+  prepareSubmit: (
     workflow: "wage_remediation",
     recipients: PayrollRecipient[],
     action: STRK20_INVOKE_ACTION,
-  ) => Promise<string>;
+  ) => Promise<() => Promise<string>>;
   onStage?: (stage: "loading" | "recording" | "wallet" | "submitted") => void;
 }) {
   input.onStage?.("loading");
@@ -145,6 +145,30 @@ export async function executeAuthorizedRemediationPayment(input: {
     subjectRecordId: privateRecord.id,
     totals,
   });
+  const action = buildAuthorizedExceptionAction({
+    sealAddress: input.sealAddress,
+    mode: 3,
+    publicInputs,
+  });
+  const recipients: PayrollRecipient[] = [{
+    address: privateRecord.recipientAddress,
+    amount: formatTokenAmount(
+      BigInt(privateRecord.amountAtomic),
+      PAYROLL_TOKENS[privateRecord.token],
+    ),
+    token: privateRecord.token,
+  }];
+
+  // Quote fees and verify the connected Ready account's private balance before
+  // creating a durable approval intent. A pre-wallet failure must leave an
+  // authorized remediation retryable instead of manufacturing PAYMENT_PENDING.
+  input.onStage?.("loading");
+  const submit = await input.prepareSubmit(
+    "wage_remediation",
+    recipients,
+    action,
+  );
+
   let settlementId = fresh.settlementId;
   let settlement: Record<string, unknown> | undefined;
   if (settlementId) {
@@ -215,22 +239,9 @@ export async function executeAuthorizedRemediationPayment(input: {
     settlement = stored.settlement;
   }
 
-  const action = buildAuthorizedExceptionAction({
-    sealAddress: input.sealAddress,
-    mode: 3,
-    publicInputs,
-  });
-  const recipients: PayrollRecipient[] = [{
-    address: privateRecord.recipientAddress,
-    amount: formatTokenAmount(
-      BigInt(privateRecord.amountAtomic),
-      PAYROLL_TOKENS[privateRecord.token],
-    ),
-    token: privateRecord.token,
-  }];
   input.onStage?.("wallet");
   const transactionHash = await awaitWalletOrRecoveredTransaction({
-    submit: () => input.submit("wage_remediation", recipients, action),
+    submit,
     readRecoveredTransactionHash: () =>
       readRecoveredSettlementTransactionHash(input.client, settlementId!),
   });

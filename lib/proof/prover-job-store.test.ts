@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RemoteProofRequest } from "./remote-prover";
 import {
+  agentProofJobNamespace,
   enqueueProverJob,
   getProverJob,
   resetProverJobsForTests,
@@ -55,6 +56,13 @@ afterEach(() => {
 });
 
 describe("remote prover job store", () => {
+  it("isolates payroll and settlement jobs that share one execution ID", () => {
+    const principalId = "principal-1";
+    expect(agentProofJobNamespace("agent-payroll-proof", principalId)).not.toBe(
+      agentProofJobNamespace("agent-settlement-proof", principalId),
+    );
+  });
+
   it("deduplicates retries and retains the completed result", async () => {
     vi.spyOn(console, "info").mockImplementation(() => undefined);
     let resolveProof!: (value: ReturnType<typeof result>) => void;

@@ -14,6 +14,7 @@ const settlementIntentSchema = z.object({
   subjectRecordId: uuidV7Schema,
   walletRequestId: uuidV7Schema,
   tokenTotalsCommitment: commitmentSchema,
+  agentPlanCommitment: commitmentSchema.optional(),
   envelope: encryptedVaultRecordSchema,
 }).strict();
 

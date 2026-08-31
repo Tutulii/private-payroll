@@ -1,0 +1,1 @@
+ALTER TABLE "settlements" ADD COLUMN "agent_plan_commitment" text;

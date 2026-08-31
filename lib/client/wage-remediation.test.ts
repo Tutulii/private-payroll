@@ -546,28 +546,47 @@ describe("durable Remediation v7 client binding", () => {
       }),
       cancelSettlementApproval: vi.fn(),
     };
-    const submit = vi.fn().mockImplementation(async (_workflow, recipients, action) => {
-      order.push("wallet");
+    const prepareSubmit = vi.fn().mockImplementation(async (_workflow, recipients, action) => {
+      order.push("preflight");
       expect(recipients).toEqual([{ address: prepared.privateRecord.recipientAddress, amount: "1", token: "USDC" }]);
       expect(action.calldata).toHaveLength(7);
       expect(action.calldata[0]).toBe("0x3");
-      return "0xfeed";
+      return async () => {
+        order.push("wallet");
+        return "0xfeed";
+      };
     });
     const date = vi.spyOn(Date, "now").mockReturnValue(now.getTime());
     try {
+      const rejectedIntent = vi.fn();
+      await expect(executeAuthorizedRemediationPayment({
+        client: {
+          ...client,
+          createSettlementIntent: rejectedIntent,
+        } as never,
+        remediation: summary,
+        principal: owner,
+        sealAddress: "0x12345",
+        prepareSubmit: vi.fn().mockRejectedValue(new Error(
+          "The shielded USDC treasury does not cover this wage remediation.",
+        )),
+      })).rejects.toThrow(/does not cover this wage remediation/i);
+      expect(rejectedIntent).not.toHaveBeenCalled();
+      expect(order).toEqual([]);
+
       await expect(executeAuthorizedRemediationPayment({
         client: client as never,
         remediation: summary,
         principal: owner,
         sealAddress: "0x12345",
-        submit,
+        prepareSubmit,
       })).resolves.toMatchObject({ transactionHash: "0xfeed", replayed: false });
     } finally {
       date.mockRestore();
     }
-    expect(order).toEqual(["intent", "wallet", "record"]);
+    expect(order).toEqual(["preflight", "intent", "wallet", "record"]);
     expect(client.createSettlementIntent).toHaveBeenCalledOnce();
-    expect(submit).toHaveBeenCalledOnce();
+    expect(prepareSubmit).toHaveBeenCalledOnce();
   });
 
   it("resumes the exact FX-floor action and rejects altered durable evidence", async () => {

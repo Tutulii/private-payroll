@@ -19,6 +19,7 @@ use payo_contracts::obligation_registry::{
     IPayoObligationRootRegistryDispatcher, IPayoObligationRootRegistryDispatcherTrait,
 };
 use payo_contracts::payroll_seal::{IPayoPayrollSealDispatcher, IPayoPayrollSealDispatcherTrait};
+use payo_contracts::policy_account::SettlementReceipt;
 use payo_contracts::policy_registry::{
     IPayoPolicyRegistryDispatcher, IPayoPolicyRegistryDispatcherTrait,
 };
@@ -390,6 +391,31 @@ fn valid_bundle_inputs(seal: ContractAddress, chain_id: felt252) -> Array<u256> 
     bundle
 }
 
+fn settlement_receipt(
+    manifest_high: u128, manifest_low: u128,
+) -> SettlementReceipt {
+    SettlementReceipt {
+        exists: true,
+        policy_id: 0x5041594f,
+        manifest_root_high: manifest_high,
+        manifest_root_low: manifest_low,
+        transaction_reference_high: 71,
+        transaction_reference_low: 72,
+        settlement_root_high: 81,
+        settlement_root_low: 82,
+        emitted_note_count: 4,
+        created_at: 150,
+    }
+}
+
+fn settlement_public_inputs(chunk_index: u8, chunk_count: u8) -> Array<u256> {
+    array![
+        8_u32.into(), 21_u128.into(), 22_u128.into(), 31_u128.into(), 32_u128.into(),
+        71_u128.into(), 72_u128.into(), 81_u128.into(), 82_u128.into(),
+        chunk_index.into(), chunk_count.into(),
+    ]
+}
+
 fn duplicate_shard_zero_inputs(seal: ContractAddress, chain_id: felt252) -> Array<u256> {
     let shard_0 = valid_public_inputs(seal, chain_id, 0);
     let mut bundle = array![];
@@ -574,7 +600,7 @@ fn rejects_replayed_run_nullifiers() {
 }
 
 #[test]
-fn sealed_hash_fallback_verifies_two_bounded_shard_transactions() {
+fn direct_precommit_moves_no_funds_and_verifies_two_bounded_shards() {
     let pool = address(1000);
     let verifier = address(2000);
     let chain_id = 'SN_MAIN';
@@ -583,13 +609,12 @@ fn sealed_hash_fallback_verifies_two_bounded_shard_transactions() {
     let shard_1_inputs = valid_public_inputs(seal, chain_id, 1);
     let shard_0_proof: Array<felt252> = array![111, 112];
     let shard_1_proof: Array<felt252> = array![221, 222];
-    let empty: Array<felt252> = array![];
-    start_cheat_caller_address(seal, pool);
+    // No pool caller is required: this transaction only commits public proof
+    // hashes and cannot move private or public funds.
     start_cheat_block_timestamp(seal, 150);
     let dispatcher = IPayoPayrollSealDispatcher { contract_address: seal };
     dispatcher
-        .privacy_invoke(
-            0,
+        .precommit_direct(
             1,
             1,
             11,
@@ -606,8 +631,6 @@ fn sealed_hash_fallback_verifies_two_bounded_shard_transactions() {
             200,
             poseidon_hash_span(shard_0_proof.span()),
             poseidon_hash_span(shard_1_proof.span()),
-            empty.span(),
-            empty.span(),
         );
     assert(dispatcher.get_run_status(31, 32) == 1, 'run not sealed');
 
@@ -631,7 +654,7 @@ fn sealed_hash_fallback_verifies_two_bounded_shard_transactions() {
 }
 
 #[test]
-fn all_proof_modes_enforce_ordered_state_transitions() {
+fn payroll_claim_and_remediation_enforce_ordered_state_transitions() {
     let pool = address(1000);
     let verifier = address(2000);
     let chain_id = 'SN_MAIN';
@@ -651,11 +674,7 @@ fn all_proof_modes_enforce_ordered_state_transitions() {
         .privacy_invoke(
             0, 1, 1, 11, 12, 21, 22, 41, 42, 51, 52, 31, 32, 100, 200, 0, 0, proof.span(), proof.span(),
         );
-    dispatcher
-        .privacy_invoke(
-            1, 1, 1, 11, 12, 21, 22, 41, 42, 51, 52, 31, 32, 100, 200, 0, 0, proof.span(), proof.span(),
-        );
-    assert(dispatcher.get_run_status(31, 32) == 3, 'run not finalized');
+    assert(dispatcher.get_run_status(31, 32) == 2, 'run not proven');
 
     let claim_inputs = valid_bundle_inputs_for(seal, chain_id, 61, 62);
     start_mock_call(
@@ -672,6 +691,167 @@ fn all_proof_modes_enforce_ordered_state_transitions() {
             3, 1, 1, 11, 12, 21, 22, 41, 42, 51, 52, 61, 62, 100, 200, 0, 0, proof.span(), proof.span(),
         );
     assert(dispatcher.get_run_status(61, 62) == 5, 'claim not remediated');
+}
+
+#[test]
+fn settlement_match_requires_every_unique_chunk_before_finalize() {
+    let pool = address(1000);
+    let verifier = address(2000);
+    let source = address(5000);
+    let seal = deploy_seal(pool, verifier, 'SN_MAIN');
+    let payroll_inputs = valid_bundle_inputs_for(seal, 'SN_MAIN', 31, 32);
+    start_mock_call(
+        verifier,
+        selector!("verify_payroll_integrity_bundle"),
+        Result::<Span<u256>, felt252>::Ok(payroll_inputs.span()),
+    );
+    start_cheat_caller_address(seal, pool);
+    start_cheat_block_timestamp(seal, 150);
+    let dispatcher = IPayoPayrollSealDispatcher { contract_address: seal };
+    let payroll_proof: Array<felt252> = array![123];
+    dispatcher
+        .privacy_invoke(
+            0, 1, 1, 11, 12, 21, 22, 41, 42, 51, 52, 31, 32, 100, 200, 0, 0,
+            payroll_proof.span(), payroll_proof.span(),
+        );
+
+    let receipt = settlement_receipt(21, 22);
+    start_mock_call(source, selector!("get_settlement_receipt"), receipt);
+    start_cheat_caller_address(seal, source);
+    dispatcher.register_direct_settlement_source(31, 32);
+    assert(dispatcher.get_settlement_source(31, 32) == source, 'source not bound');
+
+    let chunk_zero_inputs = settlement_public_inputs(0, 2);
+    start_mock_call(
+        verifier,
+        selector!("verify_ultra_keccak_zk_honk_proof"),
+        Result::<Span<u256>, felt252>::Ok(chunk_zero_inputs.span()),
+    );
+    let chunk_zero: Array<felt252> = array![701, 702];
+    dispatcher.finalize_settlement(8, 31, 32, 0, 2, chunk_zero.span());
+    let (verified_one, expected_one) = dispatcher.get_settlement_progress(31, 32);
+    assert(verified_one == 1 && expected_one == 2, 'first chunk progress');
+    assert(dispatcher.get_run_status(31, 32) == 2, 'incomplete run finalized');
+
+    let chunk_one_inputs = settlement_public_inputs(1, 2);
+    start_mock_call(
+        verifier,
+        selector!("verify_ultra_keccak_zk_honk_proof"),
+        Result::<Span<u256>, felt252>::Ok(chunk_one_inputs.span()),
+    );
+    let chunk_one: Array<felt252> = array![801, 802];
+    dispatcher.finalize_settlement(8, 31, 32, 1, 2, chunk_one.span());
+    let (verified_two, expected_two) = dispatcher.get_settlement_progress(31, 32);
+    assert(verified_two == 2 && expected_two == 2, 'final chunk progress');
+    assert(dispatcher.get_run_status(31, 32) == 3, 'run not finalized');
+}
+
+#[test]
+#[should_panic(expected: ('PAYO_PUBLIC_INPUTS',))]
+fn settlement_match_rejects_receipt_root_substitution() {
+    let pool = address(1000);
+    let verifier = address(2000);
+    let source = address(5000);
+    let seal = deploy_seal(pool, verifier, 'SN_MAIN');
+    let payroll_inputs = valid_bundle_inputs_for(seal, 'SN_MAIN', 31, 32);
+    start_mock_call(
+        verifier,
+        selector!("verify_payroll_integrity_bundle"),
+        Result::<Span<u256>, felt252>::Ok(payroll_inputs.span()),
+    );
+    start_cheat_caller_address(seal, pool);
+    start_cheat_block_timestamp(seal, 150);
+    let dispatcher = IPayoPayrollSealDispatcher { contract_address: seal };
+    let payroll_proof: Array<felt252> = array![123];
+    dispatcher
+        .privacy_invoke(
+            0, 1, 1, 11, 12, 21, 22, 41, 42, 51, 52, 31, 32, 100, 200, 0, 0,
+            payroll_proof.span(), payroll_proof.span(),
+        );
+    start_mock_call(
+        source, selector!("get_settlement_receipt"), settlement_receipt(21, 22),
+    );
+    start_cheat_caller_address(seal, source);
+    dispatcher.register_direct_settlement_source(31, 32);
+
+    let substituted: Array<u256> = array![
+        8_u32.into(), 21_u128.into(), 22_u128.into(), 31_u128.into(), 32_u128.into(),
+        71_u128.into(), 72_u128.into(), 999_u128.into(), 82_u128.into(),
+        0_u8.into(), 1_u8.into(),
+    ];
+    start_mock_call(
+        verifier,
+        selector!("verify_ultra_keccak_zk_honk_proof"),
+        Result::<Span<u256>, felt252>::Ok(substituted.span()),
+    );
+    dispatcher.finalize_settlement(8, 31, 32, 0, 1, array![701].span());
+}
+
+#[test]
+#[should_panic(expected: ('PAYO_SETTLE_REPLAY',))]
+fn settlement_match_rejects_chunk_replay() {
+    let pool = address(1000);
+    let verifier = address(2000);
+    let source = address(5000);
+    let seal = deploy_seal(pool, verifier, 'SN_MAIN');
+    let payroll_inputs = valid_bundle_inputs_for(seal, 'SN_MAIN', 31, 32);
+    start_mock_call(
+        verifier,
+        selector!("verify_payroll_integrity_bundle"),
+        Result::<Span<u256>, felt252>::Ok(payroll_inputs.span()),
+    );
+    start_cheat_caller_address(seal, pool);
+    start_cheat_block_timestamp(seal, 150);
+    let dispatcher = IPayoPayrollSealDispatcher { contract_address: seal };
+    let payroll_proof: Array<felt252> = array![123];
+    dispatcher
+        .privacy_invoke(
+            0, 1, 1, 11, 12, 21, 22, 41, 42, 51, 52, 31, 32, 100, 200, 0, 0,
+            payroll_proof.span(), payroll_proof.span(),
+        );
+    start_mock_call(
+        source, selector!("get_settlement_receipt"), settlement_receipt(21, 22),
+    );
+    start_cheat_caller_address(seal, source);
+    dispatcher.register_direct_settlement_source(31, 32);
+    let inputs = settlement_public_inputs(0, 2);
+    start_mock_call(
+        verifier,
+        selector!("verify_ultra_keccak_zk_honk_proof"),
+        Result::<Span<u256>, felt252>::Ok(inputs.span()),
+    );
+    let proof: Array<felt252> = array![701];
+    dispatcher.finalize_settlement(8, 31, 32, 0, 2, proof.span());
+    dispatcher.finalize_settlement(8, 31, 32, 0, 2, proof.span());
+}
+
+#[test]
+#[should_panic(expected: ('PAYO_BAD_SETTLEMENT',))]
+fn settlement_source_registration_rejects_wrong_manifest() {
+    let pool = address(1000);
+    let verifier = address(2000);
+    let source = address(5000);
+    let seal = deploy_seal(pool, verifier, 'SN_MAIN');
+    let payroll_inputs = valid_bundle_inputs_for(seal, 'SN_MAIN', 31, 32);
+    start_mock_call(
+        verifier,
+        selector!("verify_payroll_integrity_bundle"),
+        Result::<Span<u256>, felt252>::Ok(payroll_inputs.span()),
+    );
+    start_cheat_caller_address(seal, pool);
+    start_cheat_block_timestamp(seal, 150);
+    let dispatcher = IPayoPayrollSealDispatcher { contract_address: seal };
+    let payroll_proof: Array<felt252> = array![123];
+    dispatcher
+        .privacy_invoke(
+            0, 1, 1, 11, 12, 21, 22, 41, 42, 51, 52, 31, 32, 100, 200, 0, 0,
+            payroll_proof.span(), payroll_proof.span(),
+        );
+    start_mock_call(
+        source, selector!("get_settlement_receipt"), settlement_receipt(999, 22),
+    );
+    start_cheat_caller_address(seal, source);
+    dispatcher.register_direct_settlement_source(31, 32);
 }
 
 #[test]

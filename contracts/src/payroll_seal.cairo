@@ -1,4 +1,5 @@
 use starknet::ContractAddress;
+use payo_contracts::policy_account::SettlementReceipt;
 
 // Must remain positionally compatible with privacy::objects::OpenNoteDeposit.
 #[derive(Serde, Copy, Drop, PartialEq, Debug)]
@@ -38,6 +39,20 @@ pub trait IIntegrityVerifier<TContractState> {
     fn verify_payroll_integrity_shard(
         self: @TContractState, shard_proof: Span<felt252>,
     ) -> Result<Span<u256>, felt252>;
+}
+
+#[starknet::interface]
+pub trait ISettlementVerifier<TContractState> {
+    fn verify_ultra_keccak_zk_honk_proof(
+        self: @TContractState, proof_calldata: Span<felt252>,
+    ) -> Result<Span<u256>, felt252>;
+}
+
+#[starknet::interface]
+pub trait ISettlementReceiptSource<TContractState> {
+    fn get_settlement_receipt(
+        self: @TContractState, run_nullifier_high: u128, run_nullifier_low: u128,
+    ) -> SettlementReceipt;
 }
 
 #[starknet::interface]
@@ -85,6 +100,30 @@ pub trait IPayoPayrollSeal<TContractState> {
         shard_1_proof_calldata: Span<felt252>,
     ) -> Span<OpenNoteDeposit>;
 
+    /// Permissionlessly stages the exact PayrollIntegrity commitment for a
+    /// direct policy-account run. This moves no funds. Both hash-bound shards
+    /// must reach the configured verifier before a private payment can use the
+    /// run as its atomic SettlementMatch source.
+    fn precommit_direct(
+        ref self: TContractState,
+        proof_version: u32,
+        schema_version: u32,
+        agreement_root_high: u128,
+        agreement_root_low: u128,
+        manifest_root_high: u128,
+        manifest_root_low: u128,
+        policy_root_high: u128,
+        policy_root_low: u128,
+        fx_root_high: u128,
+        fx_root_low: u128,
+        run_nullifier_high: u128,
+        run_nullifier_low: u128,
+        validity_start: u64,
+        validity_expiry: u64,
+        shard_0_hash: felt252,
+        shard_1_hash: felt252,
+    );
+
     /// Anyone may finish a pool-created sealed run one shard at a time. Each
     /// proof is hash-bound, registry/version checked, and public-input checked.
     fn verify_sealed_shard(
@@ -92,6 +131,24 @@ pub trait IPayoPayrollSeal<TContractState> {
         run_nullifier_high: u128,
         run_nullifier_low: u128,
         shard_index: u8,
+        proof_calldata: Span<felt252>,
+    );
+
+    /// Called atomically by the policy account after the pool has accepted the
+    /// PayrollIntegrity PRECOMMIT and the account has stored its derived receipt.
+    fn register_direct_settlement_source(
+        ref self: TContractState, run_nullifier_high: u128, run_nullifier_low: u128,
+    );
+
+    /// Verifies one SettlementMatch v8 chunk. The run becomes FINALIZED only
+    /// after every unique chunk has been checked against the policy receipt.
+    fn finalize_settlement(
+        ref self: TContractState,
+        proof_version: u32,
+        run_nullifier_high: u128,
+        run_nullifier_low: u128,
+        chunk_index: u8,
+        chunk_count: u8,
         proof_calldata: Span<felt252>,
     );
 
@@ -103,6 +160,18 @@ pub trait IPayoPayrollSeal<TContractState> {
         run_nullifier_high: u128,
         run_nullifier_low: u128,
         shard_index: u8,
+    ) -> bool;
+    fn get_settlement_source(
+        self: @TContractState, run_nullifier_high: u128, run_nullifier_low: u128,
+    ) -> ContractAddress;
+    fn get_settlement_progress(
+        self: @TContractState, run_nullifier_high: u128, run_nullifier_low: u128,
+    ) -> (u8, u8);
+    fn is_settlement_chunk_verified(
+        self: @TContractState,
+        run_nullifier_high: u128,
+        run_nullifier_low: u128,
+        chunk_index: u8,
     ) -> bool;
     fn get_pool(self: @TContractState) -> ContractAddress;
     fn get_catalog_registry(self: @TContractState) -> ContractAddress;
@@ -124,7 +193,10 @@ pub mod PayoPayrollSeal {
     use super::{
         ICatalogRegistryDispatcher, ICatalogRegistryDispatcherTrait, IIntegrityVerifierDispatcher,
         IIntegrityVerifierDispatcherTrait, IObligationRootRegistryDispatcher,
-        IObligationRootRegistryDispatcherTrait, OpenNoteDeposit, SealedProofState,
+        IObligationRootRegistryDispatcherTrait, ISettlementReceiptSourceDispatcher,
+        ISettlementReceiptSourceDispatcherTrait, ISettlementVerifierDispatcher,
+        ISettlementVerifierDispatcherTrait, OpenNoteDeposit, SealedProofState,
+        SettlementReceipt,
     };
 
     mod errors {
@@ -142,6 +214,9 @@ pub mod PayoPayrollSeal {
         pub const BAD_PROOF_FORM: felt252 = 'PAYO_BAD_PROOF_FORM';
         pub const BAD_PROOF_HASH: felt252 = 'PAYO_BAD_PROOF_HASH';
         pub const SHARD_REPLAY: felt252 = 'PAYO_SHARD_REPLAY';
+        pub const BAD_SETTLEMENT: felt252 = 'PAYO_BAD_SETTLEMENT';
+        pub const BAD_SETTLEMENT_SOURCE: felt252 = 'PAYO_BAD_SETTLE_SRC';
+        pub const SETTLEMENT_REPLAY: felt252 = 'PAYO_SETTLE_REPLAY';
     }
 
     pub const MODE_PRECOMMIT: u8 = 0;
@@ -155,6 +230,8 @@ pub mod PayoPayrollSeal {
     pub const STATUS_CLAIMED: u8 = 4;
     pub const STATUS_REMEDIATED: u8 = 5;
     const MAX_VALIDITY_WINDOW: u64 = 3600;
+    const SETTLEMENT_PROOF_VERSION: u32 = 8;
+    const MAX_SETTLEMENT_CHUNKS: u8 = 17;
 
     #[storage]
     struct Storage {
@@ -165,6 +242,10 @@ pub mod PayoPayrollSeal {
         run_status: Map<(u128, u128), u8>,
         sealed_proofs: Map<(u128, u128), SealedProofState>,
         shard_verified: Map<(u128, u128, u8), bool>,
+        settlement_sources: Map<(u128, u128), ContractAddress>,
+        settlement_chunk_count: Map<(u128, u128), u8>,
+        settlement_verified_count: Map<(u128, u128), u8>,
+        settlement_chunk_verified: Map<(u128, u128, u8), bool>,
     }
 
     #[event]
@@ -173,6 +254,8 @@ pub mod PayoPayrollSeal {
         PayrollSealed: PayrollSealed,
         SealedShardVerified: SealedShardVerified,
         PayrollStateChanged: PayrollStateChanged,
+        DirectSettlementSourceRegistered: DirectSettlementSourceRegistered,
+        SettlementChunkVerified: SettlementChunkVerified,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -211,6 +294,32 @@ pub mod PayoPayrollSeal {
         pub proof_version: u32,
     }
 
+    #[derive(Drop, starknet::Event)]
+    pub struct DirectSettlementSourceRegistered {
+        #[key]
+        pub run_nullifier_high: u128,
+        #[key]
+        pub run_nullifier_low: u128,
+        #[key]
+        pub source: ContractAddress,
+        pub settlement_root_high: u128,
+        pub settlement_root_low: u128,
+        pub transaction_reference_high: u128,
+        pub transaction_reference_low: u128,
+        pub emitted_note_count: u32,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct SettlementChunkVerified {
+        #[key]
+        pub run_nullifier_high: u128,
+        #[key]
+        pub run_nullifier_low: u128,
+        #[key]
+        pub chunk_index: u8,
+        pub chunk_count: u8,
+    }
+
     #[constructor]
     fn constructor(
         ref self: ContractState,
@@ -232,6 +341,31 @@ pub mod PayoPayrollSeal {
     fn assert_public_input(inputs: Span<u256>, index: usize, expected: u256) {
         assert(inputs.len() > index, errors::PUBLIC_INPUTS);
         assert(*inputs.at(index) == expected, errors::PUBLIC_INPUTS);
+    }
+
+    fn assert_settlement_receipt(
+        proof: SealedProofState, receipt: SettlementReceipt,
+    ) {
+        assert(receipt.exists, errors::BAD_SETTLEMENT);
+        assert(receipt.policy_id != 0, errors::BAD_SETTLEMENT);
+        assert(
+            receipt.manifest_root_high == proof.manifest_root_high
+                && receipt.manifest_root_low == proof.manifest_root_low,
+            errors::BAD_SETTLEMENT,
+        );
+        assert(
+            receipt.transaction_reference_high != 0
+                || receipt.transaction_reference_low != 0,
+            errors::BAD_SETTLEMENT,
+        );
+        assert(
+            receipt.settlement_root_high != 0 || receipt.settlement_root_low != 0,
+            errors::BAD_SETTLEMENT,
+        );
+        assert(
+            receipt.emitted_note_count > 0 && receipt.emitted_note_count <= 64,
+            errors::BAD_SETTLEMENT,
+        );
     }
 
     fn as_u256<T, +Into<T, u256>>(value: T) -> u256 {
@@ -348,6 +482,69 @@ pub mod PayoPayrollSeal {
 
     #[abi(embed_v0)]
     impl PayrollSealImpl of super::IPayoPayrollSeal<ContractState> {
+        fn precommit_direct(
+            ref self: ContractState,
+            proof_version: u32,
+            schema_version: u32,
+            agreement_root_high: u128,
+            agreement_root_low: u128,
+            manifest_root_high: u128,
+            manifest_root_low: u128,
+            policy_root_high: u128,
+            policy_root_low: u128,
+            fx_root_high: u128,
+            fx_root_low: u128,
+            run_nullifier_high: u128,
+            run_nullifier_low: u128,
+            validity_start: u64,
+            validity_expiry: u64,
+            shard_0_hash: felt252,
+            shard_1_hash: felt252,
+        ) {
+            assert(proof_version > 0, errors::BAD_VERSION);
+            assert(schema_version == 1, errors::BAD_VERSION);
+            assert_window(validity_start, validity_expiry);
+            assert(shard_0_hash != 0 && shard_1_hash != 0, errors::BAD_PROOF_HASH);
+            let nullifier = (run_nullifier_high, run_nullifier_low);
+            let previous_status = self.run_status.read(nullifier);
+            assert_mode_state(MODE_PRECOMMIT, previous_status);
+            let proof = SealedProofState {
+                mode: MODE_PRECOMMIT,
+                proof_version,
+                schema_version,
+                agreement_root_high,
+                agreement_root_low,
+                manifest_root_high,
+                manifest_root_low,
+                policy_root_high,
+                policy_root_low,
+                fx_root_high,
+                fx_root_low,
+                run_nullifier_high,
+                run_nullifier_low,
+                validity_start,
+                validity_expiry,
+                shard_0_hash,
+                shard_1_hash,
+                previous_status,
+            };
+            assert_active_configuration(@self, proof);
+            self.sealed_proofs.write(nullifier, proof);
+            self.shard_verified.write((run_nullifier_high, run_nullifier_low, 0), false);
+            self.shard_verified.write((run_nullifier_high, run_nullifier_low, 1), false);
+            self.run_status.write(nullifier, STATUS_SEALED);
+            self.emit(
+                PayrollSealed {
+                    run_nullifier_high,
+                    run_nullifier_low,
+                    mode: MODE_PRECOMMIT,
+                    shard_0_hash,
+                    shard_1_hash,
+                    proof_version,
+                },
+            );
+        }
+
         fn privacy_invoke(
             ref self: ContractState,
             mode: u8,
@@ -372,6 +569,7 @@ pub mod PayoPayrollSeal {
         ) -> Span<OpenNoteDeposit> {
             assert(get_caller_address() == self.pool.read(), errors::BAD_POOL);
             assert(mode <= MODE_REMEDIATE, errors::BAD_MODE);
+            assert(mode != MODE_FINALIZE, errors::BAD_MODE);
             assert(proof_version > 0, errors::BAD_VERSION);
             assert(schema_version == 1, errors::BAD_VERSION);
             assert_window(validity_start, validity_expiry);
@@ -400,6 +598,7 @@ pub mod PayoPayrollSeal {
                 previous_status,
             };
             assert_active_configuration(@self, proof);
+            self.sealed_proofs.write(nullifier, proof);
 
             let direct = !shard_0_proof_calldata.is_empty()
                 && !shard_1_proof_calldata.is_empty();
@@ -414,7 +613,6 @@ pub mod PayoPayrollSeal {
                 // bits would make remediation replay or skip verification.
                 self.shard_verified.write((run_nullifier_high, run_nullifier_low, 0), false);
                 self.shard_verified.write((run_nullifier_high, run_nullifier_low, 1), false);
-                self.sealed_proofs.write(nullifier, proof);
                 self.run_status.write(nullifier, STATUS_SEALED);
                 self.emit(
                     PayrollSealed {
@@ -492,6 +690,127 @@ pub mod PayoPayrollSeal {
             }
         }
 
+        fn register_direct_settlement_source(
+            ref self: ContractState,
+            run_nullifier_high: u128,
+            run_nullifier_low: u128,
+        ) {
+            let nullifier = (run_nullifier_high, run_nullifier_low);
+            assert(self.run_status.read(nullifier) == STATUS_PROVEN, errors::BAD_STATE);
+            assert(
+                self.settlement_sources.read(nullifier).is_zero(),
+                errors::BAD_SETTLEMENT_SOURCE,
+            );
+            let proof = self.sealed_proofs.read(nullifier);
+            assert(proof.mode == MODE_PRECOMMIT, errors::BAD_STATE);
+            let source = get_caller_address();
+            assert(!source.is_zero() && source != self.pool.read(), errors::BAD_SETTLEMENT_SOURCE);
+            let receipt = ISettlementReceiptSourceDispatcher { contract_address: source }
+                .get_settlement_receipt(run_nullifier_high, run_nullifier_low);
+            assert_settlement_receipt(proof, receipt);
+            self.settlement_sources.write(nullifier, source);
+            self.emit(
+                DirectSettlementSourceRegistered {
+                    run_nullifier_high,
+                    run_nullifier_low,
+                    source,
+                    settlement_root_high: receipt.settlement_root_high,
+                    settlement_root_low: receipt.settlement_root_low,
+                    transaction_reference_high: receipt.transaction_reference_high,
+                    transaction_reference_low: receipt.transaction_reference_low,
+                    emitted_note_count: receipt.emitted_note_count,
+                },
+            );
+        }
+
+        fn finalize_settlement(
+            ref self: ContractState,
+            proof_version: u32,
+            run_nullifier_high: u128,
+            run_nullifier_low: u128,
+            chunk_index: u8,
+            chunk_count: u8,
+            proof_calldata: Span<felt252>,
+        ) {
+            let nullifier = (run_nullifier_high, run_nullifier_low);
+            assert(self.run_status.read(nullifier) == STATUS_PROVEN, errors::BAD_STATE);
+            assert(proof_version == SETTLEMENT_PROOF_VERSION, errors::BAD_VERSION);
+            assert(
+                chunk_count > 0
+                    && chunk_count <= MAX_SETTLEMENT_CHUNKS
+                    && chunk_index < chunk_count,
+                errors::BAD_SETTLEMENT,
+            );
+            assert(
+                !self
+                    .settlement_chunk_verified
+                    .read((run_nullifier_high, run_nullifier_low, chunk_index)),
+                errors::SETTLEMENT_REPLAY,
+            );
+            let source = self.settlement_sources.read(nullifier);
+            assert(!source.is_zero(), errors::BAD_SETTLEMENT_SOURCE);
+            let proof = self.sealed_proofs.read(nullifier);
+            let receipt = ISettlementReceiptSourceDispatcher { contract_address: source }
+                .get_settlement_receipt(run_nullifier_high, run_nullifier_low);
+            assert_settlement_receipt(proof, receipt);
+
+            let expected_chunk_count = self.settlement_chunk_count.read(nullifier);
+            if expected_chunk_count == 0 {
+                self.settlement_chunk_count.write(nullifier, chunk_count);
+            } else {
+                assert(expected_chunk_count == chunk_count, errors::BAD_SETTLEMENT);
+            }
+
+            let catalog = ICatalogRegistryDispatcher {
+                contract_address: self.catalog_registry.read(),
+            };
+            assert(
+                catalog.is_verifier_valid(MODE_FINALIZE, proof_version),
+                errors::VERIFIER_INACTIVE,
+            );
+            let verifier = ISettlementVerifierDispatcher {
+                contract_address: catalog.get_verifier(MODE_FINALIZE, proof_version),
+            };
+            let public_inputs = verifier
+                .verify_ultra_keccak_zk_honk_proof(proof_calldata)
+                .expect(errors::PROOF_FAILED);
+            assert(public_inputs.len() == 11, errors::PUBLIC_INPUTS);
+            assert_public_input(public_inputs, 0, as_u256(proof_version));
+            assert_public_input(public_inputs, 1, as_u256(proof.manifest_root_high));
+            assert_public_input(public_inputs, 2, as_u256(proof.manifest_root_low));
+            assert_public_input(public_inputs, 3, as_u256(run_nullifier_high));
+            assert_public_input(public_inputs, 4, as_u256(run_nullifier_low));
+            assert_public_input(
+                public_inputs, 5, as_u256(receipt.transaction_reference_high),
+            );
+            assert_public_input(
+                public_inputs, 6, as_u256(receipt.transaction_reference_low),
+            );
+            assert_public_input(public_inputs, 7, as_u256(receipt.settlement_root_high));
+            assert_public_input(public_inputs, 8, as_u256(receipt.settlement_root_low));
+            assert_public_input(public_inputs, 9, as_u256(chunk_index));
+            assert_public_input(public_inputs, 10, as_u256(chunk_count));
+
+            self
+                .settlement_chunk_verified
+                .write((run_nullifier_high, run_nullifier_low, chunk_index), true);
+            let verified_count = self.settlement_verified_count.read(nullifier) + 1;
+            self.settlement_verified_count.write(nullifier, verified_count);
+            self.emit(
+                SettlementChunkVerified {
+                    run_nullifier_high, run_nullifier_low, chunk_index, chunk_count,
+                },
+            );
+            if verified_count == chunk_count {
+                self.run_status.write(nullifier, STATUS_FINALIZED);
+                let mut final_proof = proof;
+                final_proof.mode = MODE_FINALIZE;
+                final_proof.proof_version = proof_version;
+                final_proof.previous_status = STATUS_PROVEN;
+                emit_state_change(ref self, final_proof, STATUS_FINALIZED);
+            }
+        }
+
         fn get_run_status(
             self: @ContractState, run_nullifier_high: u128, run_nullifier_low: u128,
         ) -> u8 {
@@ -505,6 +824,33 @@ pub mod PayoPayrollSeal {
             shard_index: u8,
         ) -> bool {
             self.shard_verified.read((run_nullifier_high, run_nullifier_low, shard_index))
+        }
+
+        fn get_settlement_source(
+            self: @ContractState, run_nullifier_high: u128, run_nullifier_low: u128,
+        ) -> ContractAddress {
+            self.settlement_sources.read((run_nullifier_high, run_nullifier_low))
+        }
+
+        fn get_settlement_progress(
+            self: @ContractState, run_nullifier_high: u128, run_nullifier_low: u128,
+        ) -> (u8, u8) {
+            let nullifier = (run_nullifier_high, run_nullifier_low);
+            (
+                self.settlement_verified_count.read(nullifier),
+                self.settlement_chunk_count.read(nullifier),
+            )
+        }
+
+        fn is_settlement_chunk_verified(
+            self: @ContractState,
+            run_nullifier_high: u128,
+            run_nullifier_low: u128,
+            chunk_index: u8,
+        ) -> bool {
+            self
+                .settlement_chunk_verified
+                .read((run_nullifier_high, run_nullifier_low, chunk_index))
         }
 
         fn get_pool(self: @ContractState) -> ContractAddress {

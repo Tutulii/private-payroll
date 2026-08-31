@@ -185,6 +185,7 @@ const exceptionStageLabel: Record<PayrollExecutionStage, string> = {
   snapshot: "Proving the pre-payday snapshot",
   proof_authorization: "Authorizing proofs on-chain",
   persisting: "Encrypting the proof records",
+  agent_policy: "Activating bounded agent policy",
   wallet: "Approve the claim in Ready",
   recording: "Recording the submission",
   recorded: "Payment recorded; proof delivery pending",
@@ -261,7 +262,7 @@ function settlementEvent(settlement: SettlementSummary): ActivityEvent {
 
 function auditEvent(event: AuditSummary): ActivityEvent {
   const date = dateParts(event.createdAt);
-  const agent = event.action.startsWith("capability.") || event.action.startsWith("agent.");
+  const agent = event.action.startsWith("agent_") || event.action.startsWith("direct_privacy_");
   const payroll = event.action.startsWith("payroll_") || event.action.startsWith("proof_");
   const kind: ActivityKind = agent ? "Agent" : payroll ? "Payroll" : "Vault";
   const actionLabel = event.action.replaceAll("_", " ").replaceAll(".", " · ");
@@ -1314,7 +1315,9 @@ export default function ActivityPage() {
   };
 
   const confirmedCount = settlements.filter(({ state }) => ["confirmed", "finalized", "reconciled"].includes(state)).length;
-  const agentRequestCount = auditEvents.filter(({ action }) => action.startsWith("capability.") || action.startsWith("agent.")).length;
+  const agentRequestCount = auditEvents.filter(({ action }) =>
+    action.startsWith("agent_") || action.startsWith("direct_privacy_"),
+  ).length;
 
   return (
     <div className="product-page activity-page-full">

@@ -1,0 +1,14 @@
+diff --git a/crates/discovery-service/src/main.rs b/crates/discovery-service/src/main.rs
+index a46b857..635afca 100644
+--- a/crates/discovery-service/src/main.rs
++++ b/crates/discovery-service/src/main.rs
+@@ -42,6 +42,10 @@ fn init_tracing(log_level: Option<&str>, format: LogFormat) {
+
+ #[tokio::main]
+ async fn main() {
++    rustls::crypto::ring::default_provider()
++        .install_default()
++        .expect("failed to install the rustls ring provider");
++
+     // Load environment variables from a .env file if it exists.
+     dotenv::dotenv().ok();

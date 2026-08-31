@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-30T16:43:45.579Z",
+  "scope": "phase4-policy-account-lifecycle-only",
+  "limitations": [
+    "Lifecycle targets are nonzero Devnet sentinels; private STRK20 settlement is a separate P4-04 gate.",
+    "No owner or session private key is stored in this evidence."
+  ],
+  "toolchain": {
+    "starknetDevnet": "0.9.2",
+    "rpcVersion": "0.10.2",
+    "scarb": "2.16.1",
+    "universalSierraCompiler": "2.10.0"
+  },
+  "chain": {
+    "chainId": "0x534e5f5345504f4c4941",
+    "finalBlockNumber": 9,
+    "finalBlockHash": "0x4273d128f160c70321061484c1429a75b972624df63f621f07270faace77fc7"
+  },
+  "artifact": {
+    "classHash": "0x1c1be4bed7b89c5a79c866067441c651f277dd4e1ca23918674ae3e122f4a1a",
+    "sierraSha256": "407a08b047f6ca8a798d6477f75520b38477002a3e62bd8a442b91155e043eaf",
+    "casmSha256": "81502f408878b9e087a464ae1f6bb2bff44da348dd43b6bf9fa2988a1bdeb2b7",
+    "declarationTransactionHash": "0x602a0aa9e5b97552c2c30b85e550a2db08ffe0ca0050323b3a72da7d711768c"
+  },
+  "account": {
+    "address": "0x769cb7383dc13069d4095a162c184e15bf70f352e22f622e47197abc22059d9",
+    "deploymentTransactionHash": "0x3932a75dc4e2633b5d46468c0c380d238681d44957057b1ac6373344d15c902",
+    "fundingTransactionHash": "0x61295fff381184dae859571e92e2dfc34ad410b0684ddade68f70ac3764a873",
+    "snip6": true,
+    "snip9V2": true,
+    "previousOwnerRejected": true
+  },
+  "policy": {
+    "policyId": "0x122437a83055cb127129ca875d32f88c9d7a960a1cad308f3671012097d944d",
+    "configured": true,
+    "sessionRotated": true,
+    "pauseRoundTrip": true,
+    "ownerRecovered": true,
+    "revoked": true,
+    "transactions": {
+      "configure": "0x49ad2fc6cdd6d50f2679aefa5f61a5bc53afc4b89ce54ccd25793b00f9c6490",
+      "rotateSession": "0x6dff2e0ffeacea433db438b1ef54d0083175c9a3ec5446068f9c00daf0192d9",
+      "pause": "0x73ba4a6ef00e83a07f63e466f213d9b86fec9e33c178619a7c485921d189d24",
+      "unpause": "0x7a1f8dc0c4afe647f69c3085eae2bff0a565758fe2d312c763a5de99496e693",
+      "rotateOwner": "0x64986490b3903e55267c3201ce5333ddb33b30a7217ac6c5a18e40b9a158526",
+      "revoke": "0x3eff2751b9531f34ee886a9459039e76145264add59e5f676c45c24f7f011f4"
+    }
+  }
+}

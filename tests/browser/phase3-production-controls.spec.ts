@@ -30,6 +30,13 @@ const workflows = [
   { name: "FX-floor worker", plan: "fx_floor", option: "Recurring payroll", token: "STRK" },
 ] as const;
 
+type BrowserWorkflow = {
+  name: string;
+  plan: (typeof workflows)[number]["plan"];
+  option: string;
+  token: "STRK" | "USDC";
+};
+
 const SYNTHETIC_PRINCIPAL: VaultPrincipal = {
   principalId: "phase3-browser-evidence",
   publicKey: "KsD1+YKrizU8vEyTJQ2MrSbRreOHGeXtvoaLYUXVoF8=",
@@ -151,10 +158,16 @@ async function evidenceState(page: Page): Promise<EvidenceState> {
   });
 }
 
-async function addContributor(page: Page, workflow: (typeof workflows)[number], index: number) {
+async function addContributor(
+  page: Page,
+  workflow: BrowserWorkflow,
+  index: number,
+  kind: "human" | "agent" = "human",
+) {
   await page.getByRole("button", { name: "Add contributor", exact: true }).click();
   const form = page.locator("form.team-add-form");
   await form.getByLabel("Display name").fill(workflow.name);
+  await form.getByLabel("Kind").selectOption(kind);
   await form.getByLabel("Registered Starknet address").fill(`0x${(0x500 + index).toString(16)}`);
   await form.getByLabel("Private token").selectOption(workflow.token);
   await form.getByLabel("Jurisdiction").fill("US");
@@ -181,13 +194,19 @@ async function answerClassification(form: ReturnType<Page["locator"]>, answer: "
   for (let index = 0; index < 6; index += 1) await selectors.nth(index).selectOption(answer);
 }
 
-async function fillAgreement(page: Page, workflow: (typeof workflows)[number]) {
+async function fillAgreement(
+  page: Page,
+  workflow: BrowserWorkflow,
+  kind: "human" | "agent" = "human",
+) {
   const card = page.locator(".member-card").filter({ hasText: workflow.name });
   await card.getByRole("button", { name: /encrypted agreement/i }).click();
   const form = page.locator("form.team-add-form");
   await form.getByLabel("Payment plan").selectOption({ label: workflow.option });
 
-  if (workflow.plan === "statutory_classification") {
+  if (kind === "agent") {
+    await expect(form.getByLabel("Classification")).toHaveValue("agent_service");
+  } else if (workflow.plan === "statutory_classification") {
     await form.getByLabel("Classification").selectOption("employee");
     await answerClassification(form, "yes");
   } else {
@@ -410,6 +429,34 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
     .toBeDisabled();
   const activityState = await evidenceState(page);
 
+  const agentWorkflow = {
+    name: "Payroll Scout",
+    plan: "recurring",
+    option: "Recurring payroll",
+    token: "STRK",
+  } satisfies BrowserWorkflow;
+  await page.goto("/payo-browser-evidence/team");
+  await addContributor(page, agentWorkflow, 99, "agent");
+  await fillAgreement(page, agentWorkflow, "agent");
+  const agentCard = page.locator(".member-card").filter({ hasText: agentWorkflow.name });
+  await agentCard.getByRole("button", { name: "Issue one-run autonomy" }).click();
+  await expect(agentCard.getByRole("button", { name: "Revoke bounded autonomy" })).toBeVisible();
+  await expect(page.locator(".access-footnote")).toContainText("1 active encrypted capability");
+
+  const capabilityRow = page.locator(".agent-capability-row").filter({ hasText: agentWorkflow.name });
+  await expect(capabilityRow).toContainText("POLICY ACCOUNT REQUIRED");
+  await expect(capabilityRow).toContainText("1 STRK");
+  await expect(capabilityRow).toContainText("max 1 calls");
+  await capabilityRow.getByRole("button", { name: "Issue MCP key" }).click();
+  await expect(page.locator(".agent-connect")).toContainText("Capability");
+  await expect(page.getByRole("button", { name: "Copy scoped MCP configuration" })).toBeEnabled();
+  await capabilityRow.getByRole("button", { name: "Revoke MCP keys" }).click();
+  await expect(page.locator(".agent-connect")).toContainText("Issue from an active capability below");
+  await capabilityRow.getByRole("button", { name: "Revoke capability" }).click();
+  await expect(capabilityRow).toContainText("REVOKED");
+  await expect(page.locator(".access-footnote")).toContainText("0 active encrypted capabilities");
+  const phase4State = await evidenceState(page);
+
   const artifact = {
     schemaVersion: "payo.phase3.rendered-browser-origin.v2",
     generatedAt: new Date().toISOString(),
@@ -447,9 +494,31 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
   await writeFile(outputPath, `${JSON.stringify(artifact, null, 2)}\n`, { mode: 0o600 });
   await testInfo.attach("phase3-rendered-browser-origin", { path: outputPath, contentType: "application/json" });
 
+  const phase4Artifact = {
+    schemaVersion: "payo.phase4.rendered-browser-origin.v1",
+    generatedAt: new Date().toISOString(),
+    routeGuard: "PAYO_BROWSER_EVIDENCE_MODE=1",
+    renderedProductionPage: "app/team/page.tsx",
+    state: phase4State,
+    checks: {
+      readyApprovalIsDefault: true,
+      boundedAutonomyIssued: true,
+      exactOneRunLimitRendered: true,
+      oneTimeMcpCredentialIssued: true,
+      mcpCredentialRevoked: true,
+      capabilityRevoked: true,
+      productionRouteUnavailable: process.env.NODE_ENV !== "production",
+    },
+  };
+  const phase4OutputPath = testInfo.outputPath("phase4-rendered-browser-origin.json");
+  await writeFile(phase4OutputPath, `${JSON.stringify(phase4Artifact, null, 2)}\n`, { mode: 0o600 });
+  await testInfo.attach("phase4-rendered-browser-origin", { path: phase4OutputPath, contentType: "application/json" });
+
   if (process.env.PAYO_BROWSER_EVIDENCE_WRITE === "1") {
     const committedPath = resolve("evidence/phase3-devnet-fixtures/rendered-browser-ui-origin.json");
     await mkdir(dirname(committedPath), { recursive: true });
     await writeFile(committedPath, `${JSON.stringify(artifact, null, 2)}\n`, { mode: 0o600 });
+    const phase4CommittedPath = resolve("evidence/phase4-rendered-browser-ui-origin.json");
+    await writeFile(phase4CommittedPath, `${JSON.stringify(phase4Artifact, null, 2)}\n`, { mode: 0o600 });
   }
 });

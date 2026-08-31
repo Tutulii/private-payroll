@@ -46,11 +46,14 @@ import {
   type PayrollExecutionStage,
   type PayrollExecutionResult,
   type PendingPayrollSubmission,
+  type AutonomousPayrollPreparationResult,
+  type PrepareAutonomousPayrollInput,
 } from "@/lib/client/payroll-execution";
 import {
   createDurableObligationSnapshotPlan,
   deriveObligationSnapshotCycleId,
   loadRegisteredObligationSnapshotPlan,
+  obligationWorkerClaimIdentityIssue,
   openObligationSnapshotPlan,
   registerDurableObligationSnapshotPlan,
 } from "@/lib/client/obligation-snapshot-plan";
@@ -58,6 +61,7 @@ import {
   payrollRecoveryMode,
   payrollSubmissionRecoveryHash,
 } from "@/lib/client/payroll-recovery-state";
+import { materializedPayrollRuns } from "@/lib/client/payroll-run-listing";
 import {
   obligationAuthorizationSelectionKey,
   payeesMissingActiveAgreements,
@@ -65,6 +69,7 @@ import {
   toggleProofProfileSelection,
 } from "@/lib/client/payroll-selection";
 import { decryptVaultRecord, type EncryptedVaultRecord } from "@/lib/crypto/vault";
+import { hashCanonicalJson } from "@/lib/crypto/digest";
 import {
   obligationScheduleForRecord,
   recordProofScheduleCommitment,
@@ -77,8 +82,13 @@ import {
   loadEncryptedPayees,
   type PayeeDirectoryRecord,
 } from "@/lib/client/payee-directory";
+import {
+  loadEncryptedAgentCapabilities,
+  type AgentCapabilityDirectoryRecord,
+} from "@/lib/client/agent-capabilities";
 import { isAgreementDue } from "@/lib/domain/obligations";
 import type { ObligationSnapshotPlanSummary } from "@/lib/domain/obligation-snapshot-plan";
+import type { AgentExecutionReceipt } from "@/lib/domain/agent-execution";
 
 type PayrollRunSummary = {
   id: string;
@@ -96,6 +106,7 @@ type PayrollRunSummary = {
 const filters = ["All", "Pending", "Confirmed", "Attention"] as const;
 const MIN_RECOVERY_PASSWORD_LENGTH = 12;
 type SnapshotActionStage = "preparing" | "authorizing_root" | "registering" | "reconciling";
+type AgentApprovalReview = { executionId: string; capabilityId: string; runId: string };
 const snapshotStageLabel: Record<SnapshotActionStage, string> = {
   preparing: "Preparing encrypted snapshot",
   authorizing_root: "Authorizing obligation root",
@@ -133,6 +144,9 @@ export default function PayrollPage() {
   const [payees, setPayees] = useState<PayeeDirectoryRecord[]>([]);
   const [agreements, setAgreements] = useState<PayAgreementDirectoryRecord[]>([]);
   const [selectedAgreementIds, setSelectedAgreementIds] = useState<string[]>([]);
+  const [agentCapabilities, setAgentCapabilities] = useState<AgentCapabilityDirectoryRecord[]>([]);
+  const [executionMode, setExecutionMode] = useState<"ready" | "autonomous">("ready");
+  const [autonomousCapabilityId, setAutonomousCapabilityId] = useState("");
   const [formError, setFormError] = useState("");
   const [workspaceName, setWorkspaceName] = useState("");
   const [recoveryPassword, setRecoveryPassword] = useState("");
@@ -145,6 +159,7 @@ export default function PayrollPage() {
   const [payrollStage, setPayrollStage] = useState<PayrollExecutionStage | null>(null);
   const [payrollReceipt, setPayrollReceipt] = useState<PayrollExecutionResult | null>(null);
   const [proofDeliveryNotice, setProofDeliveryNotice] = useState("");
+  const [autonomousPreparation, setAutonomousPreparation] = useState<AutonomousPayrollPreparationResult | null>(null);
   const [recoverableSubmission, setRecoverableSubmission] = useState<PendingPayrollSubmission | null>(null);
   const [recoveryTransactionHash, setRecoveryTransactionHash] = useState("");
   const [showManualHashRecovery, setShowManualHashRecovery] = useState(false);
@@ -166,7 +181,26 @@ export default function PayrollPage() {
   const [dueScheduleKeys, setDueScheduleKeys] = useState<Set<string>>(() => new Set());
   const [scheduleSyncError, setScheduleSyncError] = useState("");
   const [dashboardNow, setDashboardNow] = useState(() => Date.now());
+  const [agentApprovalReview, setAgentApprovalReview] = useState<AgentApprovalReview | null>(null);
+  const [agentApproval, setAgentApproval] = useState<AgentExecutionReceipt | null>(null);
+  const [agentApprovalLoading, setAgentApprovalLoading] = useState(false);
   const refreshInFlight = useRef(false);
+
+  useEffect(() => {
+    const search = new URLSearchParams(window.location.search);
+    const review = {
+      executionId: search.get("agentExecutionId") ?? "",
+      capabilityId: search.get("capabilityId") ?? "",
+      runId: search.get("runId") ?? "",
+    };
+    if (!review.executionId && !review.capabilityId && !review.runId) return;
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuid.test(review.executionId) || !uuid.test(review.capabilityId) || !uuid.test(review.runId)) {
+      setFormError("The agent approval link is invalid. Return to People & Agents and open it again.");
+      return;
+    }
+    setAgentApprovalReview(review);
+  }, []);
 
   const runCategory = (state: string) => ["confirmed", "reconciled"].includes(state)
     ? "Confirmed"
@@ -232,6 +266,22 @@ export default function PayrollPage() {
   const dueObligations = useMemo(() => locallyDueObligations.filter(({ agreement }) =>
     dueScheduleKeys.has(`${agreement.agreement.id}:${recordProofScheduleCommitment(agreement).toLowerCase()}`)),
   [dueScheduleKeys, locallyDueObligations]);
+  const agentApprovalSnapshotPlan = useMemo(() => agentApprovalReview
+    ? snapshotPlans.find(({ runId }) => runId === agentApprovalReview.runId) ?? null
+    : null,
+  [agentApprovalReview, snapshotPlans]);
+  const agentApprovalObligations = useMemo(() => {
+    if (!agentApprovalSnapshotPlan || !vault.session) return [];
+    const dueAt = BigInt(Math.floor(new Date(agentApprovalSnapshotPlan.dueAt).getTime() / 1_000));
+    const candidates = dueObligations.filter((obligation) =>
+      obligation.agreement.agreement.agreementVersion === "payo-agreement-v2"
+      && obligationWorkerClaimIdentityIssue(obligation) === null
+      && payrollAgreementDueAt(obligation.agreement) === dueAt);
+    return candidates.length > 0
+      && deriveObligationSnapshotCycleId(vault.session.organizationId, candidates) === agentApprovalSnapshotPlan.cycleId
+      ? candidates
+      : [];
+  }, [agentApprovalSnapshotPlan, dueObligations, vault.session]);
   const selectedObligations = useMemo(() => dueObligations.filter(({ agreement }) =>
     selectedAgreementIds.includes(agreement.id)), [dueObligations, selectedAgreementIds]);
   const selectedObligationAuthorizationKey = useMemo(
@@ -256,6 +306,115 @@ export default function PayrollPage() {
     },
     { STRK: 0n, USDC: 0n },
   ), [selectedObligations]);
+  const autonomousCapabilities = useMemo(() => {
+    if (selectedObligations.length !== 1) return [];
+    const [{ agreement, payee }] = selectedObligations;
+    if (payee.principalKind !== "agent") return [];
+    const token = agreement.agreement.settlementToken;
+    const amount = agreement.agreement.earningsAtomic.reduce(
+      (total, value) => total + BigInt(value),
+      0n,
+    );
+    return agentCapabilities.filter((record) => {
+      const policy = record.signedCapability.capability;
+      const limit = policy.limits.find((entry) => entry.token === token);
+      return !record.revokedAt
+        && record.principalId === payee.principalId
+        && policy.executionMode === "autonomous_bounded"
+        && policy.allowedActions.includes("request_execution")
+        && policy.purposeCodes.includes("private_payroll")
+        && policy.allowedTokens.includes(token)
+        && policy.recipientScope.mode === "allowlist"
+        && policy.recipientScope.addresses.some(
+          (address) => address.toLowerCase() === payee.recipientAddress.toLowerCase(),
+        )
+        && policy.usedCallCount < policy.maxCallCount
+        && new Date(policy.validAfter).getTime() <= dashboardNow
+        && dashboardNow < new Date(policy.expiresAt).getTime()
+        && Boolean(limit)
+        && amount <= BigInt(limit!.maxPerPaymentAtomic)
+        && BigInt(limit!.spentThisPeriodAtomic) + amount <= BigInt(limit!.maxPerPeriodAtomic)
+        && amount < BigInt(limit!.approvalThresholdAtomic);
+    });
+  }, [agentCapabilities, dashboardNow, selectedObligations]);
+  const selectedAutonomousCapability = autonomousCapabilities.find(
+    ({ id }) => id === autonomousCapabilityId,
+  ) ?? null;
+
+  useEffect(() => {
+    if (agentApprovalReview) {
+      setExecutionMode("ready");
+      setAutonomousCapabilityId("");
+      return;
+    }
+    if (autonomousCapabilities.length === 0) {
+      setExecutionMode("ready");
+      setAutonomousCapabilityId("");
+      return;
+    }
+    if (!autonomousCapabilities.some(({ id }) => id === autonomousCapabilityId)) {
+      setAutonomousCapabilityId(autonomousCapabilities[0].id);
+    }
+  }, [agentApprovalReview, autonomousCapabilities, autonomousCapabilityId]);
+
+  useEffect(() => {
+    if (!agentApproval || agentApproval.state !== "approval_pending" || agentApproval.settlementId) return;
+    setSelectedAgreementIds(agentApprovalObligations.map(({ agreement }) => agreement.id));
+  }, [agentApproval, agentApprovalObligations]);
+
+  useEffect(() => {
+    let stale = false;
+    if (!vault.client || !vault.session || !agentApprovalReview) {
+      setAgentApproval(null);
+      setAgentApprovalLoading(false);
+      return;
+    }
+    setAgentApprovalLoading(true);
+    void vault.client.listAgentApprovals(vault.session.organizationId).then(({ executions }) => {
+      if (stale) return;
+      const approval = executions.find((candidate) =>
+        candidate.executionId === agentApprovalReview.executionId
+        && candidate.capabilityId === agentApprovalReview.capabilityId
+        && candidate.runId === agentApprovalReview.runId);
+      if (!approval) throw new Error("This agent approval is unavailable in the unlocked organization.");
+      setAgentApproval(approval);
+    }).catch((error) => {
+      if (!stale) {
+        setAgentApproval(null);
+        setFormError(error instanceof Error ? error.message : "The agent approval could not be loaded.");
+      }
+    }).finally(() => {
+      if (!stale) setAgentApprovalLoading(false);
+    });
+    return () => { stale = true; };
+  }, [agentApprovalReview, vault.client, vault.session]);
+  const agentApprovalIssue = useMemo(() => {
+    if (!agentApprovalReview) return null;
+    if (agentApprovalLoading) return "Loading the encrypted agent approval…";
+    if (!agentApproval) return "This agent approval is unavailable in the unlocked organization.";
+    if (agentApproval.state !== "approval_pending") {
+      return `This agent request is already ${agentApproval.state.replaceAll("_", " ")}.`;
+    }
+    if (agentApproval.settlementId) {
+      return "This agent request is already linked to a Ready settlement. Open Activity instead of creating another payment.";
+    }
+    if (!agentApprovalSnapshotPlan) {
+      return "This agent request is not bound to a protected payday snapshot and cannot open Ready.";
+    }
+    if (agentApprovalSnapshotPlan.state !== "registered") {
+      return `The protected payday is ${agentApprovalSnapshotPlan.state} and cannot be approved again.`;
+    }
+    if (agentApprovalObligations.length === 0) {
+      return "The current encrypted directory does not reproduce this agent request's protected payday.";
+    }
+    return null;
+  }, [
+    agentApproval,
+    agentApprovalLoading,
+    agentApprovalObligations.length,
+    agentApprovalReview,
+    agentApprovalSnapshotPlan,
+  ]);
 
   const upcomingObligationCandidates = useMemo(() => agreements.flatMap((agreement) => {
     const payee = payees.find(({ id }) => id === agreement.payeeId);
@@ -267,18 +426,32 @@ export default function PayrollPage() {
     ) return [];
     const dueAt = payrollAgreementDueAt(agreement);
     if (dueAt <= BigInt(Math.floor(dashboardNow / 1_000)) + 120n) return [];
-    return [{ agreement, payee, dueAt }];
+    return [{
+      agreement,
+      payee,
+      dueAt,
+      claimIdentityIssue: obligationWorkerClaimIdentityIssue({ agreement, payee }),
+    }];
   }).sort((left, right) => {
     if (left.dueAt !== right.dueAt) return left.dueAt < right.dueAt ? -1 : 1;
     return left.agreement.agreement.id.localeCompare(right.agreement.agreement.id);
   }), [agreements, dashboardNow, payees]);
-  const nextSnapshotDueAt = upcomingObligationCandidates[0]?.dueAt ?? null;
+  const claimEnabledUpcomingObligations = useMemo(() => upcomingObligationCandidates
+    .filter(({ claimIdentityIssue }) => claimIdentityIssue === null),
+  [upcomingObligationCandidates]);
+  const claimIdentityBlockedObligations = useMemo(() => upcomingObligationCandidates
+    .filter(({ claimIdentityIssue }) => claimIdentityIssue !== null),
+  [upcomingObligationCandidates]);
+  const nextSnapshotDueAt = claimEnabledUpcomingObligations[0]?.dueAt ?? null;
+  const nextSnapshotDisplayDueAt = nextSnapshotDueAt
+    ?? claimIdentityBlockedObligations[0]?.dueAt
+    ?? null;
   const upcomingSnapshotObligations = useMemo(() => nextSnapshotDueAt === null
     ? []
-    : upcomingObligationCandidates
+    : claimEnabledUpcomingObligations
       .filter(({ dueAt }) => dueAt === nextSnapshotDueAt)
       .map(({ agreement, payee }) => ({ agreement, payee })),
-  [nextSnapshotDueAt, upcomingObligationCandidates]);
+  [claimEnabledUpcomingObligations, nextSnapshotDueAt]);
   const snapshotCycleId = useMemo(() => {
     if (!vault.session || upcomingSnapshotObligations.length === 0) return null;
     return deriveObligationSnapshotCycleId(
@@ -301,6 +474,7 @@ export default function PayrollPage() {
       setPayrollRuns([]);
       setPayees([]);
       setAgreements([]);
+      setAgentCapabilities([]);
       setSelectedAgreementIds([]);
       setSnapshotPlans([]);
       setSnapshotSyncError("");
@@ -312,7 +486,7 @@ export default function PayrollPage() {
     refreshInFlight.current = true;
     setRunsLoading(true);
     try {
-      const [listing, loadedPayees, loadedAgreements, snapshotListing] = await Promise.all([
+      const [listing, loadedPayees, loadedAgreements, loadedAgentCapabilities, snapshotListing] = await Promise.all([
         vault.client.listPayrollRuns(vault.session.organizationId),
         loadEncryptedPayees({
           client: vault.client,
@@ -320,6 +494,11 @@ export default function PayrollPage() {
           principal: vault.session.principal,
         }),
         loadEncryptedPayAgreements({
+          client: vault.client,
+          organizationId: vault.session.organizationId,
+          principal: vault.session.principal,
+        }),
+        loadEncryptedAgentCapabilities({
           client: vault.client,
           organizationId: vault.session.organizationId,
           principal: vault.session.principal,
@@ -333,7 +512,7 @@ export default function PayrollPage() {
               : "Pre-payday snapshots could not be refreshed.",
           })),
       ]);
-      const decrypted = await Promise.all(listing.runs.map(async (candidate) => {
+      const decrypted = await Promise.all(materializedPayrollRuns(listing.runs).map(async (candidate) => {
         const run = candidate as {
           id?: unknown;
           cycleId?: unknown;
@@ -416,6 +595,7 @@ export default function PayrollPage() {
       setPayees(loadedPayees);
       setAgreements(synchronizedAgreements);
       if (snapshotListing.plans) setSnapshotPlans(snapshotListing.plans);
+      setAgentCapabilities(loadedAgentCapabilities);
       setSnapshotSyncError(snapshotListing.error);
       setDashboardNow(Date.now());
       const activeSchedules = synchronizedAgreements
@@ -826,7 +1006,9 @@ export default function PayrollPage() {
     setFormError("");
     setProofDeliveryNotice("");
     setPayrollReceipt(null);
+    setAutonomousPreparation(null);
     try {
+      const prepareForAgent = executionMode === "autonomous" && !agentApprovalReview;
       if (!vault.session || !vault.client) {
         throw new Error("Unlock the encrypted PAYO workspace before preparing payroll.");
       }
@@ -836,8 +1018,26 @@ export default function PayrollPage() {
       if (!starknet.isConnected || !starknet.isMainnet) {
         throw new Error("Connect Ready on Starknet Mainnet before preparing payroll.");
       }
-      const sealAddress = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
+      if (agentApprovalReview) {
+        if (agentApprovalIssue) throw new Error(agentApprovalIssue);
+        if (!agentApproval) throw new Error("The agent approval is unavailable.");
+        const expectedIds = agentApprovalObligations.map(({ agreement }) => agreement.id).sort();
+        const selectedIds = selectedObligations.map(({ agreement }) => agreement.id).sort();
+        if (hashCanonicalJson(expectedIds) !== hashCanonicalJson(selectedIds)) {
+          throw new Error("The selected payroll differs from the agent request's protected payday.");
+        }
+      }
+      if (prepareForAgent && !selectedAutonomousCapability) {
+        throw new Error("Select one active one-run autonomy capability for this AI-agent payment.");
+      }
+      const sealAddress = prepareForAgent
+        ? process.env.NEXT_PUBLIC_PAYO_AGENT_SEAL_ADDRESS
+        : process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
       if (!sealAddress) throw new Error("The proof-bound PAYO seal is not deployed/configured.");
+      const policyAccountAddress = process.env.NEXT_PUBLIC_PAYO_AGENT_POLICY_ACCOUNT_ADDRESS;
+      if (prepareForAgent && !policyAccountAddress) {
+        throw new Error("The reviewed PAYO agent policy account is not configured.");
+      }
       if (selectedObligations.length === 0) throw new Error("Select at least one due encrypted agreement.");
       const plannedObligations = await preparePayrollObligationRoot({
         organizationId: vault.session.organizationId,
@@ -868,15 +1068,20 @@ export default function PayrollPage() {
           agreementRoot: plannedObligations.root,
           obligations: selectedObligations,
         });
-      }
-      for (const token of Object.keys(PAYROLL_TOKENS) as PayrollTokenSymbol[]) {
-        const available = starknet.shieldedBalances[token];
-        if (available === null) throw new Error(`The shielded ${token} balance is unavailable.`);
-        if (payrollTotals[token] > available) {
-          throw new Error(`The shielded ${token} treasury does not cover this payroll.`);
+        if (agentApprovalReview && dueSnapshotPlan.runId !== agentApprovalReview.runId) {
+          throw new Error("The selected snapshot does not match the agent execution run.");
         }
       }
-      const result = await executeProofBoundPayroll({
+      if (!prepareForAgent) {
+        for (const token of Object.keys(PAYROLL_TOKENS) as PayrollTokenSymbol[]) {
+          const available = starknet.shieldedBalances[token];
+          if (available === null) throw new Error(`The shielded ${token} balance is unavailable.`);
+          if (payrollTotals[token] > available) {
+            throw new Error(`The shielded ${token} treasury does not cover this payroll.`);
+          }
+        }
+      }
+      const executionBase = {
         client: vault.client,
         organizationId: vault.session.organizationId,
         organizationSecret: vault.session.organizationSecret,
@@ -903,7 +1108,6 @@ export default function PayrollPage() {
               .map(({ revision }) => revision),
           ) + 1,
         }),
-        submitPayroll: starknet.runProofBoundPayroll,
         prove: selfHostedProverUrl
           ? async ({ encryptedWitness, principal, onProgress }) => {
               onProgress?.("loading");
@@ -916,7 +1120,6 @@ export default function PayrollPage() {
             }
           : undefined,
         onStage: setPayrollStage,
-        persistPendingSubmission,
         authorizeFxRoot: async ({ root, publicationTicket, proof }) => {
           if (await starknet.isFxRootActive(root)) return;
           const proofVersion = Number(BigInt(proof.shards[0].publicInputs.proofVersion));
@@ -934,6 +1137,32 @@ export default function PayrollPage() {
             throw new Error("PAYO's trusted FX publisher returned without activating the proved root.");
           }
         },
+      } satisfies Omit<PrepareAutonomousPayrollInput, "autonomousAgent">;
+      if (prepareForAgent) {
+        const prepared = await executeProofBoundPayroll({
+          ...executionBase,
+          autonomousAgent: {
+            capabilityId: selectedAutonomousCapability!.id,
+            policyAccountAddress: policyAccountAddress!,
+            validForSeconds: 3_600,
+          },
+        });
+        setAutonomousPreparation(prepared);
+        setPayrollStage(null);
+        await refreshPayrollRuns();
+        notify(`Bounded agent payroll ready · run ${prepared.runId.slice(0, 8)}`);
+        return;
+      }
+      const result = await executeProofBoundPayroll({
+        ...executionBase,
+        ...(agentApproval ? {
+          humanAgentApproval: {
+            capabilityId: agentApproval.capabilityId,
+            executionId: agentApproval.executionId,
+          },
+        } : {}),
+        submitPayroll: starknet.runProofBoundPayroll,
+        persistPendingSubmission,
       });
       setPayrollReceipt(result);
       setProofDeliveryNotice(result.proofDeliveryWarning ?? "");
@@ -1112,6 +1341,7 @@ export default function PayrollPage() {
     snapshot: "Proving pre-payday snapshot",
     proof_authorization: "Authorizing proofs on-chain",
     persisting: "Encrypting payroll records",
+    agent_policy: "Activating bounded agent policy",
     wallet: "Approve in Ready",
     recording: "Recording submission",
     recorded: "Payment recorded",
@@ -1408,14 +1638,21 @@ export default function PayrollPage() {
           </aside>
 
           <div className="payroll-composer">
+            {agentApprovalReview && (
+              <div className={`agent-review-banner ${agentApprovalIssue ? "agent-review-banner--blocked" : "agent-review-banner--ready"}`}>
+                <span className="agent-review-banner__icon">{agentApprovalLoading ? <LoaderCircle className="spin" size={18} /> : <Sparkles size={18} />}</span>
+                <span><small>MCP · HUMAN APPROVAL</small><strong>{agentApprovalIssue ?? "Exact protected payday loaded"}</strong><p>{agentApprovalIssue ? "PAYO will not open Ready until this binding is valid." : `Run ${agentApprovalReview.runId.slice(0, 8)} is locked to this contributor set. PAYO will link the verified settlement before Ready opens.`}</p></span>
+                <Link href="/team">Back to approvals</Link>
+              </div>
+            )}
             <div className="composer-top">
               <div>
                 <span className="label">PRE-PAYDAY PROTECTION</span>
                 <h4>Freeze the next payday before it is due</h4>
               </div>
-              {nextSnapshotDueAt !== null && (
+              {nextSnapshotDisplayDueAt !== null && (
                 <span className="snapshot-payday-date">
-                  {new Date(Number(nextSnapshotDueAt) * 1_000).toLocaleString()}
+                  {new Date(Number(nextSnapshotDisplayDueAt) * 1_000).toLocaleString()}
                 </span>
               )}
             </div>
@@ -1430,18 +1667,22 @@ export default function PayrollPage() {
                       : currentSnapshotPlan?.state === "prepared"
                         ? "Encrypted snapshot saved; Ready registration pending"
                         : upcomingSnapshotObligations.length > 0
-                          ? `${upcomingSnapshotObligations.length} obligation${upcomingSnapshotObligations.length === 1 ? "" : "s"} ready to protect`
+                          ? `${upcomingSnapshotObligations.length} claim-enabled obligation${upcomingSnapshotObligations.length === 1 ? "" : "s"} ready to protect`
+                          : claimIdentityBlockedObligations.length > 0
+                            ? `${claimIdentityBlockedObligations.length} obligation${claimIdentityBlockedObligations.length === 1 ? " needs" : "s need"} a worker identity`
                           : "No future payday to protect"}</strong>
                 <small>{snapshotSyncError
                   ? `Snapshot status could not refresh: ${snapshotSyncError}`
                   : snapshotOverflow
                     ? "This payday exceeds the 50-line proof limit. PAYO will not create an incomplete snapshot."
                     : snapshotProtected
-                      ? "Every obligation in this exact payday is encrypted, fixed-slot committed, and canonically registered for a later worker-owned claim."
+                      ? "Every claim-enabled obligation in this exact payday is encrypted, fixed-slot committed, and canonically registered for a later worker-owned claim."
                       : currentSnapshotPlan?.state === "submitted"
                         ? "PAYO will reconcile the recorded transaction and will never open a duplicate Ready request."
                         : upcomingSnapshotObligations.length > 0
-                          ? `Includes ${upcomingSnapshotObligations.slice(0, 3).map(({ payee }) => payee.displayName).join(", ")}${upcomingSnapshotObligations.length > 3 ? ` and ${upcomingSnapshotObligations.length - 3} more` : ""}. The encrypted plan is saved before Ready opens.`
+                          ? `Includes ${upcomingSnapshotObligations.slice(0, 3).map(({ payee }) => payee.displayName).join(", ")}${upcomingSnapshotObligations.length > 3 ? ` and ${upcomingSnapshotObligations.length - 3} more` : ""}. The encrypted plan is saved before Ready opens.${claimIdentityBlockedObligations.length > 0 ? ` ${claimIdentityBlockedObligations.length} legacy obligation${claimIdentityBlockedObligations.length === 1 ? " is" : "s are"} excluded because its worker identity is missing or stale.` : ""}`
+                          : claimIdentityBlockedObligations.length > 0
+                            ? "These legacy agreements are still payable, but they cannot create worker-owned claim evidence. Import each worker's v2 identity and create a replacement agreement."
                           : "Set a future due time and worker claim identity on an active agreement to enable historical wage-claim evidence."}</small>
               </span>
               <button
@@ -1456,6 +1697,8 @@ export default function PayrollPage() {
                     ? <>Protected <ShieldCheck size={15} /></>
                     : currentSnapshotPlan
                       ? <>Resume protection <Clock3 size={15} /></>
+                      : claimIdentityBlockedObligations.length > 0 && upcomingSnapshotObligations.length === 0
+                        ? <>Worker identity required <KeyRound size={15} /></>
                       : <>Protect next payday <ShieldCheck size={15} /></>}
               </button>
             </div>
@@ -1483,7 +1726,7 @@ export default function PayrollPage() {
                   <label><span>{planLabel}</span><input value={payee.displayName} readOnly /></label>
                   <label className="recipient-address"><span>Registered Starknet address</span><input value={payee.recipientAddress} spellCheck={false} readOnly /></label>
                   <label className="recipient-amount"><span>Committed amount</span><input value={formatTokenAmount(total, agreement.agreement.settlementToken)} readOnly /><select value={agreement.agreement.settlementToken} aria-label={`Committed token for recipient ${index + 1}`} disabled><option value={agreement.agreement.settlementToken}>{agreement.agreement.settlementToken}</option></select></label>
-                  <button type="button" className="recipient-remove" aria-label={`${selected ? "Exclude" : "Include"} ${payee.displayName}`} disabled={busy} onClick={() => toggleAgreement(agreement.id)}>{selected ? <CheckCircle2 size={15} /> : <X size={15} />}</button>
+                  <button type="button" className="recipient-remove" aria-label={`${selected ? "Exclude" : "Include"} ${payee.displayName}`} disabled={busy || Boolean(agentApprovalReview)} onClick={() => toggleAgreement(agreement.id)}>{selected ? <CheckCircle2 size={15} /> : <X size={15} />}</button>
                 </div>
               );})}
               {payeesMissingAgreements.map((payee, index) => (
@@ -1522,7 +1765,24 @@ export default function PayrollPage() {
               )}
             </div>
 
-            <div className="recipient-note"><ShieldCheck size={17} /><span><strong>Authoritative proof-bound obligations</strong><small>Amounts, recipient salts, schedule commitments, classifications, and policy roots come from the encrypted agreements. They cannot be edited inside a payroll run. Active policy, FX, obligation, and verifier roots are required before Ready can open.</small></span></div>
+            {!agentApprovalReview && selectedObligations.length === 1 && selectedObligations[0]?.payee.principalKind === "agent" && (
+              <div className="agent-review-banner">
+                <span>
+                  <small>PRIVATE EXECUTION AUTHORITY</small>
+                  <strong>{executionMode === "autonomous" ? "One-run AI-agent policy" : "Ready approval"}</strong>
+                  <p>{executionMode === "autonomous"
+                    ? "PAYO binds this exact recipient, token, amount, purpose and payroll proof to a four-hour, one-call policy. No treasury key is shared."
+                    : "The organization keeps the normal Ready approval flow for this agent payroll."}</p>
+                </span>
+                <div className="filter-tabs" role="group" aria-label="Private payroll execution authority">
+                  <button type="button" className={executionMode === "ready" ? "filter-tab filter-tab--active" : "filter-tab"} disabled={busy} onClick={() => setExecutionMode("ready")}>Ready</button>
+                  <button type="button" className={executionMode === "autonomous" ? "filter-tab filter-tab--active" : "filter-tab"} disabled={busy || autonomousCapabilities.length === 0} onClick={() => setExecutionMode("autonomous")}>AI agent</button>
+                </div>
+                {autonomousCapabilities.length === 0 && <small>Create an active one-run autonomy capability for this agent on the Team page.</small>}
+              </div>
+            )}
+
+            <div className="recipient-note"><ShieldCheck size={17} /><span><strong>Authoritative proof-bound obligations</strong><small>Amounts, recipient salts, schedule commitments, classifications, and policy roots come from the encrypted agreements. They cannot be edited inside a payroll run. Active policy, FX, obligation, and verifier roots are required before signing can begin.</small></span></div>
             <div className="obligation-root-control">
               <span>
                 <strong>{registryTransactionBusy
@@ -1563,7 +1823,7 @@ export default function PayrollPage() {
             </div>
 
             <div className="composer-summary">
-              <div><small>{selectedProofProfile}</small><strong>{selectedObligations.length} selected</strong></div><div><small>Private total</small><strong>{`${formatTokenAmount(payrollTotals.STRK, "STRK")} STRK · ${formatTokenAmount(payrollTotals.USDC, "USDC")} USDC`}</strong></div><div><small>Shielded treasury</small><strong>{formatTokenAmount(starknet.shieldedBalances.STRK, "STRK")} STRK · {formatTokenAmount(starknet.shieldedBalances.USDC, "USDC")} USDC</strong></div>
+              <div><small>{selectedProofProfile}</small><strong>{selectedObligations.length} selected</strong></div><div><small>Private total</small><strong>{`${formatTokenAmount(payrollTotals.STRK, "STRK")} STRK · ${formatTokenAmount(payrollTotals.USDC, "USDC")} USDC`}</strong></div><div><small>{executionMode === "autonomous" ? "Execution treasury" : "Shielded treasury"}</small><strong>{executionMode === "autonomous" ? "Encrypted policy account" : `${formatTokenAmount(starknet.shieldedBalances.STRK, "STRK")} STRK · ${formatTokenAmount(starknet.shieldedBalances.USDC, "USDC")} USDC`}</strong></div>
               {dueObligations.length === 0 ? (
                 scheduleSyncError && hasActiveAgreement
                   ? <button className="button button--ink" type="button" onClick={() => void refreshPayrollRuns()} disabled={runsLoading}>Retry schedule sync <ArrowRight size={17} /></button>
@@ -1572,7 +1832,7 @@ export default function PayrollPage() {
                 <button
                   type="button"
                   className="button button--ink"
-                  disabled={!vault.session || !vault.recoveryReady || !starknet.isConnected || !starknet.isMainnet || busy || Boolean(recoverableSubmission) || selectedObligations.length === 0 || (obligationSchedule?.state === "active" && !canRunPayroll)}
+                  disabled={!vault.session || !vault.recoveryReady || !starknet.isConnected || !starknet.isMainnet || busy || Boolean(recoverableSubmission) || selectedObligations.length === 0 || Boolean(agentApprovalReview && agentApprovalIssue) || (executionMode === "ready" && obligationSchedule?.state === "active" && !canRunPayroll) || (executionMode === "autonomous" && !selectedAutonomousCapability)}
                   onClick={obligationSchedule?.state === "active" ? submitPayroll : scheduleSelectedObligationRoot}
                 >
                   {payrollStage && payrollStage !== "queued" && payrollStage !== "recorded"
@@ -1593,12 +1853,25 @@ export default function PayrollPage() {
                               ? <>Select a due agreement <CalendarDays size={17} /></>
                               : obligationSchedule?.state !== "active"
                                 ? <>Authorize batch in Ready <ShieldCheck size={17} /></>
-                                : <>Prove &amp; approve payroll <ArrowRight size={17} /></>}
+                                : <>{executionMode === "autonomous" ? "Prove & activate agent run" : agentApprovalReview ? "Prove & approve agent payroll" : "Prove & approve payroll"} <ArrowRight size={17} /></>}
                 </button>
               )}
             </div>
 
             {formError && <div className="runner-error"><X size={16} /><span>{formError}</span></div>}
+            {autonomousPreparation && (
+              <div className="transaction-receipt transaction-receipt--confirmed">
+                <span className="transaction-receipt-icon"><ShieldCheck size={20} /></span>
+                <span>
+                  <small>BOUNDED AGENT POLICY ACTIVE</small>
+                  <strong>One exact private payroll is ready for MCP execution</strong>
+                  <p>Run {autonomousPreparation.runId.slice(0, 8)} · capability {autonomousPreparation.capabilityId.slice(0, 8)} · witness {autonomousPreparation.witnessCommitment.slice(0, 10)}…</p>
+                </span>
+                {autonomousPreparation.configurationTransactionHash
+                  ? <a href={`${STARKNET_MAINNET_EXPLORER}/tx/${autonomousPreparation.configurationTransactionHash}`} target="_blank" rel="noreferrer">View activation <ExternalLink size={13} /></a>
+                  : <Link href="/activity">Open activity <ArrowRight size={13} /></Link>}
+              </div>
+            )}
             {proofDeliveryNotice && (
               <div className="transaction-receipt transaction-receipt--confirmed">
                 <span className="transaction-receipt-icon"><CheckCircle2 size={20} /></span>

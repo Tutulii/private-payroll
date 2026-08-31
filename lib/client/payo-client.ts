@@ -33,6 +33,8 @@ import type {
 } from "@/lib/starknet/readiness";
 import type { VaultRotationRequest } from "@/lib/domain/vault-lifecycle";
 import type { SignedCapability } from "@/lib/domain/capability";
+import type { AgentExecutionReceipt } from "@/lib/domain/agent-execution";
+import type { DirectPrivacyAccountConfig } from "@/lib/domain/direct-privacy";
 import { decodeRemoteProofJobResponse, decodeRemoteProofResponse, type RemoteProofRequest } from "@/lib/proof/remote-prover";
 import type {
   ExceptionProofWorkerSuccess,
@@ -41,7 +43,7 @@ import type {
 } from "@/lib/proof/protocol";
 import type { SerializedPayrollIntegrityBuildRequest } from "@/lib/proof/input-builder";
 import type { ReadySessionPayload } from "@/lib/auth/ready-session";
-import type { TypedData } from "starknet";
+import type { Call, TypedData } from "starknet";
 
 type AccessTokenProvider = () => Promise<string | null>;
 
@@ -85,6 +87,57 @@ export type PayrollAuthorizationStatus = {
   updatedAt: string;
   replayed?: boolean;
 };
+
+export type DirectPrivacyAccountClientSummary = {
+  id: string;
+  capabilityId: string;
+  stateVersion: number;
+  authorizedRunCount: number;
+  activationState: "pending" | "active";
+  activeExecutionId: string | null;
+  activeLeaseExpiresAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  config: {
+    policyAccountAddress: string;
+    policyId: string;
+    validBeforeUnix: string;
+    maxCallsPerPeriod: number;
+    maxCallCount: number;
+  };
+};
+
+export type DirectPrivacyAccountClientPublic = {
+  id: string;
+  config: DirectPrivacyAccountConfig;
+  proofPrincipal: VaultPrincipal;
+  stateVersion: number;
+  authorizedRunCount: number;
+  activationState: "pending" | "active";
+  activation: {
+    blockNumber: string;
+    blockHash: string;
+    classHash: string;
+    blockTimestamp: string;
+    activatedAt: string;
+  } | null;
+};
+export type AgentAccessTokenSummary = {
+  tokenId: string;
+  capabilityId: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  lastSeenAt: string | null;
+  createdAt: string;
+};
+
+export type AgentMcpConnection = AgentAccessTokenSummary & {
+  accessToken: string;
+  organizationId: string;
+  principalId: string;
+  issuerPublicKey: string;
+};
+
 
 export class PayoApiError extends Error {
   constructor(
@@ -1134,6 +1187,125 @@ export class PayoClient {
     );
   }
 
+  async issueAgentMcpConnection(capabilityId: string, ttlSeconds = 14_400) {
+    return this.request<{ connection: AgentMcpConnection }>(
+      "/api/v1/capabilities/" + encodeURIComponent(capabilityId) + "/access-token",
+      { method: "POST", body: JSON.stringify({ ttlSeconds }) },
+    );
+  }
+
+  async listAgentMcpConnections(capabilityId: string) {
+    return this.request<{ tokens: AgentAccessTokenSummary[] }>(
+      "/api/v1/capabilities/" + encodeURIComponent(capabilityId) + "/access-token",
+    );
+  }
+
+  async revokeAgentMcpConnections(capabilityId: string) {
+    return this.request<{ revocation: { capabilityId: string; revokedCount: number } }>(
+      "/api/v1/capabilities/" + encodeURIComponent(capabilityId) + "/access-token",
+      { method: "DELETE" },
+    );
+  }
+
+  async listAgentApprovals(organizationId: string, limit = 50) {
+    const search = new URLSearchParams({ organizationId, limit: String(limit) });
+    return this.request<{ executions: AgentExecutionReceipt[] }>(
+      `/api/v1/agent-approvals?${search}`,
+    );
+  }
+
+  async listAgentExecutions(organizationId: string, limit = 50) {
+    const search = new URLSearchParams({ organizationId, limit: String(limit) });
+    return this.request<{ executions: AgentExecutionReceipt[] }>(
+      `/api/v1/agent-executions?${search}`,
+    );
+  }
+
+  async listDirectPrivacyAccounts(organizationId: string) {
+    const search = new URLSearchParams({ organizationId });
+    return this.request<{ accounts: DirectPrivacyAccountClientSummary[] }>(
+      `/api/v1/direct-privacy-accounts?${search}`,
+    );
+  }
+
+  async getDirectPrivacyAccount(accountId: string) {
+    const search = new URLSearchParams({ accountId });
+    return this.request<{
+      account: DirectPrivacyAccountClientPublic;
+      configurationCall: Call;
+    }>(`/api/v1/direct-privacy-accounts?${search}`);
+  }
+
+  async provisionDirectPrivacyAccount(input: {
+    organizationId: string;
+    capabilityId: string;
+    runIds: string[];
+    policyAccountAddress: string;
+    policyId: string;
+    validForSeconds: number;
+    periodSeconds: number;
+    maxCallsPerPeriod: number;
+    maxCallCount: number;
+  }) {
+    return this.request<{
+      account: DirectPrivacyAccountClientPublic;
+      configurationCall: Call;
+      replayed?: boolean;
+    }>("/api/v1/direct-privacy-accounts", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async stageDirectPrivacyRunWitness(input: {
+    accountId: string;
+    encryptedWitness: EncryptedVaultRecord;
+  }) {
+    return this.request<{
+      witness: {
+        runId: string;
+        runVersion: number;
+        witnessCommitment: string;
+        replayed: boolean;
+      };
+    }>(`/api/v1/direct-privacy-accounts/${encodeURIComponent(input.accountId)}/runs`, {
+      method: "POST",
+      body: JSON.stringify({ encryptedWitness: input.encryptedWitness }),
+    });
+  }
+
+  async activateDirectPrivacyAccount(accountId: string) {
+    return this.request<{
+      account: DirectPrivacyAccountClientPublic;
+      configurationTransactionHash?: string;
+    }>(`/api/v1/direct-privacy-accounts/${encodeURIComponent(accountId)}/activation`, {
+      method: "POST",
+    });
+  }
+
+  async linkAgentExecutionApproval(input: {
+    capabilityId: string;
+    executionId: string;
+    settlementId: string;
+  }) {
+    return this.request<{ execution: AgentExecutionReceipt }>(
+      `/api/v1/capabilities/${encodeURIComponent(input.capabilityId)}`
+        + `/executions/${encodeURIComponent(input.executionId)}/approval`,
+      { method: "POST", body: JSON.stringify({ settlementId: input.settlementId }) },
+    );
+  }
+
+  async cancelAgentExecutionApproval(input: {
+    capabilityId: string;
+    executionId: string;
+  }) {
+    return this.request<{ execution: AgentExecutionReceipt }>(
+      `/api/v1/capabilities/${encodeURIComponent(input.capabilityId)}`
+        + `/executions/${encodeURIComponent(input.executionId)}/approval`,
+      { method: "DELETE" },
+    );
+  }
+
   async createSettlementIntent(input: {
     id: string;
     organizationId: string;
@@ -1143,6 +1315,7 @@ export class PayoClient {
     walletRequestId: string;
     idempotencyKey: string;
     tokenTotalsCommitment: string;
+    agentPlanCommitment?: string;
     envelope: EncryptedVaultRecord;
   }) {
     const { idempotencyKey, ...body } = input;

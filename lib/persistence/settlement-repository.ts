@@ -12,6 +12,11 @@ import {
 import { encryptedVaultRecordSchema, type EncryptedVaultRecord } from "@/lib/crypto/vault";
 import type { AuthenticatedPrincipal } from "@/lib/server/auth";
 import { ApiError } from "@/lib/server/auth";
+import {
+  applyLinkedAgentSettlementObservationWith,
+  cancelLinkedAgentExecutionApprovalWith,
+  recordLinkedAgentExecutionSubmissionWith,
+} from "./agent-execution-approval-repository";
 import { getDatabase } from "./db";
 import { requireOrganizationRole, requireOrganizationRoleWith } from "./repository";
 import {
@@ -231,6 +236,7 @@ export async function createSettlementIntent(input: {
   walletRequestId: string;
   idempotencyKey: string;
   tokenTotalsCommitment: string;
+  agentPlanCommitment?: string;
   envelope: EncryptedVaultRecord;
   principal: AuthenticatedPrincipal;
 }) {
@@ -238,6 +244,9 @@ export async function createSettlementIntent(input: {
   const workflowType = settlementWorkflowSchema.parse(input.workflowType);
   if (!/^0x[0-9a-fA-F]{64}$/.test(input.tokenTotalsCommitment)) {
     throw new ApiError(400, "A canonical token-totals commitment is required.", "TOTALS_COMMITMENT_INVALID");
+  }
+  if (input.agentPlanCommitment && !/^0x[0-9a-fA-F]{64}$/.test(input.agentPlanCommitment)) {
+    throw new ApiError(400, "A canonical agent-plan commitment is required.", "AGENT_PLAN_COMMITMENT_INVALID");
   }
   const envelope = encryptedVaultRecordSchema.parse(input.envelope);
   if (
@@ -258,6 +267,7 @@ export async function createSettlementIntent(input: {
     subjectRecordId: input.subjectRecordId,
     walletRequestId: input.walletRequestId,
     tokenTotalsCommitment: input.tokenTotalsCommitment.toLowerCase(),
+    agentPlanCommitment: input.agentPlanCommitment?.toLowerCase() ?? null,
     envelopeHash,
   });
   const now = new Date();
@@ -449,6 +459,7 @@ export async function createSettlementIntent(input: {
         walletRequestId: input.walletRequestId,
         idempotencyKey: input.idempotencyKey,
         tokenTotalsCommitment: input.tokenTotalsCommitment.toLowerCase(),
+        agentPlanCommitment: input.agentPlanCommitment?.toLowerCase() ?? null,
       })
       .returning();
     if (routedWageRemediation) {
@@ -539,6 +550,12 @@ export async function recordSettlementSubmission(input: {
         .returning({ id: payrollRuns.id });
       if (!run) throw new ApiError(409, "Payroll state changed during submission.", "RUN_STATE_CONFLICT");
     }
+    await recordLinkedAgentExecutionSubmissionWith(transaction, {
+      settlementId: existing.id,
+      transactionHash,
+      actorId: input.principal.principalId,
+      now,
+    });
     await transaction
       .insert(confirmationJobs)
       .values({ id: generateUuidV7(), settlementId: input.settlementId })
@@ -708,6 +725,12 @@ export async function recoverApprovalSubmissionsFromSealEvents(input: {
           .returning({ id: payrollRuns.id });
         if (!run) throw new Error("Payroll state changed during seal-event recovery.");
       }
+      await recordLinkedAgentExecutionSubmissionWith(transaction, {
+        settlementId: candidate.settlementId,
+        transactionHash: event.transactionHash,
+        actorId: "system:seal-indexer",
+        now,
+      });
       await transaction
         .insert(confirmationJobs)
         .values({ id: generateUuidV7(), settlementId: candidate.settlementId })
@@ -941,6 +964,11 @@ export async function cancelSettlementApproval(input: {
         }
       }
     }
+    await cancelLinkedAgentExecutionApprovalWith(transaction, {
+      settlementId: existing.id,
+      actorId: input.principal.principalId,
+      now,
+    });
     await transaction.insert(auditEvents).values({
       id: generateUuidV7(),
       organizationId: existing.organizationId,
@@ -1216,6 +1244,14 @@ export async function applySettlementObservation(
         ));
       }
     }
+
+    await applyLinkedAgentSettlementObservationWith(transaction, {
+      settlementId: current.id,
+      settlementState,
+      transactionHash: current.transactionHash,
+      errorCode: observation.errorCode,
+      now,
+    });
 
     const terminal = settlementState === "finalized" || settlementState === "failed";
     await transaction

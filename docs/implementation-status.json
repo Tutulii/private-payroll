@@ -70,6 +70,7 @@
         "scripts/lib/payo-wage-claim-mainnet.mjs",
         "evidence/phase3-private-exceptions-devnet.json",
         "evidence/phase3-wage-claim-mainnet.json",
+        "evidence/phase3-wage-claim-hosted-rollout.json",
         "docs/WAGE_CLAIM_BINDING_PLAN.md",
         "docs/wage-claim-mainnet-deployment.md",
         "fly.web.toml",
@@ -96,7 +97,9 @@
         "9/9 targeted exception-seal Cairo tests including replay, expiry and root substitution rejection",
         "30/30 PostgreSQL integration tests including vNext tenant, replay, relayer recovery and historical FX renewal",
         "Mainnet four-class declaration, deterministic deployment, three-profile activation and frozen-block verification at block 14041891",
-        "valid Snapshot v5, Claim v6 and Remediation v7 proof acceptance plus one-bit tamper rejection on Mainnet"
+        "valid Snapshot v5, Claim v6 and Remediation v7 proof acceptance plus one-bit tamper rejection on Mainnet",
+        "exact release commit passed PAYO CI run 33248701214 and proof-artifacts run 33248701162",
+        "Fly prover release 10 and web release 44 health, protected-prover, served-bundle and caught-up-indexer checks"
       ]
     },
     { "id": "P3-07", "phase": 3, "requirement": "Encrypted accounting and auditor proof packages", "status": "complete", "evidence": ["app/activity/page.tsx", "app/api/v1/disclosures/route.ts", "lib/client/proof-package-workflow.ts", "lib/disclosure/proof-package.ts", "lib/persistence/receipt-repository.ts", "scripts/generate-phase3-matrix-disclosure.ts", "scripts/lib/phase3-disclosure-evidence.mjs", "evidence/phase3-matrix-disclosure.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-recurring-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-checkpoint-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-milestone-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-vesting-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-final-pay-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-approved-adjustment-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-employer-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-auditor-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-tax-package.json", "docs/phase3-evidence.md"], "tests": ["lib/client/proof-package-workflow.test.ts", "lib/disclosure/proof-package.test.ts", "scripts/lib/phase3-disclosure-evidence.test.mjs", "lib/persistence/database.integration.test.ts", "seven workflow-specific worker line openings plus recipient-encrypted employer, auditor, and tax scopes", "recipient-encrypted payroll, wage-claim, and remediation package reconstruction", "balanced journals plus wrong-recipient, expiry, and revocation rejection for all ten matrix packages"] },

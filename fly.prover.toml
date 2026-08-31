@@ -23,6 +23,7 @@ primary_region = "sin"
   PAYO_POLICY_REGISTRY_ADDRESS = "0x34701f573096b7bab0e5678e1ed2f17a87c8d56eb5f4d70bcf2197bab8e4477"
   PAYO_SEAL_ADDRESS = "0x3394e58bb2bb294e0ae92514079a1394c6c66eae8a6c033a6f7f449b1d12ce"
   PAYO_PROVER_THREADS = "2"
+  PAYO_BB_PATH = "/usr/local/bin/payo-bb"
   PAYO_SELF_HOSTED_PROVER_ENABLED = "true"
   PAYO_PROVER_ALLOWED_ORIGINS = "https://private-payroll.fly.dev,http://localhost:3000,http://127.0.0.1:3000"
 

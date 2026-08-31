@@ -22,6 +22,7 @@ const DEFAULT_AGENT_ACTIONS: AgentAction[] = [
   "request_execution",
   "get_run_status",
   "get_receipt",
+  "create_disclosure",
 ];
 
 function deriveIssuerSecret(organizationSecret: string): Uint8Array {
@@ -48,6 +49,8 @@ export function prepareEncryptedAgentCapability(input: {
   }[];
   vaultPrincipal: VaultPrincipalKeyPair;
   purposeCodes?: readonly string[];
+  executionMode?: "request_approval" | "autonomous_bounded";
+  maxCallCount?: number;
   validAfter?: Date;
   expiresAt: Date;
   now?: Date;
@@ -74,7 +77,9 @@ export function prepareEncryptedAgentCapability(input: {
       periodStartsAt,
       periodEndsAt,
     })),
-    executionMode: "request_approval",
+    executionMode: input.executionMode ?? "request_approval",
+    maxCallCount: input.maxCallCount ?? 100,
+    usedCallCount: 0,
     validAfter: validAfter.toISOString(),
     expiresAt: input.expiresAt.toISOString(),
     nonce: randomNonce(),

@@ -2398,6 +2398,20 @@ button:focus-visible {
 .agent-capability-row strong { margin-top: 3px; overflow: hidden; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .agent-capability-row button { padding: 7px 10px; color: #744d45; background: var(--coral-soft); border: 1px solid #d9aba0; border-radius: 8px; cursor: pointer; font-size: 7px; font-weight: 850; }
 .agent-capability-row button:disabled { cursor: not-allowed; opacity: .48; }
+.agent-approval-list { order: 5; }
+.agent-approval-row__actions { display: flex; justify-content: flex-end; gap: 7px; }
+.agent-approval-review { padding: 7px 10px; color: #345268; background: var(--blue-soft); border: 1px solid #a9c3d7; border-radius: 8px; font-size: 7px; font-weight: 850; text-decoration: none; white-space: nowrap; }
+.agent-approval-row .agent-approval-row__actions button { white-space: nowrap; }
+
+.agent-review-banner { margin-bottom: 14px; padding: 12px 14px; display: grid; grid-template-columns: auto 1fr auto; gap: 11px; align-items: center; border: 1px solid #9ab5ca; border-radius: 13px; }
+.agent-review-banner--ready { background: var(--blue-soft); }
+.agent-review-banner--blocked { background: var(--coral-soft); border-color: #d9aba0; }
+.agent-review-banner__icon { width: 34px; height: 34px; display: grid; place-items: center; background: var(--yellow-soft); border: 1px solid var(--ink); border-radius: 10px; }
+.agent-review-banner small, .agent-review-banner strong, .agent-review-banner p { display: block; }
+.agent-review-banner small { color: var(--muted); font-size: 6px; font-weight: 900; letter-spacing: .08em; }
+.agent-review-banner strong { margin-top: 3px; font-size: 9px; }
+.agent-review-banner p { margin: 3px 0 0; color: var(--muted); font-size: 7.5px; line-height: 1.45; }
+.agent-review-banner > a { color: var(--ink); font-size: 7px; font-weight: 850; white-space: nowrap; }
 
 /* Activity */
 

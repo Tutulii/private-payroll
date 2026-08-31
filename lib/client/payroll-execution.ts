@@ -24,7 +24,7 @@ import {
 } from "@/lib/domain/fx";
 import { isAgreementDue } from "@/lib/domain/obligations";
 import { generateUuidV7, settlementRecordSchema } from "@/lib/domain/records";
-import { commitTokenTotals } from "@/lib/domain/settlement";
+import { commitAgentSettlementPlan, commitTokenTotals } from "@/lib/domain/settlement";
 import { policyPackCommitment } from "@/lib/policy/engine";
 import {
   calculatePolicyDeductions,
@@ -98,6 +98,7 @@ export type PayrollExecutionStage =
   | "snapshot"
   | "proof_authorization"
   | "persisting"
+  | "agent_policy"
   | "wallet"
   | "recording"
   | "recorded"
@@ -125,6 +126,20 @@ export type PayrollExecutionResult = PendingPayrollSubmission & {
   transactionHash: string;
   verificationQueued: boolean;
   proofDeliveryWarning?: string;
+};
+
+export type AutonomousPayrollPreparationResult = {
+  mode: "autonomous_bounded";
+  organizationId: string;
+  capabilityId: string;
+  runId: string;
+  runVersion: number;
+  proofBundleId: string;
+  accountId: string;
+  policyId: string;
+  witnessCommitment: string;
+  activationState: "active";
+  configurationTransactionHash?: string;
 };
 
 const PAYROLL_PROOF_DELIVERY_WARNING =
@@ -372,8 +387,34 @@ export type ExecuteProofBoundPayrollInput = {
   runRevision?: number;
   authorizationPollIntervalMs?: number;
   authorizationTimeoutMs?: number;
+  humanAgentApproval?: {
+    capabilityId: string;
+    executionId: string;
+  };
   now?: () => Date;
 };
+
+export type PrepareAutonomousPayrollInput = Omit<
+  ExecuteProofBoundPayrollInput,
+  "submitPayroll" | "humanAgentApproval" | "persistPendingSubmission"
+> & {
+  autonomousAgent: {
+    capabilityId: string;
+    policyAccountAddress: string;
+    validForSeconds?: number;
+  };
+};
+
+const STARK_FIELD_PRIME = (1n << 251n) + 17n * (1n << 192n) + 1n;
+
+function autonomousPolicyId(capabilityId: string, runId: string): `0x${string}` {
+  const digest = BigInt(hashCanonicalJson({
+    domain: "PAYO_AUTONOMOUS_POLICY_ID_V1",
+    capabilityId,
+    runId,
+  })) % STARK_FIELD_PRIME;
+  return `0x${(digest === 0n ? 1n : digest).toString(16)}`;
+}
 
 function rootFromLimbs(high: string, low: string): `0x${string}` {
   const highValue = BigInt(high);
@@ -728,9 +769,15 @@ export async function recoverConfirmedPayrollVerification(input: {
  * proof worker and before any API request. The wallet cannot open until all
  * deployment and registry bindings are active at one Starknet block.
  */
-export async function executeProofBoundPayroll(
+export function executeProofBoundPayroll(
+  input: PrepareAutonomousPayrollInput,
+): Promise<AutonomousPayrollPreparationResult>;
+export function executeProofBoundPayroll(
   input: ExecuteProofBoundPayrollInput,
-): Promise<PayrollExecutionResult> {
+): Promise<PayrollExecutionResult>;
+export async function executeProofBoundPayroll(
+  input: ExecuteProofBoundPayrollInput | PrepareAutonomousPayrollInput,
+): Promise<PayrollExecutionResult | AutonomousPayrollPreparationResult> {
   if (input.obligations.length < 1 || input.obligations.length > 50) {
     throw new Error("A proof-bound payroll requires 1–50 authoritative obligations.");
   }
@@ -885,13 +932,14 @@ export async function executeProofBoundPayroll(
     snapshotLink.circuitInputs = {};
   }
   const proofRequestId = generateUuidV7();
-  const encryptedWitness = encryptVaultRecord(
-    advancedProfile ? {
+  const proofWitnessPayload = advancedProfile ? {
       advancedBuildInput: {
         payroll: buildInput,
         agreements: input.obligations.map(({ agreement }) => agreement.agreement),
       },
-    } : { buildInput },
+    } : { buildInput };
+  const encryptedWitness = encryptVaultRecord(
+    proofWitnessPayload,
     {
       schemaVersion: 1,
       organizationId: input.organizationId,
@@ -1027,6 +1075,52 @@ export async function executeProofBoundPayroll(
   // Proof storage atomically promotes the run from calculated to proven. Do not
   // request the same transition again: the repository deliberately rejects a
   // proven -> proven transition as an invalid state-machine replay.
+  if ("autonomousAgent" in input) {
+    input.onStage?.("agent_policy");
+    const policyId = autonomousPolicyId(input.autonomousAgent.capabilityId, runId);
+    const validForSeconds = Math.min(input.autonomousAgent.validForSeconds ?? 3_600, 3_600);
+    const provisioned = await input.client.provisionDirectPrivacyAccount({
+      organizationId: input.organizationId,
+      capabilityId: input.autonomousAgent.capabilityId,
+      runIds: [runId],
+      policyAccountAddress: input.autonomousAgent.policyAccountAddress,
+      policyId,
+      validForSeconds,
+      periodSeconds: validForSeconds,
+      maxCallsPerPeriod: 1,
+      maxCallCount: 1,
+    });
+    const agentWitness = encryptVaultRecord(proofWitnessPayload, {
+      schemaVersion: 1,
+      organizationId: input.organizationId,
+      recordType: "agent_payroll_witness",
+      recordId: runId,
+      revision,
+    }, [provisioned.account.proofPrincipal]);
+    const staged = await input.client.stageDirectPrivacyRunWitness({
+      accountId: provisioned.account.id,
+      encryptedWitness: agentWitness,
+    });
+    const activated = await input.client.activateDirectPrivacyAccount(provisioned.account.id);
+    if (activated.account.activationState !== "active") {
+      throw new Error("The autonomous policy account did not become active.");
+    }
+    return {
+      mode: "autonomous_bounded",
+      organizationId: input.organizationId,
+      capabilityId: input.autonomousAgent.capabilityId,
+      runId,
+      runVersion: revision,
+      proofBundleId,
+      accountId: provisioned.account.id,
+      policyId,
+      witnessCommitment: staged.witness.witnessCommitment,
+      activationState: "active",
+      ...(activated.configurationTransactionHash
+        ? { configurationTransactionHash: activated.configurationTransactionHash }
+        : {}),
+    };
+  }
   let snapshotProofBundleId: string | undefined;
   let payoAction: STRK20_INVOKE_ACTION;
   if (snapshotPlan && snapshotProof) {
@@ -1092,6 +1186,19 @@ export async function executeProofBoundPayroll(
     runId,
     totals: { STRK: tokenTotals.STRK.toString(), USDC: tokenTotals.USDC.toString() },
   });
+  const agentPlanCommitment = input.humanAgentApproval
+    ? commitAgentSettlementPlan({
+        organizationId: input.organizationId,
+        runId,
+        payments: lines.map((line) => ({
+          recipientAddress: line.recipientAddress,
+          token: line.token,
+          amountAtomic: (line.earningsAtomic.reduce((total, amount) => total + BigInt(amount), 0n)
+            - line.deductionsAtomic.reduce((total, amount) => total + BigInt(amount), 0n)).toString(),
+          purposeCode: "private_payroll",
+        })),
+      })
+    : undefined;
   const settlementTimestamp = new Date().toISOString();
   const encryptedSettlement = settlementRecordSchema.parse({
     schemaVersion: 1,
@@ -1105,6 +1212,7 @@ export async function executeProofBoundPayroll(
     idempotencyKey,
     tokenTotals: { STRK: tokenTotals.STRK.toString(), USDC: tokenTotals.USDC.toString() },
     tokenTotalsCommitment,
+    ...(agentPlanCommitment ? { agentPlanCommitment } : {}),
     state: "approval_pending",
     noteEvidenceState: "unavailable",
   });
@@ -1153,10 +1261,34 @@ export async function executeProofBoundPayroll(
       walletRequestId,
       idempotencyKey,
       tokenTotalsCommitment,
+      ...(agentPlanCommitment ? { agentPlanCommitment } : {}),
       envelope: settlementEnvelope,
     }));
     if (returnedId(settlementResponse.settlement, "settlement") !== settlementId) {
       throw new Error("PAYO returned a different settlement identifier for this payroll.");
+    }
+    if (input.humanAgentApproval) {
+      try {
+        const { execution } = await retryDurableWrite(() => input.client.linkAgentExecutionApproval({
+          ...input.humanAgentApproval!,
+          settlementId,
+        }));
+        if (
+          execution.executionId !== input.humanAgentApproval.executionId
+          || execution.capabilityId !== input.humanAgentApproval.capabilityId
+          || execution.runId !== runId
+          || execution.settlementId !== settlementId
+          || execution.state !== "approval_pending"
+          || !execution.requiresApproval
+        ) throw new Error("PAYO linked a different agent approval to this Ready settlement.");
+      } catch (error) {
+        // Ready has not opened. Cancel whichever side committed before a lost
+        // response and release the reservation, so a retry cannot strand or
+        // duplicate an agent-approved payroll.
+        await input.client.cancelSettlementApproval(settlementId).catch(() => undefined);
+        await input.client.cancelAgentExecutionApproval(input.humanAgentApproval).catch(() => undefined);
+        throw error;
+      }
     }
     if (pendingApproval.authorizationMode !== "staged_vnext") {
       await retryDurableWrite(() => input.client.enqueueProofVerification({
@@ -1175,6 +1307,7 @@ export async function executeProofBoundPayroll(
   }
 
   input.onStage?.("wallet");
+  if (!input.submitPayroll) throw new Error("Ready payroll submission is not configured.");
   const transactionHash = await awaitWalletOrRecoveredTransaction({
     submit: () => input.submitPayroll(walletRecipients, payoAction),
     readRecoveredTransactionHash: () => readRecoveredSettlementTransactionHash(input.client, settlementId),

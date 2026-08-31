@@ -11,6 +11,7 @@ import {
   createDurableObligationSnapshotPlan,
   deriveObligationSnapshotCycleId,
   loadRegisteredObligationSnapshotPlan,
+  obligationWorkerClaimIdentityIssue,
   openObligationClaimAccess,
   openObligationSnapshotPlan,
   prepareObligationSnapshotPlan,
@@ -65,6 +66,24 @@ async function obligation(withClaimIdentity = true) {
 }
 
 describe("pre-payday obligation snapshot plan", () => {
+  it("uses one worker-identity eligibility rule for UI selection and snapshot creation", async () => {
+    const selected = await obligation();
+    expect(obligationWorkerClaimIdentityIssue(selected)).toBeNull();
+
+    const missing = await obligation(false);
+    expect(obligationWorkerClaimIdentityIssue(missing)).toBe("worker_identity_missing");
+
+    expect(obligationWorkerClaimIdentityIssue({
+      ...selected,
+      agreement: { ...selected.agreement, claimCapabilityCommitment: undefined },
+    })).toBe("agreement_identity_missing");
+
+    expect(obligationWorkerClaimIdentityIssue({
+      ...selected,
+      agreement: { ...selected.agreement, claimCapabilityCommitment: `0x${"ab".repeat(32)}` },
+    })).toBe("identity_binding_mismatch");
+  });
+
   it("encrypts a complete worker-owned claim witness and reserves the future run", async () => {
     const selected = await obligation();
     const prepared = await prepareObligationSnapshotPlan({

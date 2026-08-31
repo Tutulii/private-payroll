@@ -3,6 +3,7 @@ import type { EncryptedVaultRecord, VaultPrincipalKeyPair } from "@/lib/crypto/v
 import type { SerializedPayrollIntegrityBuildRequest } from "./input-builder";
 import type { EmploymentAgreement } from "@/lib/domain/obligations";
 import type { ExceptionPublicInputsV2 } from "@/lib/domain/exception-protocol";
+import type { SettlementMatchPublicInputs } from "./settlement-match";
 
 export const PAYROLL_INTEGRITY_CIRCUIT_URL = "/circuits/payroll_integrity-v1.json";
 export const PAYROLL_INTEGRITY_CIRCUIT_SHA256 =
@@ -47,8 +48,16 @@ export const WAGE_REMEDIATION_VNEXT_CIRCUIT_SHA256 =
 export const WAGE_REMEDIATION_VNEXT_VERIFICATION_KEY_URL = "/circuits/wage_remediation-v7.vk.hex";
 export const WAGE_REMEDIATION_VNEXT_VERIFICATION_KEY_SHA256 =
   "0xc31a0a4455735625f55bcc94d2f4ef366627872d09fc0fd5f91ffd4eba152525";
+export const SETTLEMENT_MATCH_CIRCUIT_URL = "/circuits/settlement_match-v8.json";
+export const SETTLEMENT_MATCH_CIRCUIT_SHA256 =
+  "0xa208f7c548a5205e9e777f4926e282510e918bee4ce7902db3bb8b2d46454033";
+export const SETTLEMENT_MATCH_VERIFICATION_KEY_URL =
+  "/circuits/settlement_match-v8.vk.hex";
+export const SETTLEMENT_MATCH_VERIFICATION_KEY_SHA256 =
+  "0x4dba54029e3b3b507baad28f6f4f416b9eca9651f98cbad9312d91a637528e23";
 export const PAYROLL_INTEGRITY_PUBLIC_INPUT_COUNT = 17;
 export const PAYO_EXCEPTION_PUBLIC_INPUT_COUNT = 23;
+export const PAYO_SETTLEMENT_MATCH_PUBLIC_INPUT_COUNT = 11;
 // Starknet Mainnet accepts at most 5,000 invoke calldata felts. PAYO's
 // account + seal wrapper contributes eight felts around each raw Garaga proof,
 // so every generated or accepted proof must fit this fail-closed budget.
@@ -152,6 +161,27 @@ export type ProofWorkerSuccess = {
   shards: [PayrollIntegrityShardProof, PayrollIntegrityShardProof];
   circuitSha256: string;
   provingTimeMs: number;
+};
+
+export type SettlementMatchProofChunk = {
+  chunkIndex: number;
+  chunkCount: number;
+  proofCalldata: string[];
+  calldataHash: string;
+  publicInputs: SettlementMatchPublicInputs;
+};
+
+export type SettlementMatchProofWorkerSuccess = {
+  version: 8;
+  type: "settlement-proof-complete";
+  requestId: string;
+  scheme: "ultra_keccak_zk_honk";
+  circuitSha256: string;
+  verificationKeySha256: string;
+  settlementRoot: string;
+  transactionReference: string;
+  provingTimeMs: number;
+  chunks: SettlementMatchProofChunk[];
 };
 
 export type ExceptionCircuitProof = {

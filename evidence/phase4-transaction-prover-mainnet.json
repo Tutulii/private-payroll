@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-08-31T05:41:50Z",
+  "purpose": "Phase 4 Starknet transaction prover capacity and compatibility gate",
+  "source": {
+    "repository": "https://github.com/starkware-libs/sequencer",
+    "revision": "e6b6fd2e9932909107833579e5b6efd6c75fa0af",
+    "release": "PRIVACY-0.14.3-RC.2",
+    "dockerfile": "crates/starknet_transaction_prover/Dockerfile",
+    "targetCpu": "x86-64"
+  },
+  "image": {
+    "reference": "registry.fly.io/payo-transaction-prover:deployment-01M1B3AY5ME5RFFQZJPETHYAWZ",
+    "digest": "sha256:bef9094911403608566a9a7c97f3be160104f15c660069d1e06723218bf2b051",
+    "publishedReleaseImageRejected": "SIGILL on the Fly performance CPU; no proof request was accepted by that image"
+  },
+  "runtime": {
+    "app": "payo-transaction-prover",
+    "machineId": "8747439c4593d8",
+    "region": "iad",
+    "cpuKind": "performance",
+    "vcpus": 16,
+    "memoryMiB": 98304,
+    "maxConcurrentRequests": 1,
+    "publicService": false,
+    "serverVersion": "0.10.3-rc.2"
+  },
+  "request": {
+    "chainId": "SN_MAIN",
+    "blockNumber": 14134146,
+    "transactionType": "INVOKE_V3",
+    "transactionHash": "0x7eca0cb4f346c9b471621c18306183263c9d5be4c78442990ef2da2e8fcdbbf",
+    "operation": "zero-fee signed STRK balance_of through the relayer account",
+    "requestBytes": 969,
+    "requestSha256": "e7c967d9b32df89e87c3157d5b71aca40a14f930bb64d9fb33d0c974c63ebc22",
+    "broadcast": false,
+    "mainnetStateChanged": false,
+    "strkSpent": "0"
+  },
+  "result": {
+    "passed": true,
+    "httpStatus": 200,
+    "proofPresent": true,
+    "httpResponseBytes": 306696,
+    "jsonContentBytes": 306527,
+    "httpResponseSha256": "4af89e44ec4c1363b0edcbd494b1ea2ffa6f0132973a36f0fbff108003beb2f4",
+    "virtualOsSteps": 99635,
+    "virtualOsDurationMs": 6844,
+    "recursiveProveDurationMs": 12649,
+    "totalDurationMs": 19494
+  },
+  "operatorConclusion": "A single official transaction proof completes on 16 performance vCPUs and 96 GiB. Keep concurrency at one and the service private. This is capacity evidence, not Phase 4 end-to-end settlement evidence."
+}

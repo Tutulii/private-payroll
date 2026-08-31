@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-08-29T11:43:57Z",
+  "network": "starknet-mainnet",
+  "sourceCommit": "66488bb5ec3191022f8b327ecc8f75fff21f0534",
+  "imageDigest": "sha256:b772b806e2733e66ba579b5c0256ae099f501937967b870df79ff6687467b250",
+  "ci": {
+    "payo": {
+      "runId": 33248701214,
+      "url": "https://github.com/Tutulii/private-payroll/actions/runs/33248701214",
+      "conclusion": "success"
+    },
+    "proofArtifacts": {
+      "runId": 33248701162,
+      "attempt": 2,
+      "url": "https://github.com/Tutulii/private-payroll/actions/runs/33248701162",
+      "conclusion": "success",
+      "browserWorkerProofGeneration": "success"
+    }
+  },
+  "mainnetBinding": {
+    "exceptionSeal": "0x3394e58bb2bb294e0ae92514079a1394c6c66eae8a6c033a6f7f449b1d12ce",
+    "indexConsumer": "payo-exception-vnext-v1"
+  },
+  "fly": {
+    "web": {
+      "app": "private-payroll",
+      "release": 44,
+      "machine": "d897352c37ed98",
+      "health": "ok",
+      "payrollStatus": 200,
+      "activityStatus": 200,
+      "servedNewSeal": true
+    },
+    "prover": {
+      "app": "private-payroll-prover",
+      "release": 10,
+      "machine": "e82de1df1e1998",
+      "cpus": 4,
+      "memoryMiB": 32768,
+      "health": "ok",
+      "unauthenticatedProofRequestStatus": 401,
+      "allowedOriginPreflightStatus": 204
+    }
+  },
+  "indexer": {
+    "observedAt": "2026-08-29T11:38:09Z",
+    "headBlockNumber": 14044231,
+    "nextBlockNumber": 14044232,
+    "rolledBack": 0,
+    "recoveredSubmissions": 0,
+    "caughtUp": true
+  },
+  "liveProductOriginE2E": {
+    "status": "pending",
+    "required": [
+      "Claim v6 accepted from the hosted Activity workflow",
+      "linked Remediation v7 authorized from the hosted Activity workflow",
+      "Ready private payment confirmed",
+      "worker-authorized private balance change observed"
+    ],
+    "completionRule": "Ready confirmation is not reconciliation unless SettlementMatch or authorized note evidence is recorded."
+  }
+}

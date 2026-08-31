@@ -7,7 +7,10 @@ on:
       - "circuits/**"
       - "contracts/**"
       - "lib/proof/**"
+      - "public/circuits/**"
       - "scripts/*proof*"
+      - "scripts/*settlement*"
+      - "scripts/test-phase4-policy-account-devnet.mjs"
       - "package*.json"
       - "toolchains.lock.json"
       - ".github/workflows/proof-artifacts.yml"
@@ -59,6 +62,21 @@ jobs:
         uses: foundry-rs/setup-snfoundry@v6
         with:
           starknet-foundry-version: 0.57.0
+      - name: Install pinned Universal Sierra Compiler
+        run: |
+          payo_usc_version="$(node -p 'require("./toolchains.lock.json").starknet.universalSierraCompiler')"
+          payo_usc_sha="$(node -p 'require("./toolchains.lock.json").starknet.universalSierraCompilerLinuxX64Sha256')"
+          payo_usc_archive="/tmp/universal-sierra-compiler-${payo_usc_version}.tar.gz"
+          payo_usc_root="/tmp/payo-universal-sierra-compiler"
+          curl --fail --location --retry 3 \
+            "https://github.com/software-mansion/universal-sierra-compiler/releases/download/v${payo_usc_version}/universal-sierra-compiler-v${payo_usc_version}-x86_64-unknown-linux-gnu.tar.gz" \
+            --output "$payo_usc_archive"
+          echo "${payo_usc_sha}  ${payo_usc_archive}" | sha256sum --check
+          mkdir -p "$payo_usc_root"
+          tar -xzf "$payo_usc_archive" -C "$payo_usc_root" --strip-components=1
+          echo "$payo_usc_root/bin" >> "$GITHUB_PATH"
+          test "$("$payo_usc_root/bin/universal-sierra-compiler" --version)" = "universal-sierra-compiler ${payo_usc_version}"
+
       - name: Enforce pinned Starknet Foundry
         run: |
           test "$(snforge --version)" = "snforge 0.57.0"
@@ -100,6 +118,64 @@ jobs:
             -b circuits/payroll_integrity/target/payo_payroll_integrity.json \
             > circuits/payroll_integrity/target/gates.json
           node -e 'const fs=require("fs"); const gates=JSON.parse(fs.readFileSync("circuits/payroll_integrity/target/gates.json")); const size=gates.functions[0].circuit_size; if (size > 1048576) throw new Error(`Circuit ${size} exceeds the 2^20 production domain`); console.log(`PayrollIntegrity circuit size: ${size}`);'
+
+      - name: Test and size SettlementMatch v8
+        run: |
+          npm run phase4:settlement:check-generated
+          (
+            cd circuits/settlement_match
+            nargo test --deny-warnings
+            nargo build
+          )
+          node -e 'const fs=require("fs"); const built=JSON.parse(fs.readFileSync("circuits/settlement_match/target/payo_settlement_match.json")); const published=JSON.parse(fs.readFileSync("public/circuits/settlement_match-v8.json")); for (const key of ["noir_version","abi","bytecode","expression_width"]) if (JSON.stringify(built[key]) !== JSON.stringify(published[key])) throw new Error("Published SettlementMatch v8 circuit "+key+" differs from the pinned build");'
+          bb gates --scheme ultra_honk --oracle_hash keccak \
+            -b circuits/settlement_match/target/payo_settlement_match.json \
+            > circuits/settlement_match/target/gates.json
+          node -e 'const fs=require("fs"); const gates=JSON.parse(fs.readFileSync("circuits/settlement_match/target/gates.json")); const fn=gates.functions[0]; if (fn.circuit_size > 4194304) throw new Error("SettlementMatch "+fn.circuit_size+" exceeds the 2^22 production domain"); console.log("SettlementMatch ACIR: "+fn.acir_opcodes+"; circuit size: "+fn.circuit_size);'
+          mkdir -p circuits/settlement_match/target/ci-vk
+          bb write_vk --scheme ultra_honk --oracle_hash keccak \
+            -b circuits/settlement_match/target/payo_settlement_match.json \
+            -o circuits/settlement_match/target/ci-vk
+          node -e 'const fs=require("fs"); const hex=fs.readFileSync("public/circuits/settlement_match-v8.vk.hex","utf8").replace(/\s/g,""); if (!/^[0-9a-f]+$/i.test(hex) || hex.length % 2 !== 0) throw new Error("Committed SettlementMatch v8 VK is malformed"); fs.writeFileSync("circuits/settlement_match/target/committed-vk",Buffer.from(hex,"hex"));'
+          cmp circuits/settlement_match/target/ci-vk/vk circuits/settlement_match/target/committed-vk
+          NODE_OPTIONS=--max-old-space-size=3072 npm run phase4:settlement:verify-main
+
+      - name: Reproduce the SettlementMatch v8 Garaga verifier
+        run: |
+          mkdir -p /tmp/payo-settlement-v8-garaga
+          cd /tmp/payo-settlement-v8-garaga
+          garaga gen \
+            --system ultra_keccak_zk_honk \
+            --vk "$GITHUB_WORKSPACE/circuits/settlement_match/target/ci-vk/vk" \
+            --project-name settlement_verifier_v8
+          sed -i \
+            's/mod UltraKeccakZKHonkVerifier {/mod PayoSettlementMatchV8Verifier {/' \
+            settlement_verifier_v8/src/honk_verifier.cairo
+          (cd settlement_verifier_v8 && scarb fmt)
+          diff -ruB \
+            "$GITHUB_WORKSPACE/contracts/settlement_verifier_v8/src" \
+            settlement_verifier_v8/src
+          (cd "$GITHUB_WORKSPACE/contracts/settlement_verifier_v8" && scarb build)
+
+      - name: Prove SettlementMatch v8 through the generated Cairo verifier
+        run: |
+          NODE_OPTIONS=--max-old-space-size=3072 npm run phase4:settlement:witness
+          mkdir -p circuits/settlement_match/target/ci-proof
+          bb prove --scheme ultra_honk --oracle_hash keccak \
+            --slow_low_memory --storage_budget "$PAYO_BB_STORAGE_BUDGET" \
+            --vk_policy check \
+            -b circuits/settlement_match/target/payo_settlement_match.json \
+            -w circuits/settlement_match/target/witness-v8-fixture.gz \
+            -k circuits/settlement_match/target/ci-vk/vk \
+            -o circuits/settlement_match/target/ci-proof
+          bb verify --scheme ultra_honk --oracle_hash keccak \
+            -k circuits/settlement_match/target/ci-vk/vk \
+            -p circuits/settlement_match/target/ci-proof/proof \
+            -i circuits/settlement_match/target/ci-proof/public_inputs
+          PAYO_PHASE4_SETTLEMENT_PROOF_DIR=circuits/settlement_match/target/ci-proof \
+            PAYO_PHASE4_SETTLEMENT_VK_PATH=circuits/settlement_match/target/ci-vk/vk \
+            npm run phase4:settlement:fixture
+          (cd contracts/settlement_verifier_v8 && snforge test)
 
       - name: Reproduce the merged Phase 3 circuit and verification key
         working-directory: circuits/advanced_obligation
@@ -310,6 +386,9 @@ jobs:
             circuits/payroll_integrity/target/devnet-shard-0/vk
           node scripts/test-phase2-devnet.mjs verify
 
+          npm run phase4:policy:check-artifacts
+          npm run phase4:policy:lifecycle
+
       - name: Run application checks
         run: |
           # The Cairo and Devnet stages above intentionally replace these files
@@ -373,9 +452,12 @@ jobs:
             circuits/payroll_integrity/target/proof_calldata-devnet-shard-1.txt
             circuits/payroll_integrity/target/phase2-devnet-deployment.json
             circuits/payroll_integrity/target/phase2-devnet-evidence.json
+            evidence/phase4-policy-account-devnet.json
             circuits/payroll_integrity/target/prover-benchmark*.json
             circuits/payroll_integrity/target/prover-benchmark-resource.txt
             circuits/payroll_integrity/target/browser-proof-benchmark.json
             circuits/payroll_integrity/target/SHA256SUMS
+            circuits/settlement_match/target/payo_settlement_match.json
+            circuits/settlement_match/target/gates.json
             contracts/integrity_verifier/
           retention-days: 14

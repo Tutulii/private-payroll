@@ -1,0 +1,28 @@
+app = "payo-transaction-prover"
+primary_region = "iad"
+
+[build]
+  # Rebuilt from Starkware sequencer revision
+  # e6b6fd2e9932909107833579e5b6efd6c75fa0af with TARGET_CPU=x86-64.
+  # The published release image uses CPU-specific instructions that SIGILL on
+  # Fly performance VMs; this portable image passed a real SN_MAIN proof.
+  image = "registry.fly.io/payo-transaction-prover:deployment-01M1B3AY5ME5RFFQZJPETHYAWZ"
+  # sha256:bef9094911403608566a9a7c97f3be160104f15c660069d1e06723218bf2b051
+
+[env]
+  CHAIN_ID = "SN_MAIN"
+  PROVER_IP = "0.0.0.0"
+  PROVER_PORT = "3000"
+  MAX_CONCURRENT_REQUESTS = "1"
+  MAX_CONNECTIONS = "4"
+  PREFETCH_STATE = "true"
+  RUST_LOG = "info,starknet_transaction_prover=debug"
+  TINI_SUBREAPER = "1"
+
+# No public service is declared. PAYO reaches the prover through Fly's private
+# network; operators use `fly proxy` for an authenticated local smoke test.
+
+[[vm]]
+  cpu_kind = "performance"
+  cpus = 16
+  memory = "96gb"

@@ -57,6 +57,35 @@ export type OpenedObligationClaimAccess = {
   claimCapabilitySecret: `0x${string}`;
 };
 
+export type WorkerClaimIdentityIssue =
+  | "worker_identity_missing"
+  | "agreement_identity_missing"
+  | "identity_binding_mismatch";
+
+/**
+ * Keeps the pre-payday UI and the durable snapshot builder on one eligibility
+ * rule. Legacy agreements remain payable, but they must never be advertised as
+ * claim-protectable or included silently in a worker-owned claim snapshot.
+ */
+export function obligationWorkerClaimIdentityIssue(
+  obligation: PayrollExecutionObligation,
+): WorkerClaimIdentityIssue | null {
+  const { agreement, payee } = obligation;
+  if (
+    !payee.claimIdentityPrincipalId
+    || !payee.claimIdentityPublicKey
+    || !payee.claimCapabilityCommitment
+  ) return "worker_identity_missing";
+  if (!agreement.claimCapabilityCommitment) return "agreement_identity_missing";
+  try {
+    return BigInt(agreement.claimCapabilityCommitment) === BigInt(payee.claimCapabilityCommitment)
+      ? null
+      : "identity_binding_mismatch";
+  } catch {
+    return "identity_binding_mismatch";
+  }
+}
+
 /**
  * Opens one worker-only claim packet and independently reconstructs every
  * commitment needed by Claim v6. The API routing record is not treated as a
@@ -355,10 +384,16 @@ export async function prepareObligationSnapshotPlan(input: {
     lines,
   });
   const capabilityCommitments = Object.fromEntries(input.obligations.map(({ agreement, payee }) => {
+    const identityIssue = obligationWorkerClaimIdentityIssue({ agreement, payee });
     const agreementCapability = agreement.claimCapabilityCommitment;
     const payeeCapability = payee.claimCapabilityCommitment;
-    if (!agreementCapability || !payeeCapability || BigInt(agreementCapability) !== BigInt(payeeCapability)) {
-      throw new Error(`Agreement ${agreement.agreement.id} has no matching worker claim identity.`);
+    if (identityIssue || !agreementCapability || !payeeCapability) {
+      const reason = identityIssue === "identity_binding_mismatch"
+        ? "does not match the contributor's current worker claim identity"
+        : identityIssue === "agreement_identity_missing"
+          ? "was created without a worker claim identity binding"
+          : "has no worker claim identity";
+      throw new Error(`Agreement ${agreement.agreement.id} ${reason}.`);
     }
     return [agreement.agreement.id, agreementCapability];
   }));

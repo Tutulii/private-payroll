@@ -61,6 +61,8 @@ import {
   type AgentCapabilityDirectoryRecord,
 } from "@/lib/client/agent-capabilities";
 import { runProgressiveTasks, type ProgressiveTask } from "@/lib/client/progressive-tasks";
+import type { AgentExecutionReceipt } from "@/lib/domain/agent-execution";
+import type { AgentMcpConnection, DirectPrivacyAccountClientSummary } from "@/lib/client/payo-client";
 
 const teamFilters = ["Everyone", "Humans", "Agents"] as const;
 const memberTones = ["coral", "blue", "green", "yellow"] as const;
@@ -88,6 +90,15 @@ function localDateTimeInputValue(value: Date): string {
     .toISOString()
     .slice(0, 16);
 }
+function mcpConnectionText(connection: AgentMcpConnection, apiUrl: string): string {
+  return [
+    "PAYO_API_URL=" + JSON.stringify(apiUrl),
+    "PAYO_API_ACCESS_TOKEN=" + JSON.stringify(connection.accessToken),
+    "PAYO_CAPABILITY_ID=" + JSON.stringify(connection.capabilityId),
+    "PAYO_CAPABILITY_ISSUER_PUBLIC_KEY=" + JSON.stringify(connection.issuerPublicKey),
+  ].join("\n");
+}
+
 
 export default function TeamPage() {
   const { notify } = useAppShell();
@@ -96,9 +107,13 @@ export default function TeamPage() {
   const [query, setQuery] = useState("");
   const [copied, setCopied] = useState(false);
   const [payees, setPayees] = useState<PayeeDirectoryRecord[]>([]);
+  const [mcpConnection, setMcpConnection] = useState<AgentMcpConnection | null>(null);
   const [agreements, setAgreements] = useState<PayAgreementDirectoryRecord[]>([]);
   const [principals, setPrincipals] = useState<PrincipalDirectoryRecord[]>([]);
   const [capabilities, setCapabilities] = useState<AgentCapabilityDirectoryRecord[]>([]);
+  const [agentExecutions, setAgentExecutions] = useState<AgentExecutionReceipt[]>([]);
+  const [directPrivacyAccounts, setDirectPrivacyAccounts] = useState<DirectPrivacyAccountClientSummary[]>([]);
+  const [approvalActionId, setApprovalActionId] = useState<string | null>(null);
   const [directoryLoading, setDirectoryLoading] = useState(false);
   const [directoryError, setDirectoryError] = useState("");
   const [showAddPayee, setShowAddPayee] = useState(false);
@@ -163,6 +178,8 @@ export default function TeamPage() {
       setAgreements([]);
       setPrincipals([]);
       setCapabilities([]);
+      setAgentExecutions([]);
+      setDirectPrivacyAccounts([]);
       setDirectoryError("");
       return;
     }
@@ -189,6 +206,14 @@ export default function TeamPage() {
         { label: "Agent capabilities", run: async () => {
           const loaded = await loadEncryptedAgentCapabilities({ client, organizationId, principal });
           if (current()) setCapabilities(loaded);
+        } },
+        { label: "Agent executions", run: async () => {
+          const loaded = await client.listAgentExecutions(organizationId);
+          if (current()) setAgentExecutions(loaded.executions);
+        } },
+        { label: "Autonomous accounts", run: async () => {
+          const loaded = await client.listDirectPrivacyAccounts(organizationId);
+          if (current()) setDirectPrivacyAccounts(loaded.accounts);
         } },
       ];
       const results = await runProgressiveTasks(tasks, { concurrency: 2, timeoutMs: 10_000 });
@@ -435,15 +460,52 @@ export default function TeamPage() {
     }
   };
 
-  const copyToken = async () => {
-    if (!vault.session) {
-      setDirectoryError("Unlock the workspace before creating an organization-scoped MCP connection.");
+  const issueMcpConnection = async (record: AgentCapabilityDirectoryRecord) => {
+    if (!vault.client || !vault.session) {
+      setDirectoryError("Unlock the workspace before issuing an MCP credential.");
       return;
     }
-    await navigator.clipboard?.writeText(`payo://mcp/${vault.session.organizationId}/connect`);
+    setDirectoryLoading(true);
+    setDirectoryError("");
+    try {
+      const { connection } = await vault.client.issueAgentMcpConnection(record.id);
+      setMcpConnection(connection);
+      notify("Scoped MCP credential issued once · copy it now");
+    } catch (error) {
+      setDirectoryError(error instanceof Error ? error.message : "The MCP credential could not be issued.");
+    } finally {
+      setDirectoryLoading(false);
+    }
+  };
+
+  const copyToken = async () => {
+    if (!mcpConnection) {
+      setDirectoryError("Issue an MCP credential from an active capability first.");
+      return;
+    }
+    if (!navigator.clipboard) {
+      setDirectoryError("Clipboard access is unavailable. Use a browser that permits secure clipboard writes.");
+      return;
+    }
+    await navigator.clipboard.writeText(mcpConnectionText(mcpConnection, window.location.origin));
     setCopied(true);
-    notify("Agent connection copied");
+    notify("Scoped MCP configuration copied");
     window.setTimeout(() => setCopied(false), 1800);
+  };
+
+  const revokeMcpConnections = async (record: AgentCapabilityDirectoryRecord) => {
+    if (!vault.client) return;
+    setDirectoryLoading(true);
+    setDirectoryError("");
+    try {
+      const { revocation } = await vault.client.revokeAgentMcpConnections(record.id);
+      if (mcpConnection?.capabilityId === record.id) setMcpConnection(null);
+      notify(revocation.revokedCount > 0 ? "MCP credential revoked" : "No active MCP credential");
+    } catch (error) {
+      setDirectoryError(error instanceof Error ? error.message : "The MCP credential could not be revoked.");
+    } finally {
+      setDirectoryLoading(false);
+    }
   };
 
   const completePrincipalDirectory = async () => {
@@ -467,7 +529,10 @@ export default function TeamPage() {
     }
   };
 
-  const issueAgentCapability = async (payee: PayeeDirectoryRecord) => {
+  const issueAgentCapability = async (
+    payee: PayeeDirectoryRecord,
+    executionMode: "request_approval" | "autonomous_bounded",
+  ) => {
     if (!vault.client || !vault.session) return;
     const agreement = agreements
       .filter((candidate) => candidate.payeeId === payee.id && !candidate.effectiveUntil)
@@ -487,7 +552,8 @@ export default function TeamPage() {
       const periodMultiplier = agreement.agreement.schedule.kind === "recurring"
         ? agreement.agreement.schedule.cadence === "weekly" ? 5n : agreement.agreement.schedule.cadence === "biweekly" ? 3n : 1n
         : 1n;
-      const expiresAt = new Date(Date.now() + 31 * 24 * 60 * 60 * 1_000);
+      const autonomous = executionMode === "autonomous_bounded";
+      const expiresAt = new Date(Date.now() + (autonomous ? 4 * 60 * 60 * 1_000 : 31 * 24 * 60 * 60 * 1_000));
       await issueEncryptedAgentCapability({
         client: vault.client,
         organizationId: vault.session.organizationId,
@@ -497,14 +563,16 @@ export default function TeamPage() {
         limits: [{
           token: agreement.agreement.settlementToken,
           maxPerPaymentAtomic: maxPerPayment.toString(),
-          maxPerPeriodAtomic: (maxPerPayment * periodMultiplier).toString(),
-          approvalThresholdAtomic: maxPerPayment.toString(),
+          maxPerPeriodAtomic: (autonomous ? maxPerPayment : maxPerPayment * periodMultiplier).toString(),
+          approvalThresholdAtomic: (autonomous ? maxPerPayment + 1n : maxPerPayment).toString(),
         }],
         vaultPrincipal: vault.session.principal,
+        executionMode,
+        maxCallCount: autonomous ? 1 : 100,
         expiresAt,
       });
       await refreshPayees();
-      notify("Encrypted approval capability issued");
+      notify(autonomous ? "One-run bounded autonomy issued" : "Encrypted approval capability issued");
     } catch (error) {
       setDirectoryError(error instanceof Error ? error.message : "The agent capability could not be issued.");
     } finally {
@@ -528,6 +596,24 @@ export default function TeamPage() {
       setDirectoryError(error instanceof Error ? error.message : "The agent capability could not be revoked.");
     } finally {
       setDirectoryLoading(false);
+    }
+  };
+
+  const cancelAgentApproval = async (execution: AgentExecutionReceipt) => {
+    if (!vault.client || execution.settlementId) return;
+    setApprovalActionId(execution.executionId);
+    setDirectoryError("");
+    try {
+      await vault.client.cancelAgentExecutionApproval({
+        capabilityId: execution.capabilityId,
+        executionId: execution.executionId,
+      });
+      await refreshPayees();
+      notify("Agent approval cancelled and its reserved limit released");
+    } catch (error) {
+      setDirectoryError(error instanceof Error ? error.message : "The agent approval could not be cancelled.");
+    } finally {
+      setApprovalActionId(null);
     }
   };
 
@@ -740,8 +826,11 @@ export default function TeamPage() {
               <button type="button" className="member-open" onClick={() => openAgreementForm(member.payee)}>{member.ready ? "Update encrypted agreement" : "Add encrypted agreement"} <span>→</span></button>
               {member.kind === "Agent" && member.ready && (
                 member.activeCapability
-                  ? <button type="button" className="member-open member-open--capability" onClick={() => void revokeAgentCapability(member.activeCapability!)} disabled={directoryLoading}>Revoke approval capability <span>×</span></button>
-                  : <button type="button" className="member-open member-open--capability" onClick={() => void issueAgentCapability(member.payee)} disabled={directoryLoading}>Issue approval capability <span>+</span></button>
+                  ? <button type="button" className="member-open member-open--capability" onClick={() => void revokeAgentCapability(member.activeCapability!)} disabled={directoryLoading}>Revoke {member.activeCapability.signedCapability.capability.executionMode === "autonomous_bounded" ? "bounded autonomy" : "approval capability"} <span>×</span></button>
+                  : <>
+                      <button type="button" className="member-open member-open--capability" onClick={() => void issueAgentCapability(member.payee, "request_approval")} disabled={directoryLoading}>Issue approval capability <span>+</span></button>
+                      <button type="button" className="member-open member-open--capability" onClick={() => void issueAgentCapability(member.payee, "autonomous_bounded")} disabled={directoryLoading}>Issue one-run autonomy <span>→</span></button>
+                    </>
               )}
             </article>
           ))}
@@ -756,30 +845,64 @@ export default function TeamPage() {
       <section className="agent-access-card reveal reveal--four">
         <div className="agent-access__intro">
           <div className="agent-access__icon"><Bot size={25} /><Zap size={12} /></div>
-          <div><span className="label">MCP ACCESS</span><h3>Give agents a key—not the keys.</h3><p>Agents can prepare work within precise limits. Human approval still controls every private payroll execution.</p></div>
+          <div><span className="label">MCP ACCESS</span><h3>Give agents a key—not the keys.</h3><p>Ready approval remains the default. A separately issued one-run policy can execute one exact proved payroll without exposing treasury keys.</p></div>
         </div>
         <div className="scope-list">
-          <span><Check size={13} /> Read treasury balance</span>
-          <span><Check size={13} /> Prepare payroll draft</span>
-          <span><Check size={13} /> Request payment</span>
-          <span className="scope-off"><KeyRound size={13} /> Execute payment</span>
+          <span><Check size={13} /> Inspect signed scope</span>
+          <span><Check size={13} /> Read due metadata</span>
+          <span><Check size={13} /> Draft &amp; request payroll</span>
+          <span className="scope-off"><KeyRound size={13} /> No general organization access</span>
         </div>
         <div className="agent-connect">
-          <div><WalletCards size={16} /><span><small>Organization-scoped connection</small><strong>{vault.session ? `payo://mcp/${vault.session.organizationId.slice(0, 8)}…` : "Unlock to create"}</strong></span></div>
-          <button type="button" onClick={copyToken} aria-label="Copy agent connection" disabled={!vault.session}>{copied ? <Check size={16} /> : <Copy size={16} />}</button>
+          <div><WalletCards size={16} /><span><small>ONE-TIME MCP CONNECTION</small><strong>{mcpConnection ? `Capability ${mcpConnection.capabilityId.slice(0, 8)}… · expires ${new Date(mcpConnection.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "Issue from an active capability below"}</strong></span></div>
+          <button type="button" onClick={copyToken} aria-label="Copy scoped MCP configuration" disabled={!mcpConnection}>{copied ? <Check size={16} /> : <Copy size={16} />}</button>
         </div>
-        <div className="access-footnote"><ShieldCheck size={16} /> {capabilities.filter(({ revokedAt }) => !revokedAt).length} active encrypted {capabilities.filter(({ revokedAt }) => !revokedAt).length === 1 ? "capability" : "capabilities"} · human approval remains mandatory <Sparkles size={14} /></div>
+        {agentExecutions.length > 0 && (
+          <div className="agent-capability-list agent-approval-list" aria-label="Agent payroll operations">
+            {agentExecutions.map((execution) => (
+              <div className="agent-capability-row agent-approval-row" key={execution.executionId}>
+                <span><small>{execution.state.replaceAll("_", " ").toUpperCase()}</small><strong>Agent payroll request</strong></span>
+                <span><small>RUN</small><strong>{execution.runId.slice(0, 8)} · request {execution.requestCommitment.slice(0, 10)}…</strong></span>
+                <span><small>UPDATED</small><strong>{new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(execution.updatedAt))}</strong></span>
+                <div className="agent-approval-row__actions">
+                  {execution.state === "approval_pending" && !execution.settlementId && (
+                    <>
+                      <Link className="agent-approval-review" href={`/payroll?agentExecutionId=${encodeURIComponent(execution.executionId)}&capabilityId=${encodeURIComponent(execution.capabilityId)}&runId=${encodeURIComponent(execution.runId)}#private-payroll`}>Review in Payroll</Link>
+                      <button type="button" onClick={() => void cancelAgentApproval(execution)} disabled={approvalActionId === execution.executionId}>{approvalActionId === execution.executionId ? "Cancelling…" : "Cancel"}</button>
+                    </>
+                  )}
+                  {(execution.settlementId || ["submitted", "confirmed", "reconciled", "failed"].includes(execution.state)) && <Link className="agent-approval-review" href="/activity">Open activity</Link>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="access-footnote"><ShieldCheck size={16} /> {capabilities.filter(({ revokedAt }) => !revokedAt).length} active encrypted {capabilities.filter(({ revokedAt }) => !revokedAt).length === 1 ? "capability" : "capabilities"} · Ready approval is the default <Sparkles size={14} /></div>
         {capabilities.length > 0 && (
           <div className="agent-capability-list">
             {capabilities.map((record) => {
               const payee = payees.find(({ principalId }) => principalId === record.principalId);
               const policy = record.signedCapability.capability;
+              const directAccount = directPrivacyAccounts.find(({ capabilityId }) => capabilityId === record.id);
+              const capabilityExecutions = agentExecutions.filter(({ capabilityId }) => capabilityId === record.id);
+              const policyStatus = record.revokedAt
+                ? "REVOKED"
+                : policy.executionMode !== "autonomous_bounded"
+                  ? "READY APPROVAL"
+                  : directAccount?.activationState === "active"
+                    ? directAccount.activeExecutionId ? "AUTONOMY RUNNING" : "AUTONOMY ACTIVE"
+                    : directAccount ? "ACTIVATION REQUIRED" : "POLICY ACCOUNT REQUIRED";
               return (
                 <div className="agent-capability-row" key={record.id}>
-                  <span><small>{record.revokedAt ? "REVOKED" : "APPROVAL REQUIRED"}</small><strong>{payee?.displayName ?? "Encrypted agent"}</strong></span>
+                  <span><small>{policyStatus}</small><strong>{payee?.displayName ?? "Encrypted agent"}</strong></span>
                   <span><small>LIMITS</small><strong>{policy.limits.map((limit) => `${formatTokenAmount(BigInt(limit.maxPerPeriodAtomic), limit.token)} ${limit.token}`).join(" · ")}</strong></span>
+                  <span><small>OPERATIONS</small><strong>{capabilityExecutions.length} recorded · max {policy.maxCallCount} calls{directAccount ? ` · ${directAccount.authorizedRunCount} exact runs` : ""}</strong></span>
                   <span><small>EXPIRES</small><strong>{new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(new Date(policy.expiresAt))}</strong></span>
-                  {!record.revokedAt && <button type="button" onClick={() => void revokeAgentCapability(record)} disabled={directoryLoading}>Revoke</button>}
+                  {!record.revokedAt && <div className="agent-approval-row__actions">
+                    <button type="button" onClick={() => void issueMcpConnection(record)} disabled={directoryLoading}>{mcpConnection?.capabilityId === record.id ? "Rotate MCP key" : "Issue MCP key"}</button>
+                    <button type="button" onClick={() => void revokeMcpConnections(record)} disabled={directoryLoading}>Revoke MCP keys</button>
+                    <button type="button" onClick={() => void revokeAgentCapability(record)} disabled={directoryLoading}>Revoke capability</button>
+                  </div>}
                 </div>
               );
             })}

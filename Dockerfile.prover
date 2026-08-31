@@ -1,6 +1,7 @@
 FROM node:24.17.0-bookworm-slim AS dependencies
 WORKDIR /app
 COPY package.json package-lock.json ./
+COPY vendor ./vendor
 RUN npm ci
 
 FROM dependencies AS builder
@@ -10,11 +11,15 @@ ARG NEXT_PUBLIC_PAYO_SEAL_ADDRESS
 ARG NEXT_PUBLIC_PAYO_POLICY_REGISTRY_ADDRESS
 ARG NEXT_PUBLIC_PAYO_OBLIGATION_REGISTRY_ADDRESS
 ARG NEXT_PUBLIC_PAYO_PROVER_URL
+ARG NEXT_PUBLIC_PAYO_AGENT_SEAL_ADDRESS
+ARG NEXT_PUBLIC_PAYO_AGENT_POLICY_ACCOUNT_ADDRESS
 ENV NEXT_PUBLIC_STARKNET_RPC_URL=${NEXT_PUBLIC_STARKNET_RPC_URL}
 ENV NEXT_PUBLIC_PAYO_SEAL_ADDRESS=${NEXT_PUBLIC_PAYO_SEAL_ADDRESS}
 ENV NEXT_PUBLIC_PAYO_POLICY_REGISTRY_ADDRESS=${NEXT_PUBLIC_PAYO_POLICY_REGISTRY_ADDRESS}
 ENV NEXT_PUBLIC_PAYO_OBLIGATION_REGISTRY_ADDRESS=${NEXT_PUBLIC_PAYO_OBLIGATION_REGISTRY_ADDRESS}
 ENV NEXT_PUBLIC_PAYO_PROVER_URL=${NEXT_PUBLIC_PAYO_PROVER_URL}
+ENV NEXT_PUBLIC_PAYO_AGENT_SEAL_ADDRESS=${NEXT_PUBLIC_PAYO_AGENT_SEAL_ADDRESS}
+ENV NEXT_PUBLIC_PAYO_AGENT_POLICY_ACCOUNT_ADDRESS=${NEXT_PUBLIC_PAYO_AGENT_POLICY_ACCOUNT_ADDRESS}
 COPY . .
 RUN npm run build
 
@@ -23,8 +28,22 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
+ENV PAYO_BB_PATH=/usr/local/bin/payo-bb
+RUN apt-get update \
+ENV PAYO_PRIVACY_SDK_ROOT=/app/node_modules/@starkware-libs/starknet-privacy-sdk
+  && apt-get install -y --no-install-recommends ca-certificates curl \
+  && curl --fail --location --retry 3 \
+    https://github.com/AztecProtocol/barretenberg/releases/download/v3.0.0-nightly.20251104/barretenberg-amd64-linux.tar.gz \
+    --output /tmp/payo-bb.tar.gz \
+  && echo "c6dae1092fed8d1230c2345ffcf4c903a2d787d0e220e9ea8c94b0511ed29c9b  /tmp/payo-bb.tar.gz" | sha256sum --check \
+  && tar -xzf /tmp/payo-bb.tar.gz -C /tmp \
+  && echo "1c28d0bcd137ee1101eb12df8274c9118a4dda48b74872bae067e3c63879a7d0  /tmp/bb" | sha256sum --check \
+  && install -m 0755 /tmp/bb /usr/local/bin/payo-bb \
+  && rm -f /tmp/bb /tmp/payo-bb.tar.gz \
+  && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
+COPY vendor ./vendor
 COPY --chown=node:node --from=builder /app/.next ./.next
 COPY --chown=node:node --from=builder /app/public ./public
 COPY --chown=node:node --from=builder /app/next.config.ts ./next.config.ts
@@ -32,7 +51,7 @@ COPY --chown=node:node --from=builder /app/drizzle ./drizzle
 COPY --chown=node:node --from=builder /app/scripts/migrate-database.mjs ./scripts/migrate-database.mjs
 COPY --chown=node:node --from=builder /app/scripts/run-phase2-workers.mjs ./scripts/run-phase2-workers.mjs
 COPY --chown=node:node --from=builder /app/scripts/start-fly-runtime.mjs ./scripts/start-fly-runtime.mjs
-RUN chmod -R a+rX package.json package-lock.json .next public next.config.ts drizzle scripts
+RUN chmod -R a+rX package.json package-lock.json .next public next.config.ts drizzle scripts vendor
 USER node
 EXPOSE 3000
 CMD ["npm", "start"]

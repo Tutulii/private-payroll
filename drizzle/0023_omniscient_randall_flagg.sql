@@ -1,0 +1,1 @@
+ALTER TABLE "capability_reservations" ADD COLUMN "call_count" integer DEFAULT 1 NOT NULL;

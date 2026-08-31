@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { atomicAmountSchema } from "./payroll";
+import { payrollTokenSchema } from "./payroll";
 import { hashCanonicalJson } from "@/lib/crypto/digest";
 
 export const settlementStates = [
@@ -29,6 +30,54 @@ export const tokenTotalsSchema = z.object({
   "At least one settlement token total must be positive.",
 );
 export type TokenTotals = z.infer<typeof tokenTotalsSchema>;
+
+export const agentSettlementPaymentSchema = z.object({
+  recipientAddress: z.string().regex(/^0x[0-9a-fA-F]+$/),
+  token: payrollTokenSchema,
+  amountAtomic: atomicAmountSchema.refine((value) => BigInt(value) > 0n, "Payment amount must be positive."),
+  purposeCode: z.string().min(1).max(80),
+}).strict();
+export type AgentSettlementPayment = z.infer<typeof agentSettlementPaymentSchema>;
+
+function canonicalAgentPayments(payments: readonly AgentSettlementPayment[]) {
+  if (payments.length < 1 || payments.length > 50) {
+    throw new Error("An agent settlement plan requires 1–50 payments.");
+  }
+  const canonical = payments.map((payment) => {
+    const parsed = agentSettlementPaymentSchema.parse(payment);
+    const recipientAddress = `0x${BigInt(parsed.recipientAddress).toString(16)}`;
+    if (BigInt(recipientAddress) === 0n) throw new Error("Agent settlement recipient cannot be zero.");
+    return { ...parsed, recipientAddress };
+  }).sort((left, right) => {
+    const tokenOrder = left.token.localeCompare(right.token);
+    if (tokenOrder !== 0) return tokenOrder;
+    const leftAddress = BigInt(left.recipientAddress);
+    const rightAddress = BigInt(right.recipientAddress);
+    if (leftAddress !== rightAddress) return leftAddress < rightAddress ? -1 : 1;
+    const amountOrder = BigInt(left.amountAtomic) < BigInt(right.amountAtomic)
+      ? -1
+      : BigInt(left.amountAtomic) > BigInt(right.amountAtomic) ? 1 : 0;
+    return amountOrder || left.purposeCode.localeCompare(right.purposeCode);
+  });
+  const unique = new Set(canonical.map(({ recipientAddress, token }) => `${recipientAddress}:${token}`));
+  if (unique.size !== canonical.length) {
+    throw new Error("Agent settlement recipients must be unique per token.");
+  }
+  return canonical;
+}
+
+export function commitAgentSettlementPlan(input: {
+  organizationId: string;
+  runId: string;
+  payments: readonly AgentSettlementPayment[];
+}): `0x${string}` {
+  return hashCanonicalJson({
+    domain: "PAYO_AGENT_SETTLEMENT_PLAN_V1",
+    organizationId: input.organizationId,
+    runId: input.runId,
+    payments: canonicalAgentPayments(input.payments),
+  });
+}
 
 export const payoActionTokenTotalsSchema = z.object({
   STRK: atomicAmountSchema,

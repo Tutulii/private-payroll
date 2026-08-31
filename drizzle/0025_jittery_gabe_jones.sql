@@ -1,0 +1,1 @@
+ALTER TABLE "capability_reservations" ADD COLUMN "requires_approval" boolean DEFAULT true NOT NULL;

@@ -11,6 +11,8 @@ import {
   PAYROLL_MOBILE_WASM_MAXIMUM_PAGES,
   PAYO_MAX_PROOF_CALLDATA_FELTS,
   PAYO_PROOF_SUBMISSION_OVERHEAD_FELTS,
+  SETTLEMENT_MATCH_CIRCUIT_SHA256,
+  SETTLEMENT_MATCH_VERIFICATION_KEY_SHA256,
   STARKNET_MAX_INVOKE_CALLDATA_FELTS,
   payrollProverBackendOptions,
   safeProofFailure,
@@ -63,6 +65,21 @@ describe("proof-worker privacy protocol", () => {
       .toBe(ADVANCED_OBLIGATION_CIRCUIT_SHA256);
     expect(`0x${createHash("sha256").update(verificationKey).digest("hex")}`)
       .toBe(ADVANCED_OBLIGATION_VERIFICATION_KEY_SHA256);
+    expect(verificationKey).toHaveLength(1_888);
+  });
+
+  it("pins the SettlementMatch v8 circuit and proof-bound verification key", () => {
+    const circuit = readFileSync(
+      new URL("../../public/circuits/settlement_match-v8.json", import.meta.url),
+    );
+    const verificationKey = decodeVerificationKeyHex(readFileSync(
+      new URL("../../public/circuits/settlement_match-v8.vk.hex", import.meta.url),
+      "utf8",
+    ));
+    expect("0x" + createHash("sha256").update(circuit).digest("hex"))
+      .toBe(SETTLEMENT_MATCH_CIRCUIT_SHA256);
+    expect("0x" + createHash("sha256").update(verificationKey).digest("hex"))
+      .toBe(SETTLEMENT_MATCH_VERIFICATION_KEY_SHA256);
     expect(verificationKey).toHaveLength(1_888);
   });
 

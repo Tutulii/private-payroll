@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { mapPayrollPublicInputs, type PayrollIntegrityShardProof } from "@/lib/proof/protocol";
 import { hashProofCalldata } from "@/lib/proof/starknet-calldata";
 import {
+  buildDirectPayrollPrecommitCall,
   buildPayoSealedAction,
   buildPayoSealedPayroll,
   buildVerifySealedShardCall,
@@ -68,6 +69,13 @@ describe("PAYO sealed payroll Starknet calls", () => {
     ]);
     expect(sealed.runNullifierHigh).toBe(PUBLIC_INPUTS[12]);
     expect(sealed.runNullifierLow).toBe(PUBLIC_INPUTS[13]);
+
+    const precommit = buildDirectPayrollPrecommitCall({
+      sealAddress: "0x12345",
+      sealedPayroll: sealed,
+    });
+    expect(precommit.entrypoint).toBe("precommit_direct");
+    expect(precommit.calldata).toEqual(sealed.invokeAction.calldata.slice(1, 17));
   });
 
   it("builds each permissionless follow-up verification call with its Span length", () => {

@@ -16,6 +16,10 @@ const jobs = [
   { name: "recurring-scheduler", path: "/api/internal/recurring-scheduler", intervalMs: 15_000 },
 ];
 
+if (process.env.PAYO_AGENT_EXECUTOR_ENABLED === "true") {
+  jobs.push({ name: "agent-executions", path: "/api/internal/agent-executions", intervalMs: 5_000 });
+}
+
 let stopping = false;
 const controllers = new Set();
 

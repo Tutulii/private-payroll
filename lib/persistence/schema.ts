@@ -48,9 +48,21 @@ export const obligationSnapshotPlanState = pgEnum("obligation_snapshot_plan_stat
 export const idempotencyState = pgEnum("idempotency_state", ["started", "succeeded", "failed"]);
 export const capabilityReservationState = pgEnum("capability_reservation_state", [
   "reserved",
+  "approval_linked",
   "committed",
   "released",
   "expired",
+]);
+export const agentExecutionState = pgEnum("agent_execution_state", [
+  "reserved",
+  "approval_pending",
+  "preparing",
+  "submitting",
+  "submitted",
+  "confirmed",
+  "reconciled",
+  "failed",
+  "released",
 ]);
 export const workerClaimState = pgEnum("worker_claim_state", [
   "prepared",
@@ -535,6 +547,7 @@ export const settlements = pgTable(
     idempotencyKey: text("idempotency_key").notNull(),
     state: settlementState("state").default("approval_pending").notNull(),
     tokenTotalsCommitment: text("token_totals_commitment").notNull(),
+    agentPlanCommitment: text("agent_plan_commitment"),
     transactionHash: text("transaction_hash"),
     submittedAt: timestamp("submitted_at", { withTimezone: true }),
     confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
@@ -932,6 +945,34 @@ export const agentCapabilities = pgTable(
   (table) => [index("agent_capabilities_org_principal_idx").on(table.organizationId, table.principalId)],
 );
 
+/**
+ * One-time-issued MCP bearer credentials. Only the SHA-256 digest is stored;
+ * every request remains bound to the live capability and its exact API scope.
+ */
+export const agentAccessTokens = pgTable(
+  "agent_access_tokens",
+  {
+    id: text("id").primaryKey(),
+    capabilityId: text("capability_id")
+      .notNull()
+      .references(() => agentCapabilities.id, { onDelete: "cascade" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    principalId: text("principal_id").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("agent_access_tokens_token_hash_idx").on(table.tokenHash),
+    index("agent_access_tokens_capability_idx").on(table.capabilityId, table.expiresAt),
+    index("agent_access_tokens_org_principal_idx").on(table.organizationId, table.principalId),
+  ],
+);
 export const capabilityReservations = pgTable(
   "capability_reservations",
   {
@@ -946,6 +987,8 @@ export const capabilityReservations = pgTable(
     requestHash: text("request_hash").notNull(),
     periodKey: text("period_key").notNull(),
     tokenTotals: jsonb("token_totals").notNull(),
+    callCount: integer("call_count").default(1).notNull(),
+    requiresApproval: boolean("requires_approval").default(true).notNull(),
     state: capabilityReservationState("state").default("reserved").notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -955,6 +998,285 @@ export const capabilityReservations = pgTable(
     uniqueIndex("capability_reservations_capability_idempotency_idx").on(table.capabilityId, table.idempotencyKey),
     index("capability_reservations_period_idx").on(table.capabilityId, table.periodKey, table.state),
   ],
+);
+
+export const agentExecutions = pgTable(
+  "agent_executions",
+  {
+    id: text("id").primaryKey(),
+    capabilityId: text("capability_id")
+      .notNull()
+      .references(() => agentCapabilities.id, { onDelete: "restrict" }),
+    reservationId: text("reservation_id")
+      .notNull()
+      .unique()
+      .references(() => capabilityReservations.id, { onDelete: "restrict" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => payrollRuns.id, { onDelete: "restrict" }),
+    settlementId: text("settlement_id")
+      .references(() => settlements.id, { onDelete: "restrict" }),
+    requestCommitment: text("request_commitment").notNull(),
+    requestPayload: jsonb("request_payload").notNull(),
+    state: agentExecutionState("state").default("reserved").notNull(),
+    requiresApproval: boolean("requires_approval").notNull(),
+    runVersion: integer("run_version").notNull(),
+    transactionHash: text("transaction_hash"),
+    attempts: integer("attempts").default(0).notNull(),
+    availableAt: timestamp("available_at", { withTimezone: true }).defaultNow().notNull(),
+    leaseOwner: text("lease_owner"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    lastErrorAt: timestamp("last_error_at", { withTimezone: true }),
+    submissionCommitment: text("submission_commitment"),
+    errorCode: text("error_code"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("agent_executions_capability_request_idx").on(
+      table.capabilityId,
+      table.requestCommitment,
+    ),
+    index("agent_executions_org_state_idx").on(
+      table.organizationId,
+      table.state,
+      table.updatedAt,
+    ),
+    index("agent_executions_run_idx").on(table.runId),
+    uniqueIndex("agent_executions_settlement_idx").on(table.settlementId),
+  ],
+);
+
+/** One explicitly provisioned direct-SDK account per autonomous capability. */
+export const directPrivacyAccounts = pgTable(
+  "direct_privacy_accounts",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    capabilityId: text("capability_id")
+      .notNull()
+      .unique()
+      .references(() => agentCapabilities.id, { onDelete: "restrict" }),
+    config: jsonb("config").notNull(),
+    encryptedSecrets: jsonb("encrypted_secrets").notNull(),
+    encryptedState: jsonb("encrypted_state").notNull(),
+    stateVersion: integer("state_version").default(1).notNull(),
+    activationState: text("activation_state").default("pending").notNull(),
+    activationBlockNumber: bigint("activation_block_number", { mode: "bigint" }),
+    activationBlockHash: text("activation_block_hash"),
+    activationClassHash: text("activation_class_hash"),
+    activationBlockTimestamp: bigint("activation_block_timestamp", { mode: "bigint" }),
+    activatedAt: timestamp("activated_at", { withTimezone: true }),
+    activeExecutionId: text("active_execution_id"),
+    activeLeaseExpiresAt: timestamp("active_lease_expires_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index("direct_privacy_accounts_org_idx").on(table.organizationId)],
+);
+
+/** Exact run paths reviewed by the owner before policy-account activation. */
+export const directPrivacyAuthorizedRuns = pgTable(
+  "direct_privacy_authorized_runs",
+  {
+    id: text("id").primaryKey(),
+    accountId: text("account_id")
+      .notNull()
+      .references(() => directPrivacyAccounts.id, { onDelete: "cascade" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => payrollRuns.id, { onDelete: "restrict" }),
+    runVersion: integer("run_version").notNull(),
+    agreementRoot: text("agreement_root").notNull(),
+    manifestRoot: text("manifest_root").notNull(),
+    runNullifier: text("run_nullifier").notNull(),
+    leaf: text("leaf").notNull(),
+    pathBits: integer("path_bits").notNull(),
+    siblings: jsonb("siblings").notNull(),
+    encryptedWitness: jsonb("encrypted_witness"),
+    witnessStagedAt: timestamp("witness_staged_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("direct_privacy_authorized_account_run_version_idx").on(
+      table.accountId,
+      table.runId,
+      table.runVersion,
+    ),
+    index("direct_privacy_authorized_org_run_idx").on(table.organizationId, table.runId),
+  ],
+);
+
+/**
+ * Owner-staged, executor-encrypted witness and exact run authorization.
+ * Execution requests only reference this material; they cannot provide calls,
+ * calldata, targets, proofs, or signer parameters.
+ */
+export const directPrivacyRunMaterials = pgTable(
+  "direct_privacy_run_materials",
+  {
+    id: text("id").primaryKey(),
+    accountId: text("account_id")
+      .notNull()
+      .references(() => directPrivacyAccounts.id, { onDelete: "cascade" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    capabilityId: text("capability_id")
+      .notNull()
+      .references(() => agentCapabilities.id, { onDelete: "restrict" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => payrollRuns.id, { onDelete: "restrict" }),
+    runVersion: integer("run_version").notNull(),
+    requestCommitment: text("request_commitment").notNull(),
+    materialCommitment: text("material_commitment").notNull().unique(),
+    encryptedMaterial: jsonb("encrypted_material").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("direct_privacy_material_cap_run_version_idx").on(
+      table.capabilityId,
+      table.runId,
+      table.runVersion,
+    ),
+    index("direct_privacy_material_org_run_idx").on(table.organizationId, table.runId),
+  ],
+);
+
+/**
+ * Exact randomized PayrollIntegrity calldata persisted before the
+ * permissionless precommit. Chain state is authoritative for crash recovery;
+ * transaction hashes provide a redacted operational audit trail.
+ */
+export const directPrivacyPayrollAuthorizations = pgTable(
+  "direct_privacy_payroll_authorizations",
+  {
+    executionId: text("execution_id")
+      .primaryKey()
+      .references(() => agentExecutions.id, { onDelete: "restrict" }),
+    accountId: text("account_id")
+      .notNull()
+      .references(() => directPrivacyAccounts.id, { onDelete: "restrict" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    authorizationCommitment: text("authorization_commitment").notNull().unique(),
+    encryptedAuthorization: jsonb("encrypted_authorization").notNull(),
+    state: text("state").default("proof_ready").notNull(),
+    precommitTransactionHash: text("precommit_transaction_hash"),
+    shard0TransactionHash: text("shard_0_transaction_hash"),
+    shard1TransactionHash: text("shard_1_transaction_hash"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index("direct_privacy_payroll_auth_org_state_idx").on(
+    table.organizationId,
+    table.state,
+    table.updatedAt,
+  )],
+);
+
+/** Encrypted, proof-bound plan persisted before any relayer signature exists. */
+export const directPrivacyPreparations = pgTable(
+  "direct_privacy_preparations",
+  {
+    executionId: text("execution_id")
+      .primaryKey()
+      .references(() => agentExecutions.id, { onDelete: "restrict" }),
+    accountId: text("account_id")
+      .notNull()
+      .references(() => directPrivacyAccounts.id, { onDelete: "restrict" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    preparationCommitment: text("preparation_commitment").notNull().unique(),
+    encryptedPreparation: jsonb("encrypted_preparation").notNull(),
+    state: text("state").default("prepared").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index("direct_privacy_preparations_org_state_idx").on(
+    table.organizationId,
+    table.state,
+    table.updatedAt,
+  )],
+);
+
+/** Crash-safe storage for one pre-signed direct-SDK broadcast. */
+export const directPrivacySubmissions = pgTable(
+  "direct_privacy_submissions",
+  {
+    executionId: text("execution_id")
+      .primaryKey()
+      .references(() => agentExecutions.id, { onDelete: "restrict" }),
+    accountId: text("account_id")
+      .notNull()
+      .references(() => directPrivacyAccounts.id, { onDelete: "restrict" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    submissionCommitment: text("submission_commitment").notNull().unique(),
+    expectedTransactionHash: text("expected_transaction_hash").notNull().unique(),
+    encryptedPrepared: jsonb("encrypted_prepared").notNull(),
+    state: text("state").default("prepared").notNull(),
+    transactionHash: text("transaction_hash"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index("direct_privacy_submissions_org_state_idx").on(
+    table.organizationId,
+    table.state,
+    table.updatedAt,
+  )],
+);
+
+/** Durable SettlementMatch proof and one crash-safe FINALIZE transaction at a time. */
+export const directPrivacyReconciliations = pgTable(
+  "direct_privacy_reconciliations",
+  {
+    executionId: text("execution_id")
+      .primaryKey()
+      .references(() => agentExecutions.id, { onDelete: "restrict" }),
+    accountId: text("account_id")
+      .notNull()
+      .references(() => directPrivacyAccounts.id, { onDelete: "restrict" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    state: text("state").default("proving").notNull(),
+    settlementRoot: text("settlement_root").notNull(),
+    transactionReference: text("transaction_reference").notNull(),
+    draftCommitment: text("draft_commitment").unique(),
+    encryptedDraft: jsonb("encrypted_draft"),
+    proofCommitment: text("proof_commitment").unique(),
+    encryptedProof: jsonb("encrypted_proof"),
+    chunkCount: integer("chunk_count"),
+    verifiedCount: integer("verified_count").default(0).notNull(),
+    activeChunkIndex: integer("active_chunk_index"),
+    activeCalldataHash: text("active_calldata_hash"),
+    activeFinalizationCommitment: text("active_finalization_commitment"),
+    encryptedActiveFinalization: jsonb("encrypted_active_finalization"),
+    activeExpectedTransactionHash: text("active_expected_transaction_hash").unique(),
+    activeTransactionHash: text("active_transaction_hash"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index("direct_privacy_reconciliations_org_state_idx").on(
+    table.organizationId,
+    table.state,
+    table.updatedAt,
+  )],
 );
 
 export const auditEvents = pgTable(

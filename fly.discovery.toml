@@ -1,0 +1,25 @@
+app = "payo-privacy-discovery"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile.discovery"
+
+[build.args]
+  # Exact source revision used by PAYO's digest-pinned Privacy SDK. PAYO adds
+  # only an explicit Rustls provider selection required for WSS startup.
+  STARKNET_PRIVACY_REVISION = "66e3caae8c0201227a6719696d004e30d90aea65"
+
+[env]
+  # Fly private networking is IPv6. Binding only IPv4 makes the otherwise
+  # healthy indexer unreachable from PAYO's web worker.
+  API_HOST = "[::]:8080"
+  LOG_FORMAT = "json"
+  RUST_LOG = "info"
+  SERVER_BUDGET = "10000"
+
+# Discovery is an internal dependency. Keeping it off the public Fly proxy
+# prevents viewing-key discovery requests from crossing a public endpoint.
+[[vm]]
+  cpu_kind = "performance"
+  cpus = 4
+  memory = "16gb"

@@ -1,14 +1,32 @@
 import { createHash } from "node:crypto";
 import type { EncryptedVaultRecord, VaultPrincipalKeyPair } from "@/lib/crypto/vault";
-import type { PayoProofWorkerSuccess } from "./protocol";
+import type {
+  PayoProofWorkerSuccess,
+  SettlementMatchProofWorkerSuccess,
+} from "./protocol";
 
-export type ProverQueuedRequest = {
+type PayrollProverQueuedRequest = {
   version: 1;
   requestId: string;
   encryptedWitness: EncryptedVaultRecord;
   principal: VaultPrincipalKeyPair;
   claimAccessGrantId?: string;
 };
+
+type SettlementProverQueuedRequest = {
+  version: 8;
+  requestId: string;
+  encryptedPayrollWitness: EncryptedVaultRecord;
+  encryptedSettlementWitness: EncryptedVaultRecord;
+  principal: VaultPrincipalKeyPair;
+};
+
+export type ProverQueuedRequest =
+  | PayrollProverQueuedRequest
+  | SettlementProverQueuedRequest;
+export type ProverJobResult =
+  | PayoProofWorkerSuccess
+  | SettlementMatchProofWorkerSuccess;
 
 export type ProverJobState = "queued" | "processing" | "complete" | "failed";
 
@@ -17,7 +35,7 @@ export type ProverJobSnapshot = {
   state: ProverJobState;
   createdAt: string;
   updatedAt: string;
-  result?: PayoProofWorkerSuccess;
+  result?: ProverJobResult;
   error?: { code: string; message: string };
 };
 
@@ -25,7 +43,7 @@ type ProverJob = ProverJobSnapshot & {
   key: string;
   principalId: string;
   fingerprint: string;
-  run?: () => Promise<PayoProofWorkerSuccess>;
+  run?: () => Promise<ProverJobResult>;
 };
 
 const COMPLETED_JOB_TTL_MS = 30 * 60_000;
@@ -34,6 +52,14 @@ const MAXIMUM_RETAINED_JOBS = 12;
 const jobs = new Map<string, ProverJob>();
 const queue: string[] = [];
 let draining = false;
+
+export function agentProofJobNamespace(
+  type: "agent-payroll-proof" | "agent-settlement-proof",
+  principalId: string,
+): string {
+  if (!principalId.trim()) throw new Error("PROVER_PRINCIPAL_INVALID");
+  return `${type}:${principalId}`;
+}
 
 function jobKey(principalId: string, requestId: string): string {
   return `${principalId}:${requestId}`;
@@ -104,7 +130,7 @@ async function drainQueue(): Promise<void> {
 export function enqueueProverJob(input: {
   principalId: string;
   request: ProverQueuedRequest;
-  run: () => Promise<PayoProofWorkerSuccess>;
+  run: () => Promise<ProverJobResult>;
 }): ProverJobSnapshot {
   removeExpiredJobs();
   const key = jobKey(input.principalId, input.request.requestId);

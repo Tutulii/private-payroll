@@ -6,7 +6,6 @@ import {
   agentCapabilitySchema,
   authorizePaymentBatch,
   paymentIntentBatchSchema,
-  verifySignedCapability,
   type PaymentIntent,
   type SignedCapability,
 } from "@/lib/domain/capability";
@@ -14,6 +13,7 @@ import { generateUuidV7 } from "@/lib/domain/records";
 import { tokenTotalsSchema, type TokenTotals } from "@/lib/domain/settlement";
 import type { AuthenticatedPrincipal } from "@/lib/server/auth";
 import { ApiError } from "@/lib/server/auth";
+import { decryptCapabilityPolicy } from "@/lib/server/capability-policy-crypto";
 import { getDatabase } from "./db";
 import { requireOrganizationRoleWith } from "./repository";
 import { agentCapabilities, auditEvents, capabilityReservations } from "./schema";
@@ -36,17 +36,20 @@ function totalsForIntents(intents: readonly PaymentIntent[]): TokenTotals {
 
 function addReservationSpend(
   signedCapability: SignedCapability,
-  reservations: Array<{ tokenTotals: unknown }>,
+  reservations: Array<{ tokenTotals: unknown; callCount: number }>,
 ) {
   const capability = agentCapabilitySchema.parse(signedCapability.capability);
   const additional = { STRK: 0n, USDC: 0n };
+  let additionalCalls = 0;
   for (const reservation of reservations) {
     const totals = tokenTotalsSchema.parse(reservation.tokenTotals);
     additional.STRK += BigInt(totals.STRK);
     additional.USDC += BigInt(totals.USDC);
+    additionalCalls += reservation.callCount;
   }
   return {
     ...capability,
+    usedCallCount: capability.usedCallCount + additionalCalls,
     limits: capability.limits.map((limit) => ({
       ...limit,
       spentThisPeriodAtomic: (
@@ -86,7 +89,12 @@ export async function reserveCapabilityPayment(input: {
       .limit(1);
     if (!stored) throw new ApiError(404, "Agent capability not found.", "CAPABILITY_NOT_FOUND");
     await requireOrganizationRoleWith(transaction, stored.organizationId, input.principal, ["admin", "operator"]);
-    const signedCapability = verifySignedCapability(stored.policy);
+    const signedCapability = decryptCapabilityPolicy(stored.policy, {
+      capabilityId: stored.id,
+      organizationId: stored.organizationId,
+      principalId: stored.principalId,
+      capabilityHash: stored.capabilityHash,
+    });
     if (signedCapability.capability.principalId !== input.principal.principalId) {
       throw new ApiError(403, "Only the capability principal can reserve its limits.", "CAPABILITY_PRINCIPAL_MISMATCH");
     }
@@ -119,13 +127,17 @@ export async function reserveCapabilityPayment(input: {
       ));
     const periodKey = reservationPeriodKey(signedCapability);
     const activeReservations = await transaction
-      .select({ tokenTotals: capabilityReservations.tokenTotals })
+      .select({
+        tokenTotals: capabilityReservations.tokenTotals,
+        callCount: capabilityReservations.callCount,
+      })
       .from(capabilityReservations)
       .where(and(
         eq(capabilityReservations.capabilityId, input.capabilityId),
         eq(capabilityReservations.periodKey, periodKey),
         or(
           eq(capabilityReservations.state, "committed"),
+          eq(capabilityReservations.state, "approval_linked"),
           and(eq(capabilityReservations.state, "reserved"), gt(capabilityReservations.expiresAt, now)),
         ),
       ));
@@ -144,7 +156,14 @@ export async function reserveCapabilityPayment(input: {
       stored.expiresAt.getTime(),
       ...effectiveCapability.limits.map((limit) => new Date(limit.periodEndsAt).getTime()),
     );
-    const expiresAt = new Date(Math.min(now.getTime() + RESERVATION_TTL_MS, latestPeriodEnd));
+    // Human approvals remain reserved through the signed policy period. Once
+    // linked to a Ready settlement they become `approval_linked` and cannot be
+    // silently reused until submission or explicit cancellation. Autonomous
+    // reservations keep the short preparation lease.
+    const reservationHorizon = authorization.requiresApproval
+      ? latestPeriodEnd
+      : Math.min(now.getTime() + RESERVATION_TTL_MS, latestPeriodEnd);
+    const expiresAt = new Date(reservationHorizon);
     const id = generateUuidV7(now.getTime());
     const [reservation] = await transaction
       .insert(capabilityReservations)
@@ -156,6 +175,8 @@ export async function reserveCapabilityPayment(input: {
         requestHash,
         periodKey,
         tokenTotals,
+        callCount: intents.length,
+        requiresApproval: authorization.requiresApproval,
         expiresAt,
       })
       .returning();
@@ -165,7 +186,12 @@ export async function reserveCapabilityPayment(input: {
       actorId: input.principal.principalId,
       action: "agent_capability.limit_reserved",
       subjectId: id,
-      metadata: { capabilityHash: stored.capabilityHash, requestHash, tokenTotals },
+      metadata: {
+        capabilityHash: stored.capabilityHash,
+        requestHash,
+        tokenTotalsCommitment: hashCanonicalJson({ domain: "PAYO_AGENT_TOKEN_TOTALS_V1", tokenTotals }),
+        callCount: intents.length,
+      },
     });
     return { ...reservation, replayed: false, authorization };
   });

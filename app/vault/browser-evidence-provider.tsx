@@ -16,6 +16,7 @@ import {
   type VaultPrincipalKeyPair,
 } from "@/lib/crypto/vault";
 import { hashCanonicalJson } from "@/lib/crypto/digest";
+import { hashCapability, type SignedCapability } from "@/lib/domain/capability";
 
 const ORGANIZATION_ID = "018f1000-0000-7000-8000-000000000030";
 const ORGANIZATION_SECRET = `0x${"30".repeat(32)}`;
@@ -325,6 +326,83 @@ export function PayoBrowserEvidenceProvider({ children }: { children: ReactNode 
         schedules: readState().schedules.filter((schedule) =>
           schedule.materializedAt && new Date(schedule.dueAt).getTime() <= now),
       };
+    },
+    async registerEncryptedAgentCapability(input: {
+      signedCapability: SignedCapability;
+      recordId: string;
+      revision: 1;
+      envelope: EncryptedVaultRecord;
+    }) {
+      if (input.signedCapability.capability.id !== input.recordId) {
+        throw new Error("Synthetic capability identity mismatch.");
+      }
+      const createdAt = new Date().toISOString();
+      mutate((state) => storeRecord(state, {
+        id: input.recordId,
+        recordType: "agent-capability",
+        revision: input.revision,
+        envelope: input.envelope,
+        createdAt,
+      }));
+      return {
+        capability: {
+          id: input.recordId,
+          capabilityHash: hashCapability(input.signedCapability.capability),
+          expiresAt: input.signedCapability.capability.expiresAt,
+          replayed: false,
+        },
+      };
+    },
+    async revokeEncryptedAgentCapability(input: {
+      capabilityId: string;
+      organizationId: string;
+      revision: number;
+      envelope: EncryptedVaultRecord;
+    }) {
+      const revokedAt = new Date().toISOString();
+      mutate((state) => storeRecord(state, {
+        id: input.capabilityId,
+        recordType: "agent-capability",
+        revision: input.revision,
+        envelope: input.envelope,
+        createdAt: revokedAt,
+      }));
+      return { capability: { id: input.capabilityId, revokedAt, replayed: false } };
+    },
+    async issueAgentMcpConnection(capabilityId: string) {
+      const encrypted = latestRecords(readState()).find((record) =>
+        record.id === capabilityId && record.recordType === "agent-capability");
+      if (!encrypted) throw new Error("Synthetic capability not found.");
+      const record = decryptVaultRecord(encrypted.envelope, SYNTHETIC_PRINCIPAL) as {
+        principalId: string;
+        revokedAt?: string;
+        signedCapability: SignedCapability;
+      };
+      if (record.revokedAt) throw new Error("Synthetic capability is revoked.");
+      const createdAt = new Date().toISOString();
+      return {
+        connection: {
+          tokenId: crypto.randomUUID(),
+          capabilityId,
+          organizationId: record.signedCapability.capability.organizationId,
+          principalId: record.principalId,
+          issuerPublicKey: record.signedCapability.issuerPublicKey,
+          accessToken: `payo_agent_browser_${crypto.randomUUID().replaceAll("-", "")}`,
+          expiresAt: new Date(Date.now() + 4 * 60 * 60 * 1_000).toISOString(),
+          revokedAt: null,
+          lastSeenAt: null,
+          createdAt,
+        },
+      };
+    },
+    async revokeAgentMcpConnections(capabilityId: string) {
+      return { revocation: { capabilityId, revokedCount: 1 } };
+    },
+    async listAgentExecutions() {
+      return { executions: [] };
+    },
+    async listDirectPrivacyAccounts() {
+      return { accounts: [] };
     },
     async listSettlements() {
       return { settlements: [{

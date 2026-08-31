@@ -39,6 +39,7 @@ import {
   waitForExceptionAuthorization,
 } from "@/lib/client/exception-proof-recovery";
 import {
+  cancelAuthorizedRemediationPayment,
   executeAuthorizedRemediationPayment,
 } from "@/lib/client/remediation-payment";
 import {
@@ -102,6 +103,7 @@ export function WageClaimsVNextCard() {
   const [stage, setStage] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [remediationFeedbackId, setRemediationFeedbackId] = useState("");
 
   const organization = vault.organizations.find(({ id }) =>
     id === vault.session?.organizationId);
@@ -387,6 +389,7 @@ export function WageClaimsVNextCard() {
 
   const continueRemediation = async (remediation: WageRemediationSummary) => {
     setActiveId(remediation.id);
+    setRemediationFeedbackId(remediation.id);
     setError("");
     setSuccess("");
     try {
@@ -433,7 +436,7 @@ export function WageClaimsVNextCard() {
           remediation,
           principal: runtime.principal,
           sealAddress: runtime.sealAddress,
-          submit: starknet.runProofBoundException,
+          prepareSubmit: starknet.prepareProofBoundException,
           onStage: (value) => setStage({
             loading: "Checking exact authorized payment",
             recording: "Saving the private payment intent",
@@ -443,6 +446,29 @@ export function WageClaimsVNextCard() {
         });
         setSuccess("Private remediation submitted · " + shortId(result.transactionHash));
       }
+      await refresh();
+    } catch (cause) {
+      const message = workflowError(cause);
+      await refresh();
+      setError(message);
+    } finally {
+      setActiveId("");
+      setStage("");
+    }
+  };
+
+  const cancelRemediationPayment = async (remediation: WageRemediationSummary) => {
+    setActiveId(remediation.id);
+    setRemediationFeedbackId(remediation.id);
+    setError("");
+    setSuccess("");
+    setStage("Cancelling the unsigned Ready request");
+    try {
+      const { client } = requireRuntime();
+      await cancelAuthorizedRemediationPayment({ client, remediation });
+      setSuccess(
+        "Unsigned Ready request cancelled. The authorized remediation can be retried safely.",
+      );
       await refresh();
     } catch (cause) {
       const message = workflowError(cause);
@@ -656,8 +682,12 @@ export function WageClaimsVNextCard() {
           {remediation && <div className="wage-vnext-state">
             <span><strong>Remediation {shortId(remediation.id)}</strong><small>{remediation.state.replaceAll("_", " ")}</small></span>
             {["prepared", "proved", "authorization_pending", "failed", "authorized", "payment_pending"].includes(remediation.state) && <button type="button" onClick={() => void continueRemediation(remediation)} disabled={Boolean(activeId)}>{activeId === remediation.id ? <LoaderCircle className="spin" size={14} /> : remediation.state === "authorized" || remediation.state === "payment_pending" ? <WalletCards size={14} /> : <ShieldCheck size={14} />} {remediation.state === "authorized" ? "Pay privately" : remediation.state === "payment_pending" ? "Recover Ready payment" : "Resume"}</button>}
+            {remediation.state === "payment_pending" && <button type="button" className="button button--soft" onClick={() => void cancelRemediationPayment(remediation)} disabled={Boolean(activeId)}>Cancel unsigned request</button>}
             {remediation.state === "payment_confirmed" && <i><CheckCircle2 size={13} /> Payment confirmed · reconciliation evidence pending</i>}
             {remediation.state === "reconciled" && <i><CheckCircle2 size={13} /> Payment reconciled</i>}
+            {remediationFeedbackId === remediation.id && stage && <p className="private-exception-feedback private-exception-feedback--progress" role="status"><LoaderCircle className="spin" size={14} /> {stage}</p>}
+            {remediationFeedbackId === remediation.id && error && <p className="private-exception-feedback private-exception-feedback--error" role="alert"><ShieldAlert size={14} /> {error}</p>}
+            {remediationFeedbackId === remediation.id && success && <p className="private-exception-feedback private-exception-feedback--success" role="status"><CheckCircle2 size={14} /> {success}</p>}
           </div>}
         </article>;
       })}

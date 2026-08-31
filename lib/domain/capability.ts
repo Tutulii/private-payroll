@@ -44,6 +44,8 @@ export const agentCapabilitySchema = z
     purposeCodes: z.array(z.string().min(1).max(80)).min(1),
     limits: z.array(capabilityLimitSchema).min(1),
     executionMode: z.enum(["draft_only", "request_approval", "autonomous_bounded"]),
+    maxCallCount: z.number().int().min(1).max(10_000),
+    usedCallCount: z.number().int().min(0).max(10_000),
     validAfter: z.string().datetime(),
     expiresAt: z.string().datetime(),
     nonce: z.string().min(16).max(256),
@@ -67,6 +69,12 @@ export const agentCapabilitySchema = z
         context.addIssue({ code: "custom", path: ["limits"], message: `Missing limit for ${token}.` });
       }
     }
+    if (capability.usedCallCount > capability.maxCallCount) {
+      context.addIssue({ code: "custom", path: ["usedCallCount"], message: "Used calls exceed the signed call limit." });
+    }
+    if (capability.executionMode === "draft_only" && capability.allowedActions.includes("request_execution")) {
+      context.addIssue({ code: "custom", path: ["allowedActions"], message: "Draft-only capabilities cannot request execution." });
+    }
     if (new Date(capability.validAfter) >= new Date(capability.expiresAt)) {
       context.addIssue({ code: "custom", path: ["expiresAt"], message: "Expiry must follow activation." });
     }
@@ -84,20 +92,55 @@ export type SignedCapability = z.infer<typeof signedCapabilitySchema>;
 
 export const paymentIntentSchema = z
   .object({
+    intentVersion: z.literal("payo-payment-intent-v1"),
     intentId: z.string().min(8).max(128),
     organizationId: z.string().min(8).max(128),
-    action: agentActionSchema,
+    runId: z.string().min(8).max(128),
+    action: z.literal("request_execution"),
     token: payrollTokenSchema,
     recipientAddress: starknetAddressSchema,
     amountAtomic: atomicAmountSchema,
     purposeCode: z.string().min(1).max(80),
     capabilityNonce: z.string().min(16).max(256),
     createdAt: z.string().datetime(),
+    validUntil: z.string().datetime(),
   })
-  .strict();
+  .strict()
+  .superRefine((intent, context) => {
+    const duration = new Date(intent.validUntil).getTime() - new Date(intent.createdAt).getTime();
+    if (duration <= 0 || duration > 5 * 60 * 1000) {
+      context.addIssue({ code: "custom", path: ["validUntil"], message: "Payment intents may be valid for at most five minutes." });
+    }
+  });
 export type PaymentIntent = z.infer<typeof paymentIntentSchema>;
 
 export const paymentIntentBatchSchema = z.array(paymentIntentSchema).min(1).max(50);
+
+export const agentExecutionRequestSchema = z.object({
+  requestVersion: z.literal("payo-agent-execution-v1"),
+  runId: z.string().min(8).max(128),
+  intents: paymentIntentBatchSchema,
+}).strict().superRefine((request, context) => {
+  const first = request.intents[0];
+  for (let index = 0; index < request.intents.length; index += 1) {
+    const intent = request.intents[index];
+    if (intent.runId !== request.runId) {
+      context.addIssue({
+        code: "custom",
+        path: ["intents", index, "runId"],
+        message: "Every payment intent must bind the execution run.",
+      });
+    }
+    if (intent.organizationId !== first.organizationId) {
+      context.addIssue({
+        code: "custom",
+        path: ["intents", index, "organizationId"],
+        message: "A payment execution cannot cross organizations.",
+      });
+    }
+  }
+});
+export type AgentExecutionRequest = z.infer<typeof agentExecutionRequestSchema>;
 
 export type CapabilityDecision = {
   allowed: boolean;
@@ -107,6 +150,9 @@ export type CapabilityDecision = {
     | "APPROVAL_REQUIRED"
     | "NOT_YET_VALID"
     | "EXPIRED"
+    | "INTENT_NOT_YET_VALID"
+    | "INTENT_EXPIRED"
+    | "CALL_LIMIT_EXCEEDED"
     | "ACTION_DENIED"
     | "TOKEN_DENIED"
     | "RECIPIENT_DENIED"
@@ -186,6 +232,9 @@ export function authorizePaymentIntent(
   ) return deny(capability, "CAPABILITY_MISMATCH");
   if (timestamp < new Date(capability.validAfter).getTime()) return deny(capability, "NOT_YET_VALID");
   if (timestamp >= new Date(capability.expiresAt).getTime()) return deny(capability, "EXPIRED");
+  if (new Date(intent.createdAt).getTime() > timestamp + 30_000) return deny(capability, "INTENT_NOT_YET_VALID");
+  if (timestamp >= new Date(intent.validUntil).getTime()) return deny(capability, "INTENT_EXPIRED");
+  if (capability.usedCallCount >= capability.maxCallCount) return deny(capability, "CALL_LIMIT_EXCEEDED");
   if (!capability.allowedActions.includes(intent.action)) return deny(capability, "ACTION_DENIED");
   if (!capability.allowedTokens.includes(intent.token)) return deny(capability, "TOKEN_DENIED");
   if (
@@ -241,6 +290,7 @@ export function authorizePaymentBatch(
     if (decision.allowed) {
       workingCapability = {
         ...workingCapability,
+        usedCallCount: workingCapability.usedCallCount + 1,
         limits: workingCapability.limits.map((limit) =>
           limit.token === intent.token
             ? {
