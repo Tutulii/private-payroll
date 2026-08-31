@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   loadPinnedPrivacySdk,
@@ -6,7 +7,10 @@ import {
   resetPinnedPrivacySdkForTests,
 } from "./privacy-sdk-loader";
 
-const sdkRoot = "/data/data/com.termux/files/usr/tmp/payo-starknet-privacy-rc2/sdk";
+const sdkRoot = resolve(
+  process.cwd(),
+  "node_modules/@starkware-libs/starknet-privacy-sdk",
+);
 
 describe("pinned Privacy SDK loader", () => {
   beforeEach(() => resetPinnedPrivacySdkForTests());
@@ -23,7 +27,7 @@ describe("pinned Privacy SDK loader", () => {
   });
 
   it("rejects an unpinned SDK build", async () => {
-    await expect(loadPinnedPrivacySdk("/data/data/com.termux/files/home/privacy-preview"))
+    await expect(loadPinnedPrivacySdk(process.cwd()))
       .rejects.toThrow(/pinned artifact|ENOENT/);
   });
 

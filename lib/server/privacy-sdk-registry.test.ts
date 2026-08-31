@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   deserializePrivacyHistoryCursor,
@@ -7,14 +9,18 @@ import {
 } from "./privacy-sdk-registry";
 import { loadPinnedPrivacySdk } from "./privacy-sdk-loader";
 
-const sdkRoot = "/data/data/com.termux/files/usr/tmp/payo-starknet-privacy-rc2/sdk";
+const sdkRoot = resolve(
+  process.cwd(),
+  "node_modules/@starkware-libs/starknet-privacy-sdk",
+);
 
 describe("encrypted Privacy SDK state codec", () => {
   it("round-trips channels, notes and discovery cursors without bigint loss", async () => {
     const runtime = await loadPinnedPrivacySdk(sdkRoot);
-    const internal = await import(
-      "/data/data/com.termux/files/usr/tmp/payo-starknet-privacy-rc2/sdk/dist/internal/channel.js"
+    const internalUrl = pathToFileURL(
+      resolve(sdkRoot, "dist/internal/channel.js"),
     );
+    const internal = await import(internalUrl.href);
     const channels = new runtime.sdk.AddressMap([
       [2n, new internal.Channel(41n, 43n, [[7n, { tokenIndex: 1, noteNonce: 3 }]])],
     ]);

@@ -33,7 +33,7 @@ ENV PAYO_PRIVACY_SDK_ROOT=/app/node_modules/@starkware-libs/starknet-privacy-sdk
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl \
   && curl --fail --location --retry 3 \
-    https://github.com/AztecProtocol/barretenberg/releases/download/v3.0.0-nightly.20251104/barretenberg-amd64-linux.tar.gz \
+    https://github.com/AztecProtocol/aztec-packages/releases/download/v3.0.0-nightly.20251104/barretenberg-amd64-linux.tar.gz \
     --output /tmp/payo-bb.tar.gz \
   && echo "c6dae1092fed8d1230c2345ffcf4c903a2d787d0e220e9ea8c94b0511ed29c9b  /tmp/payo-bb.tar.gz" | sha256sum --check \
   && tar -xzf /tmp/payo-bb.tar.gz -C /tmp \
