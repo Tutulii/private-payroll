@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "network": "starknet-mainnet",
+  "chainId": "0x534e5f4d41494e",
+  "updatedAt": "2026-09-01T11:29:08Z",
+  "policyAccount": {
+    "address": "0x656928a6f3aeb62c2e62ff7457d351a41ed987ceed07c514539165662ecb7e0",
+    "classHash": "0x282ed1d7682b465e1189877a1286776e0134030a84cef22101be038812bae8a",
+    "ownerPublicKey": "0x18e71b3a12c6b6aeecdb4d2cbcf59f143acf5547371750c23e828082b839cc1",
+    "paused": false,
+    "publicStrkBalanceFriAfterRegistration": "11310318476453836440",
+    "poolAllowanceFriAfterRegistration": "12000000000000000000"
+  },
+  "treasury": {
+    "poolAddress": "0x40337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+    "viewingPublicKey": "0xf7ea4ef939f75b1777390f719836dcf652d070c503d07fe7bc7c7ba9b54f04",
+    "poolFeeFri": "6000000000000000000",
+    "privateStrkFundingIndexed": true,
+    "privateAmountDisclosed": false,
+    "discoveryObservedBlock": 14196362
+  },
+  "transactions": {
+    "funding": {
+      "transactionHash": "0x18efc86065b91fe73dd7dad9085cb08c5b9806a494d6bbfb2f68f7515635026",
+      "blockNumber": 14194477,
+      "blockHash": "0x2f80e166bca8ecd97457995eaffc1fc5e84cdf6f6b354ad8fbaf61fb900950",
+      "executionStatus": "SUCCEEDED",
+      "finalityStatus": "ACCEPTED_ON_L2",
+      "actualFeeFri": "55514240023138569",
+      "transferredFri": "20000000000000000000"
+    },
+    "registration": {
+      "transactionHash": "0x7b50b46e25bea43603126596554f86c465175ced90c2fe1496f1a9372a1dbcb",
+      "blockNumber": 14195201,
+      "blockHash": "0x3ae108cb5fcfd062db0437fb85d61ce49152881a94d4af7990d65d2415280b5",
+      "executionStatus": "SUCCEEDED",
+      "finalityStatus": "ACCEPTED_ON_L2",
+      "actualFeeFri": "2689681523546163560",
+      "poolFeeFri": "6000000000000000000"
+    },
+    "ownerRotation": {
+      "transactionHash": "0x24acdfaeb99b97f1291c7d17619e3ff591e3a9631eed7143c5a5d3604e1c881",
+      "blockNumber": 14195417,
+      "blockHash": "0x7cc5660b02577fcfef3d19e1fc35b1e46566bc52522ee3965311a1f29136325",
+      "executionStatus": "SUCCEEDED",
+      "finalityStatus": "ACCEPTED_ON_L2",
+      "actualFeeFri": "34535746559995256"
+    }
+  },
+  "signer": {
+    "app": "payo-policy-signer",
+    "image": "deployment-01M1E8SHYAHS0C0XFGBW8AREQB",
+    "machine": "784e4dea051028",
+    "region": "sin",
+    "privateNetworkOnly": true,
+    "healthPassed": true,
+    "attestedOwnerPublicKey": "0x18e71b3a12c6b6aeecdb4d2cbcf59f143acf5547371750c23e828082b839cc1",
+    "negativeControls": {
+      "missingAuthenticationStatus": 401,
+      "malformedPolicyStatus": 400,
+      "replayedNonceStatus": 401,
+      "unknownRouteStatus": 404
+    }
+  },
+  "verification": {
+    "inventoryBlockNumber": 14195790,
+    "contractClassMatches": 12,
+    "contractClassTotal": 12,
+    "ownerReadbackPassed": true,
+    "registrationReadbackPassed": true,
+    "executorEnabled": false,
+    "offlineRecoveryCopyConfirmed": true
+  },
+  "canary": {
+    "status": "pending",
+    "reason": "One-run policy activation, private settlement, SettlementMatch finalization, reconciliation and replay rejection are not yet recorded."
+  }
+}

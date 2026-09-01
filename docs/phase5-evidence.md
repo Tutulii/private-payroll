@@ -20,19 +20,46 @@ These three hashes satisfy the public sprint's baseline `strk20.json` transactio
 shape. They do **not** replace PAYO's stricter advanced-obligation/autonomous-agent
 canary requirement.
 
-## Isolated-signer cutover snapshot
+## Isolated-signer cutover
 
-Read-only RPC inspection at Mainnet block 14,187,831 recorded:
+The Phase 5 cutover was performed on 2026-09-01 with autonomous dispatch kept
+disabled. Every transaction below was simulated immediately before explicit
+approval and then independently read back from Starknet Mainnet:
 
-- policy account `0x656928a6f3aeb62c2e62ff7457d351a41ed987ceed07c514539165662ecb7e0` has the reviewed class hash `0x282ed1d7682b465e1189877a1286776e0134030a84cef22101be038812bae8a`;
-- its current owner is `0x6e3e81271a762ead3ac1efc8c1193397882a7851f10ce7deea7ec83433da8ef` and it is not paused;
-- its STRK20 viewing-key registration is zero and its public STRK balance is zero;
-- the `payo-policy-signer` Fly application does not yet exist;
-- the hosted web has no policy-signer HMAC/public-key or policy-treasury viewing-key secrets and therefore its prematurely enabled autonomous worker fails closed.
+| Operation | Transaction | Block | Actual transaction fee |
+|---|---|---:|---:|
+| Fund policy account with exactly 20 public STRK | `0x18efc86065b91fe73dd7dad9085cb08c5b9806a494d6bbfb2f68f7515635026` | 14,194,477 | 0.055514240023138569 STRK |
+| Register treasury viewing identity and approve a bounded pool allowance | `0x7b50b46e25bea43603126596554f86c465175ced90c2fe1496f1a9372a1dbcb` | 14,195,201 | 2.689681523546163560 STRK |
+| Rotate policy-account owner to the isolated signer | `0x24acdfaeb99b97f1291c7d17619e3ff591e3a9631eed7143c5a5d3604e1c881` | 14,195,417 | 0.034535746559995256 STRK |
 
-The source configuration now keeps the executor disabled until cutover, binds the
-private signer to Fly IPv6, and records the cutover ordering in
-`docs/PHASE5_RELEASE_PLAN.md`. No Mainnet mutation has been submitted in Phase 5.
+The registration call paid the live 6 STRK pool fee in addition to its
+transaction fee. Its final read-back matched treasury public key
+`0xf7ea4ef939f75b1777390f719836dcf652d070c503d07fe7bc7c7ba9b54f04`,
+left a deliberately bounded 12 STRK pool allowance, and left
+11.310318476453836440 public STRK on the policy account. The owner rotation's
+final read-back matched
+`0x18e71b3a12c6b6aeecdb4d2cbcf59f143acf5547371750c23e828082b839cc1`.
+The offline owner recovery copy was confirmed before rotation.
+
+The private `payo-policy-signer` Fly application is now deployed from image
+`deployment-01M1E8SHYAHS0C0XFGBW8AREQB`. Machine `784e4dea051028` is healthy
+in `sin`; it has no public HTTP service and is reachable only over Fly 6PN.
+The hosted web read `/health` through the private network and received the exact
+rotated owner public key. Live rejection probes returned 401 for missing HMAC,
+400 for an authenticated malformed policy, 401 for replay of the same nonce,
+and 404 for an unknown route. The web holds the treasury viewing key and signer
+client material, but not the policy-owner key. Its executor remains explicitly
+disabled, so human Ready payroll remains the default while the canary is pending.
+
+At Mainnet block 14,195,790, the complete inventory verifier matched all 12 live
+pool, registry, verifier, seal and policy-account class hashes. The owner and
+treasury status verifiers independently matched the rotated owner and registered
+viewing key.
+
+`npm run verify:phase5-cutover` independently replays all three receipts and
+historical read-backs: funded balance, registered viewing key, bounded pool
+allowance, rotated owner, pause state and deployed class hash. It also fails if
+the evidence discloses the private funding amount or enables the executor early.
 
 The Phase 5 dependency revalidation also removed the SDK's unused vulnerable
 Devnet-only downloader chain from production without modifying the pinned SDK
@@ -51,17 +78,16 @@ registry, advanced, exception, SettlementMatch and agent-policy addresses from
 RPC and matched every deployed class hash.
 
 `docs/MAINNET_BENCHMARKS.md` consolidates the committed native/browser proof
-timings, calldata sizes, historical actual Mainnet deployment fees and current
-non-mutating Phase 5 funding/rotation simulations. It deliberately leaves the
-treasury-registration and autonomous-canary rows pending until real receipts exist.
+timings, calldata sizes, historical actual Mainnet deployment fees and accepted
+Phase 5 cutover receipts. It deliberately leaves only the autonomous-canary row
+pending until a real reconciled receipt exists.
+
+At Mainnet block 14,196,362, direct SDK discovery indexed private STRK funding
+for the isolated policy treasury. Public evidence records only that the funding
+was indexed and its observation block; the private amount remains undisclosed.
 
 ## Remaining release evidence
 
-- offline recovery-copy confirmation;
-- treasury registration simulation, approval, transaction and read-back;
-- public-gas funding simulation, approval and read-back;
-- owner rotation simulation, approval, transaction and read-back;
-- private signer deployment, attestation and rejection probes;
 - exact one-run policy activation and small autonomous Mainnet canary;
 - reconciled SettlementMatch receipt and replay rejection;
 - advanced/agent transaction added to the public evidence set;

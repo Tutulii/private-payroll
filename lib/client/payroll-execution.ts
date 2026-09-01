@@ -138,7 +138,7 @@ export type AutonomousPayrollPreparationResult = {
   accountId: string;
   policyId: string;
   witnessCommitment: string;
-  activationState: "active";
+  activationState: "pending" | "active";
   configurationTransactionHash?: string;
 };
 
@@ -1101,10 +1101,6 @@ export async function executeProofBoundPayroll(
       accountId: provisioned.account.id,
       encryptedWitness: agentWitness,
     });
-    const activated = await input.client.activateDirectPrivacyAccount(provisioned.account.id);
-    if (activated.account.activationState !== "active") {
-      throw new Error("The autonomous policy account did not become active.");
-    }
     return {
       mode: "autonomous_bounded",
       organizationId: input.organizationId,
@@ -1115,10 +1111,7 @@ export async function executeProofBoundPayroll(
       accountId: provisioned.account.id,
       policyId,
       witnessCommitment: staged.witness.witnessCommitment,
-      activationState: "active",
-      ...(activated.configurationTransactionHash
-        ? { configurationTransactionHash: activated.configurationTransactionHash }
-        : {}),
+      activationState: provisioned.account.activationState,
     };
   }
   let snapshotProofBundleId: string | undefined;

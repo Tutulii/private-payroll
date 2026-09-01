@@ -35,27 +35,31 @@ and a pinned read-back. Never reuse Devnet keys on Mainnet.
 ## Isolated signer cutover
 
 1. Generate a fresh owner key outside the repository, logs and shell history;
-   store its recovery copy offline. Derive and record only its public key.
-2. Generate one distinct treasury viewing key. Before owner rotation, run the
-   digest-pinned `phase4:treasury:estimate` bootstrap and inspect its exact pool,
-   account, block and fee. After explicit approval, run
-   `phase4:treasury:register`; retain only its public-key and transaction evidence.
-3. Fund the policy account with only the public STRK operational gas budget.
-   Run `phase4:owner:estimate`, then after explicit approval rotate with
-   `phase4:owner:rotate` and prove the new key with `phase4:owner:verify`.
-4. Set `PAYO_POLICY_OWNER_PRIVATE_KEY`, `STARKNET_RPC_URL`,
-   `PAYO_POLICY_SIGNER_SECRET` and `PAYO_AGENT_POLICY_VIEWING_PUBLIC_KEY` only on
-   the private signer app. The private viewing key is never a signer variable.
-5. Set `PAYO_POLICY_SIGNER_URL`, the same HMAC secret, the expected owner public
-   key and `PAYO_AGENT_POLICY_VIEWING_KEY` only in the web/worker secret store.
-   PAYO encrypts that viewing key again before database storage. Remove any
-   policy-owner private key from the web/worker app.
-6. Before starting, the signer must attest at one pinned block that chain,
-   policy-account owner and STRK20 registration public key all match its config.
-7. Start one signer machine with no public Fly service. Confirm `/health` only
-   through the private network, then run rejection tests before a canary policy.
-8. Maintain only the public STRK operational gas budget;
-   private payroll value remains in STRK20 notes. Alert before the gas floor.
+   store its recovery copy offline. Generate a distinct treasury viewing key and
+   derive/record only their public keys.
+2. Run the digest-pinned `phase4:treasury:estimate` to determine the live pool
+   fee and total starting balance, then simulate and explicitly approve the
+   public funding transfer. Registration cannot pay its pool fee from an empty
+   policy account.
+3. Re-run the registration estimate, inspect the exact pool, account, proof
+   block, viewing public key, bounded allowance and fee, then explicitly approve
+   `phase4:treasury:register`. Read back the viewing key, remaining allowance
+   and policy-account public balance.
+4. Configure the stopped private signer app with
+   `PAYO_POLICY_OWNER_PRIVATE_KEY`, `STARKNET_RPC_URL`, the HMAC secret and
+   treasury viewing **public** key. Simulate, explicitly approve and submit owner
+   rotation; verify the new owner before starting the signer.
+5. Set signer URL, the same HMAC secret, expected owner public key and treasury
+   viewing **private** key only in the web/worker secret store. PAYO encrypts the
+   viewing key again before database storage. The web/worker must not contain the
+   policy-owner private key.
+6. Start exactly one signer machine with no public Fly service. Its startup
+   attestation must match chain, owner and viewing registration at a pinned
+   block. Confirm `/health` only through the private network, run authentication,
+   replay and restricted-method rejection tests, and leave the executor disabled.
+7. Maintain only the reviewed public STRK operational budget; private payroll
+   value remains in STRK20 notes. Alert before either public gas or pool-fee
+   allowance reaches its floor.
 
 Do not enable autonomous dispatch if rotation, signer attestation, web-secret
 removal, policy-account gas, or the canary read-back is incomplete.

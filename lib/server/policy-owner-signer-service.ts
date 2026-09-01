@@ -87,6 +87,67 @@ export class PolicyOwnerSignerService {
     };
   }
 
+  async estimatePolicy(raw: unknown) {
+    const request = assertRestrictedPolicyConfiguration(
+      raw,
+      this.#constraints,
+      Math.floor(this.#now().getTime() / 1_000),
+    );
+    const block = await this.#provider.getBlock("latest");
+    const blockHash = block.block_hash;
+    const blockNumber = Number(block.block_number);
+    if (!Number.isSafeInteger(blockNumber) || blockNumber < 0) {
+      throw new Error("The policy signer received an invalid Starknet block number.");
+    }
+    const [chainId, owner, current] = await Promise.all([
+      this.#provider.getChainId(),
+      this.#provider.callContract({
+        contractAddress: this.#constraints.policyAccountAddress,
+        entrypoint: "get_public_key",
+        calldata: [],
+      }, blockHash),
+      this.#provider.callContract({
+        contractAddress: this.#constraints.policyAccountAddress,
+        entrypoint: "get_policy",
+        calldata: [request.call.calldata[0]],
+      }, blockHash),
+    ]);
+    if (
+      !sameFelt(chainId, this.#constraints.chainId)
+      || owner.length !== 1
+      || !sameFelt(owner[0], this.signerPublicKey)
+    ) throw new Error("The isolated signer no longer controls the pinned policy account.");
+    if (current.length !== 23) throw new Error("The policy account returned an invalid policy state.");
+    if (BigInt(current[0]) === 1n) {
+      if (!configuredPolicyMatches(request.call, current)) {
+        throw new Error("The policy identifier is already configured with different limits.");
+      }
+      return {
+        version: "payo-policy-configuration-estimate-response-v1" as const,
+        requestId: request.requestId,
+        signerPublicKey: this.signerPublicKey,
+        blockNumber,
+        blockHash: canonicalFelt(blockHash),
+        estimatedFeeFri: "0",
+        replayed: true,
+      };
+    }
+    const estimate = await this.#account.estimateInvokeFee(request.call, {
+      blockIdentifier: blockHash,
+    });
+    const estimatedFeeFri = BigInt(estimate.overall_fee);
+    if (estimatedFeeFri <= 0n) throw new Error("The policy activation fee estimate is invalid.");
+    return {
+      version: "payo-policy-configuration-estimate-response-v1" as const,
+      requestId: request.requestId,
+      signerPublicKey: this.signerPublicKey,
+      blockNumber,
+      blockHash: canonicalFelt(blockHash),
+      estimatedFeeFri: estimatedFeeFri.toString(),
+      replayed: false,
+    };
+  }
+
   configurePolicy(raw: unknown) {
     const operation = this.#configurationQueue.then(() => this.#configurePolicy(raw));
     this.#configurationQueue = operation.then(() => undefined, () => undefined);

@@ -11,7 +11,10 @@ primary_region = "iad"
 
 [env]
   CHAIN_ID = "SN_MAIN"
-  PROVER_IP = "0.0.0.0"
+  # Fly private application DNS resolves over 6PN IPv6. Bind on IPv6 so the
+  # web/worker and authenticated operator tunnels can reach the private prover.
+  # Linux's dual-stack listener continues accepting local IPv4 smoke checks.
+  PROVER_IP = "::"
   PROVER_PORT = "3000"
   MAX_CONCURRENT_REQUESTS = "1"
   MAX_CONNECTIONS = "4"

@@ -44,17 +44,19 @@ Declarations dominate historical cost because generated verifier classes are
 large. Phase 5 reuses these deployed contracts; the isolated-signer cutover does
 not redeclare or redeploy them.
 
-## Current Phase 5 simulations
+## Phase 5 accepted cutover gas
 
-| Operation | Simulated fee (FRI) | Approx. STRK | Mutation |
-|---|---:|---:|---:|
-| Transfer a 0.5 STRK public gas target to policy account | 134948639218101345 | 0.134949 | no |
-| Rotate policy-account owner | 84362292296331120 | 0.084362 | no |
+| Operation | Actual transaction fee (FRI) | Approx. STRK | Mainnet transaction |
+|---|---:|---:|---|
+| Transfer exactly 20 public STRK to policy account | 55514240023138569 | 0.055514 | `0x18efc86065b91fe73dd7dad9085cb08c5b9806a494d6bbfb2f68f7515635026` |
+| Register treasury and approve bounded pool allowance | 2689681523546163560 | 2.689682 | `0x7b50b46e25bea43603126596554f86c465175ced90c2fe1496f1a9372a1dbcb` |
+| Rotate policy-account owner | 34535746559995256 | 0.034536 | `0x24acdfaeb99b97f1291c7d17619e3ff591e3a9631eed7143c5a5d3604e1c881` |
 
-The funding operation additionally transfers exactly 0.5 STRK; its fee is paid
-by the relayer. Both values must be freshly simulated again immediately before
-human approval. Treasury registration and the autonomous canary will be added
-only after their final simulations and accepted receipts exist.
+The funding fee was paid by the relayer. Registration additionally paid the
+live 6 STRK pool fee from the policy account, leaving a 12 STRK bounded pool
+allowance after final read-back. Each operation was freshly simulated and
+explicitly approved before submission. The autonomous-canary row remains
+pending until its accepted, reconciled receipt exists.
 
 Ready private-payroll receipts intentionally do not expose a trustworthy
 plaintext token/amount breakdown. PAYO therefore does not invent a payroll gas

@@ -263,3 +263,118 @@ export async function configureAndActivateDirectPrivacyAccount(input: {
   });
   return { account: verified, configurationTransactionHash };
 }
+
+export type DirectPrivacyActivationEstimate = {
+  accountId: string;
+  configCommitment: string;
+  policyId: string;
+  validBeforeUnix: string;
+  maxCallsPerPeriod: number;
+  maxCallCount: number;
+  pinnedBlockNumber: string;
+  pinnedBlockHash: string;
+  estimatedFeeFri: string;
+  replayed: boolean;
+};
+
+/**
+ * Produces a read-only, exact-call fee review before the owner signer may
+ * submit a policy. The later activation repeats every chain check and estimate.
+ */
+export async function estimateDirectPrivacyAccountActivation(input: {
+  accountId: string;
+  principal: AuthenticatedPrincipal;
+  provider: RpcProvider;
+  deployment: DirectPrivacyDeploymentConfig;
+  ownerPublicKey: string;
+  estimateConfiguration: (call: Call) => Promise<{
+    blockNumber: number;
+    blockHash: string;
+    estimatedFeeFri: string;
+    replayed: boolean;
+  }>;
+}): Promise<DirectPrivacyActivationEstimate> {
+  const candidate = await getDirectPrivacyAccountActivationCandidate({
+    accountId: input.accountId,
+    principal: input.principal,
+  });
+  assertDirectPrivacyDeployment(candidate.config, input.deployment);
+  const snapshot = await readPolicyAccountActivationSnapshot({
+    provider: input.provider,
+    policyAccountAddress: candidate.config.policyAccountAddress,
+    policyId: candidate.config.policyId,
+    poolAddress: candidate.config.poolAddress,
+  });
+  if (
+    !sameFelt(snapshot.chainId, candidate.config.chainId)
+    || !sameFelt(snapshot.classHash, input.deployment.policyAccountClassHash)
+    || snapshot.paused
+  ) {
+    throw new ApiError(
+      409,
+      "The policy account failed its pinned activation-preview checks.",
+      "DIRECT_POLICY_ACCOUNT_NOT_CONFIGURABLE",
+    );
+  }
+  const ownerResult = await input.provider.callContract({
+    contractAddress: candidate.config.policyAccountAddress,
+    entrypoint: "get_public_key",
+    calldata: [],
+  }, snapshot.blockHash);
+  if (ownerResult.length !== 1 || !sameFelt(ownerResult[0], input.ownerPublicKey)) {
+    throw new ApiError(
+      503,
+      "The configured policy owner signer does not control the reviewed account.",
+      "DIRECT_POLICY_OWNER_MISMATCH",
+    );
+  }
+  if (!snapshot.registrationPublicKey || BigInt(snapshot.registrationPublicKey) === 0n) {
+    throw new ApiError(
+      409,
+      "The STRK20 policy treasury is not registered.",
+      "DIRECT_TREASURY_NOT_REGISTERED",
+    );
+  }
+  if (snapshot.policy.configured) {
+    try {
+      assertPolicyAccountActivation({
+        config: candidate.config,
+        snapshot,
+        expectedClassHash: input.deployment.policyAccountClassHash,
+      });
+    } catch (error) {
+      throw new ApiError(
+        409,
+        error instanceof Error ? error.message : "The configured policy does not match PAYO's pending account.",
+        "DIRECT_POLICY_CHAIN_MISMATCH",
+      );
+    }
+    return {
+      accountId: candidate.id,
+      configCommitment: candidate.configCommitment,
+      policyId: candidate.config.policyId,
+      validBeforeUnix: candidate.config.validBeforeUnix,
+      maxCallsPerPeriod: candidate.config.maxCallsPerPeriod,
+      maxCallCount: candidate.config.maxCallCount,
+      pinnedBlockNumber: snapshot.blockNumber.toString(),
+      pinnedBlockHash: snapshot.blockHash,
+      estimatedFeeFri: "0",
+      replayed: true,
+    };
+  }
+  const estimate = await input.estimateConfiguration(
+    buildConfigurePolicyCall(candidate.config),
+  );
+  return {
+    accountId: candidate.id,
+    configCommitment: candidate.configCommitment,
+    policyId: candidate.config.policyId,
+    validBeforeUnix: candidate.config.validBeforeUnix,
+    maxCallsPerPeriod: candidate.config.maxCallsPerPeriod,
+    maxCallCount: candidate.config.maxCallCount,
+    pinnedBlockNumber: estimate.blockNumber.toString(),
+    pinnedBlockHash: estimate.blockHash,
+    estimatedFeeFri: estimate.estimatedFeeFri,
+    replayed: estimate.replayed,
+  };
+}

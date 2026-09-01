@@ -14,8 +14,9 @@ normative; this file only orders the release work.
 4. Create the private signer app and place the owner key, RPC, HMAC secret, and
    viewing **public** key only there. Put the signer URL, HMAC secret, expected owner
    public key, and viewing **private** key only in the web/worker secret store.
-5. Simulate, explicitly approve, submit, and read back treasury registration and
-   owner rotation. Fund the policy account with only its reviewed public gas budget.
+5. Simulate, explicitly approve, submit, and read back the bounded public funding,
+   treasury registration, and owner rotation in that dependency order. Keep only
+   the reviewed public gas and pool-fee budget on the policy account.
 6. Verify chain, class hash, owner, pool, viewing registration, unpaused state,
    signer health, and negative requests at one pinned Mainnet block before enabling
    the executor.

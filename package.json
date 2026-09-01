@@ -25,6 +25,7 @@
     "verify:payo-usdc": "node scripts/verify-payo-payroll-mainnet.mjs evidence/payo-usdc-mainnet.json",
     "verify:payo-mixed": "node scripts/verify-payo-payroll-mainnet.mjs evidence/payo-mixed-mainnet.json",
     "verify:mainnet-contracts": "node --env-file-if-exists=.env.local scripts/verify-mainnet-contract-inventory.mjs",
+    "verify:phase5-cutover": "node --env-file-if-exists=.env.local scripts/verify-phase5-cutover-mainnet.mjs",
     "verify:strk20:draft": "node scripts/verify-strk20-submission.mjs --allow-missing-video",
     "verify:strk20": "node scripts/verify-strk20-submission.mjs",
     "proof:input": "tsx scripts/generate-payroll-proof-input.ts",

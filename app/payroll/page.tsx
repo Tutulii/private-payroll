@@ -89,6 +89,7 @@ import {
 import { isAgreementDue } from "@/lib/domain/obligations";
 import type { ObligationSnapshotPlanSummary } from "@/lib/domain/obligation-snapshot-plan";
 import type { AgentExecutionReceipt } from "@/lib/domain/agent-execution";
+import type { DirectPrivacyActivationEstimate } from "@/lib/client/payo-client";
 
 type PayrollRunSummary = {
   id: string;
@@ -107,6 +108,10 @@ const filters = ["All", "Pending", "Confirmed", "Attention"] as const;
 const MIN_RECOVERY_PASSWORD_LENGTH = 12;
 type SnapshotActionStage = "preparing" | "authorizing_root" | "registering" | "reconciling";
 type AgentApprovalReview = { executionId: string; capabilityId: string; runId: string };
+type AutonomousActivationReview = {
+  estimate: DirectPrivacyActivationEstimate;
+  reviewedAt: number;
+};
 const snapshotStageLabel: Record<SnapshotActionStage, string> = {
   preparing: "Preparing encrypted snapshot",
   authorizing_root: "Authorizing obligation root",
@@ -160,6 +165,8 @@ export default function PayrollPage() {
   const [payrollReceipt, setPayrollReceipt] = useState<PayrollExecutionResult | null>(null);
   const [proofDeliveryNotice, setProofDeliveryNotice] = useState("");
   const [autonomousPreparation, setAutonomousPreparation] = useState<AutonomousPayrollPreparationResult | null>(null);
+  const [autonomousActivationReview, setAutonomousActivationReview] = useState<AutonomousActivationReview | null>(null);
+  const [autonomousActivationPending, setAutonomousActivationPending] = useState(false);
   const [recoverableSubmission, setRecoverableSubmission] = useState<PendingPayrollSubmission | null>(null);
   const [recoveryTransactionHash, setRecoveryTransactionHash] = useState("");
   const [showManualHashRecovery, setShowManualHashRecovery] = useState(false);
@@ -1002,11 +1009,42 @@ export default function PayrollPage() {
     }
   };
 
+  const loadAutonomousActivationReview = async (
+    preparation: AutonomousPayrollPreparationResult,
+  ) => {
+    if (!vault.client) throw new Error("Unlock the encrypted PAYO workspace first.");
+    const { estimate } = await vault.client.estimateDirectPrivacyAccountActivation(
+      preparation.accountId,
+    );
+    if (
+      estimate.accountId !== preparation.accountId
+      || BigInt(estimate.policyId) !== BigInt(preparation.policyId)
+      || estimate.maxCallsPerPeriod !== 1
+      || estimate.maxCallCount !== 1
+    ) throw new Error("The activation estimate is not bound to this one-run policy.");
+    setAutonomousActivationReview({ estimate, reviewedAt: Date.now() });
+    return estimate;
+  };
+
+  const refreshAutonomousActivationReview = async () => {
+    setFormError("");
+    if (!autonomousPreparation) return;
+    setAutonomousActivationPending(true);
+    try {
+      await loadAutonomousActivationReview(autonomousPreparation);
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "The policy estimate could not be refreshed.");
+    } finally {
+      setAutonomousActivationPending(false);
+    }
+  };
+
   const submitPayroll = async () => {
     setFormError("");
     setProofDeliveryNotice("");
     setPayrollReceipt(null);
     setAutonomousPreparation(null);
+    setAutonomousActivationReview(null);
     try {
       const prepareForAgent = executionMode === "autonomous" && !agentApprovalReview;
       if (!vault.session || !vault.client) {
@@ -1148,9 +1186,14 @@ export default function PayrollPage() {
           },
         });
         setAutonomousPreparation(prepared);
+        if (prepared.activationState === "pending") {
+          await loadAutonomousActivationReview(prepared);
+        }
         setPayrollStage(null);
         await refreshPayrollRuns();
-        notify(`Bounded agent payroll ready · run ${prepared.runId.slice(0, 8)}`);
+        notify(prepared.activationState === "active"
+          ? `Bounded agent payroll ready · run ${prepared.runId.slice(0, 8)}`
+          : `One-run policy prepared for review · run ${prepared.runId.slice(0, 8)}`);
         return;
       }
       const result = await executeProofBoundPayroll({
@@ -1174,6 +1217,49 @@ export default function PayrollPage() {
       setPayrollStage(null);
       setFormError(payrollError instanceof Error ? payrollError.message : "Payroll was not submitted.");
       await refreshPayrollRuns();
+    }
+  };
+
+  const activateAutonomousPolicy = async () => {
+    setFormError("");
+    if (!vault.client || !autonomousPreparation || !autonomousActivationReview) {
+      setFormError("Prepare and review the exact one-run policy before activation.");
+      return;
+    }
+    if (autonomousPreparation.activationState === "active") return;
+    const { estimate, reviewedAt } = autonomousActivationReview;
+    if (
+      estimate.accountId !== autonomousPreparation.accountId
+      || BigInt(estimate.policyId) !== BigInt(autonomousPreparation.policyId)
+    ) {
+      setFormError("The reviewed activation no longer matches this payroll.");
+      return;
+    }
+    if (Date.now() - reviewedAt > 120_000) {
+      setFormError("The Mainnet fee review is older than two minutes. Refresh it before approval.");
+      return;
+    }
+    setAutonomousActivationPending(true);
+    try {
+      const activated = await vault.client.activateDirectPrivacyAccount(
+        autonomousPreparation.accountId,
+      );
+      if (activated.account.activationState !== "active") {
+        throw new Error("The one-run policy did not become active after Mainnet confirmation.");
+      }
+      setAutonomousPreparation({
+        ...autonomousPreparation,
+        activationState: "active",
+        ...(activated.configurationTransactionHash
+          ? { configurationTransactionHash: activated.configurationTransactionHash }
+          : {}),
+      });
+      await refreshPayrollRuns();
+      notify("One-run agent policy active · autonomous execution remains paused");
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "The one-run policy was not activated.");
+    } finally {
+      setAutonomousActivationPending(false);
     }
   };
 
@@ -1832,7 +1918,7 @@ export default function PayrollPage() {
                 <button
                   type="button"
                   className="button button--ink"
-                  disabled={!vault.session || !vault.recoveryReady || !starknet.isConnected || !starknet.isMainnet || busy || Boolean(recoverableSubmission) || selectedObligations.length === 0 || Boolean(agentApprovalReview && agentApprovalIssue) || (executionMode === "ready" && obligationSchedule?.state === "active" && !canRunPayroll) || (executionMode === "autonomous" && !selectedAutonomousCapability)}
+                  disabled={!vault.session || !vault.recoveryReady || !starknet.isConnected || !starknet.isMainnet || busy || Boolean(recoverableSubmission) || selectedObligations.length === 0 || Boolean(agentApprovalReview && agentApprovalIssue) || (executionMode === "ready" && obligationSchedule?.state === "active" && !canRunPayroll) || (executionMode === "autonomous" && (!selectedAutonomousCapability || Boolean(autonomousPreparation)))}
                   onClick={obligationSchedule?.state === "active" ? submitPayroll : scheduleSelectedObligationRoot}
                 >
                   {payrollStage && payrollStage !== "queued" && payrollStage !== "recorded"
@@ -1853,23 +1939,44 @@ export default function PayrollPage() {
                               ? <>Select a due agreement <CalendarDays size={17} /></>
                               : obligationSchedule?.state !== "active"
                                 ? <>Authorize batch in Ready <ShieldCheck size={17} /></>
-                                : <>{executionMode === "autonomous" ? "Prove & activate agent run" : agentApprovalReview ? "Prove & approve agent payroll" : "Prove & approve payroll"} <ArrowRight size={17} /></>}
+                                : <>{executionMode === "autonomous" ? "Prove & prepare agent run" : agentApprovalReview ? "Prove & approve agent payroll" : "Prove & approve payroll"} <ArrowRight size={17} /></>}
                 </button>
               )}
             </div>
 
             {formError && <div className="runner-error"><X size={16} /><span>{formError}</span></div>}
             {autonomousPreparation && (
-              <div className="transaction-receipt transaction-receipt--confirmed">
+              <div className={`transaction-receipt transaction-receipt--${autonomousPreparation.activationState === "active" ? "confirmed" : "confirming"}`}>
                 <span className="transaction-receipt-icon"><ShieldCheck size={20} /></span>
                 <span>
-                  <small>BOUNDED AGENT POLICY ACTIVE</small>
-                  <strong>One exact private payroll is ready for MCP execution</strong>
-                  <p>Run {autonomousPreparation.runId.slice(0, 8)} · capability {autonomousPreparation.capabilityId.slice(0, 8)} · witness {autonomousPreparation.witnessCommitment.slice(0, 10)}…</p>
+                  <small>{autonomousPreparation.activationState === "active"
+                    ? "BOUNDED AGENT POLICY ACTIVE"
+                    : "ONE-RUN POLICY REVIEW"}</small>
+                  <strong>{autonomousPreparation.activationState === "active"
+                    ? "One exact private payroll is ready for MCP execution"
+                    : "Proof complete; no policy transaction has been submitted"}</strong>
+                  <p>
+                    Run {autonomousPreparation.runId.slice(0, 8)} · capability {autonomousPreparation.capabilityId.slice(0, 8)} · witness {autonomousPreparation.witnessCommitment.slice(0, 10)}…
+                    {autonomousPreparation.activationState === "pending" && autonomousActivationReview
+                      ? ` · 1 call · estimated fee ${formatTokenAmount(BigInt(autonomousActivationReview.estimate.estimatedFeeFri), "STRK")} STRK · expires ${new Date(Number(autonomousActivationReview.estimate.validBeforeUnix) * 1_000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+                      : ""}
+                  </p>
                 </span>
-                {autonomousPreparation.configurationTransactionHash
-                  ? <a href={`${STARKNET_MAINNET_EXPLORER}/tx/${autonomousPreparation.configurationTransactionHash}`} target="_blank" rel="noreferrer">View activation <ExternalLink size={13} /></a>
-                  : <Link href="/activity">Open activity <ArrowRight size={13} /></Link>}
+                {autonomousPreparation.activationState === "active"
+                  ? autonomousPreparation.configurationTransactionHash
+                    ? <a href={`${STARKNET_MAINNET_EXPLORER}/tx/${autonomousPreparation.configurationTransactionHash}`} target="_blank" rel="noreferrer">View activation <ExternalLink size={13} /></a>
+                    : <Link href="/activity">Open activity <ArrowRight size={13} /></Link>
+                  : <div className="runner-recovery__actions">
+                      <button className="button button--soft" type="button" onClick={() => void refreshAutonomousActivationReview()} disabled={autonomousActivationPending}>
+                        {autonomousActivationPending ? <LoaderCircle className="spin" size={13} /> : null} Refresh estimate
+                      </button>
+                      <button className="button button--ink" type="button" onClick={() => void activateAutonomousPolicy()} disabled={autonomousActivationPending || !autonomousActivationReview}>
+                        {autonomousActivationPending ? <LoaderCircle className="spin" size={13} /> : null}
+                        {autonomousActivationReview?.estimate.replayed
+                          ? " Record verified activation"
+                          : " Approve & activate"}
+                      </button>
+                    </div>}
               </div>
             )}
             {proofDeliveryNotice && (

@@ -75,6 +75,33 @@ describe("policy-owner signer client", () => {
     await expect(client().signDeclareTransaction({} as never)).rejects.toThrow("does not sign declarations");
   });
 
+  it("returns only the signer-bound read-only policy estimate", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
+      expect(url).toContain("/v1/estimate-policy");
+      const request = JSON.parse(String(init.body));
+      return Response.json({
+        version: "payo-policy-configuration-estimate-response-v1",
+        requestId: request.requestId,
+        signerPublicKey: expectedPublicKey,
+        blockNumber: 42,
+        blockHash: "0xabc",
+        estimatedFeeFri: "123",
+        replayed: false,
+      });
+    }));
+    const configuration: Call = {
+      contractAddress: "0x111",
+      entrypoint: "configure_policy",
+      calldata: Array.from({ length: 19 }, (_value, index) => `0x${(index + 1).toString(16)}`),
+    };
+    await expect(client().estimatePolicy(configuration)).resolves.toEqual({
+      blockNumber: 42,
+      blockHash: "0xabc",
+      estimatedFeeFri: "123",
+      replayed: false,
+    });
+  });
+
   it("accepts an idempotent policy-configuration response without inventing a transaction hash", async () => {
     vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
       const request = JSON.parse(String(init.body));

@@ -4,8 +4,16 @@ import "server-only";
 
 import { Account, RpcProvider, Signer, constants, ec, num, uint256 } from "starknet";
 import { loadPinnedPrivacySdk } from "@/lib/server/privacy-sdk-loader";
+import { assertDirectPrivacySdkResult } from "@/lib/starknet/direct-privacy-plan";
+import {
+  STARKNET_PROOF_MATURITY_BLOCKS,
+  pinnedProverBlockHash,
+  proofMaturityBlock,
+} from "./lib/pinned-prover-block";
+import { policyPoolFeeAllowancePlan } from "./lib/policy-pool-fee";
 
 const ACTIONS = new Set(["status", "estimate", "register"]);
+const STRK_TOKEN_ADDRESS = "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d";
 const action = process.argv[2];
 if (!ACTIONS.has(action)) {
   throw new Error("Usage: tsx scripts/payo-policy-treasury-bootstrap.ts <status|estimate|register>");
@@ -79,24 +87,32 @@ if (
   onchainOwner.length !== 1
   || !sameFelt(onchainOwner[0], ec.starkCurve.getStarkKey(ownerPrivateKey))
 ) throw new Error("The bootstrap signer does not control the policy account.");
-
-const relayerAddress = required("PAYO_PROOF_RELAYER_ADDRESS");
-const relayerPrivateKey = required("PAYO_PROOF_RELAYER_PRIVATE_KEY");
-const relayerOwner = await provider.callContract({
-  contractAddress: relayerAddress,
-  entrypoint: "get_public_key",
-  calldata: [],
-}, "latest");
-if (
-  relayerOwner.length !== 1
-  || !sameFelt(relayerOwner[0], ec.starkCurve.getStarkKey(relayerPrivateKey))
-) throw new Error("The configured registration relayer key is invalid.");
-const relayer = new Account({
+const policyOwner = new Account({
   provider,
-  address: relayerAddress,
-  signer: relayerPrivateKey,
+  address: policyAccountAddress,
+  signer: ownerPrivateKey,
   cairoVersion: "1",
 });
+
+const feeResult = await provider.callContract({
+  contractAddress: poolAddress,
+  entrypoint: "get_fee_amount",
+  calldata: [],
+}, "latest");
+if (feeResult.length !== 1) throw new Error("STRK20 returned an invalid pool fee.");
+const poolFeeFri = BigInt(feeResult[0]);
+const allowanceResult = await provider.callContract({
+  contractAddress: STRK_TOKEN_ADDRESS,
+  entrypoint: "allowance",
+  calldata: [policyAccountAddress, poolAddress],
+}, "latest");
+if (allowanceResult.length !== 2) throw new Error("STRK returned an invalid pool allowance.");
+const currentPoolFeeAllowanceFri = uint256.uint256ToBN({
+  low: allowanceResult[0],
+  high: allowanceResult[1],
+});
+const poolFeePlan = policyPoolFeeAllowancePlan(poolFeeFri, currentPoolFeeAllowanceFri);
+
 const sdk = await loadPinnedPrivacySdk();
 const discovery = new sdk.sdk.IndexerDiscoveryProvider(
   required("PAYO_STRK20_INDEXER_URL"),
@@ -111,7 +127,7 @@ const provingProvider = new sdk.sdk.ProvingServiceProofProvider(
   constants.StarknetChainId.SN_MAIN,
   {
     requestTimeoutMs: 30 * 60_000,
-    blockIdentifier: health.chain_head.block_hash,
+    blockIdentifier: pinnedProverBlockHash(health.chain_head.block_hash),
     nodeUrl: rpcUrl,
     poolAddress,
     retry: { maxRetries: 2 },
@@ -127,48 +143,101 @@ const transfers = sdk.sdk.createPrivateTransfers({
   discoveryProvider: discovery,
   poolContractAddress: poolAddress,
 }) as any;
-const result = await transfers.build({
-  autoDiscover: { notes: "refresh", channels: "refresh" },
-}).register().execute();
-const call = result?.callAndProof?.call;
+const result = await transfers.build().register().execute();
+const callAndProof = result?.callAndProof;
+const call = callAndProof?.call;
 if (
-  !call
+  !callAndProof
+  || !call
   || !sameFelt(call.contractAddress, poolAddress)
   || call.entrypoint !== "apply_actions"
   || !Array.isArray(call.calldata)
   || call.calldata.length < 2
 ) throw new Error("The pinned SDK did not produce a canonical registration call.");
-const estimate = await relayer.estimateInvokeFee(call, { skipValidate: false, tip: 1n });
+assertDirectPrivacySdkResult({ result, poolAddress });
+const privateProofOptions = {
+  proofFacts: [...callAndProof.proof.proofFacts],
+  proof: callAndProof.proof.data,
+};
+const requiredMaturityBlock = proofMaturityBlock(privateProofOptions.proofFacts);
+const pinnedBlockNumber = requiredMaturityBlock - STARKNET_PROOF_MATURITY_BLOCKS;
+const pinnedBlockHash = pinnedProverBlockHash(privateProofOptions.proofFacts[5]).block_hash;
+const maturityDeadline = Date.now() + 180_000;
+let observedBlockNumber = await provider.getBlockNumber();
+if (!Number.isSafeInteger(observedBlockNumber) || observedBlockNumber < 0) {
+  throw new Error("Starknet RPC returned an invalid latest block number.");
+}
+while (observedBlockNumber < requiredMaturityBlock) {
+  if (Date.now() >= maturityDeadline) {
+    throw new Error(
+      `The registration proof did not mature by Starknet block ${requiredMaturityBlock} before timeout.`,
+    );
+  }
+  await new Promise<void>((resolve) => setTimeout(resolve, 2_000));
+  observedBlockNumber = await provider.getBlockNumber();
+  if (!Number.isSafeInteger(observedBlockNumber) || observedBlockNumber < 0) {
+    throw new Error("Starknet RPC returned an invalid latest block number.");
+  }
+}
+const targetAllowance = uint256.bnToUint256(poolFeePlan.targetAllowanceFri);
+const approvalCall = {
+  contractAddress: STRK_TOKEN_ADDRESS,
+  entrypoint: "approve",
+  calldata: [
+    poolAddress,
+    num.toHex(targetAllowance.low),
+    num.toHex(targetAllowance.high),
+  ],
+};
+const registrationCalls = poolFeePlan.approvalRequired
+  ? [approvalCall, call]
+  : [call];
+const estimate = await policyOwner.estimateInvokeFee(registrationCalls, {
+  skipValidate: false,
+  tip: 1n,
+  ...privateProofOptions,
+});
 const balanceResult = await provider.callContract({
-  contractAddress: "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
+  contractAddress: STRK_TOKEN_ADDRESS,
   entrypoint: "balance_of",
-  calldata: [relayerAddress],
+  calldata: [policyAccountAddress],
 }, "latest");
 const balance = uint256.uint256ToBN({ low: balanceResult[0], high: balanceResult[1] });
+const requiredStartingBalanceFri = poolFeeFri + BigInt(estimate.overall_fee);
 const evidence = {
   mutation: false,
   policyAccountAddress,
   poolAddress,
   viewingPublicKey,
-  pinnedBlockNumber: health.chain_head.block_number,
-  pinnedBlockHash: health.chain_head.block_hash,
+  pinnedBlockNumber,
+  pinnedBlockHash,
+  maturityObservedBlockNumber: observedBlockNumber,
+  poolFeeFri: poolFeeFri.toString(),
+  poolFeeCallBudget: poolFeePlan.feeCallBudget.toString(),
+  currentPoolFeeAllowanceFri: currentPoolFeeAllowanceFri.toString(),
+  targetPoolFeeAllowanceFri: poolFeePlan.targetAllowanceFri.toString(),
+  approvalIncluded: poolFeePlan.approvalRequired,
   simulatedFeeFri: estimate.overall_fee.toString(),
-  relayerBalanceFri: balance.toString(),
-  sufficientBalance: balance >= BigInt(estimate.overall_fee),
+  requiredStartingBalanceFri: requiredStartingBalanceFri.toString(),
+  policyAccountBalanceFri: balance.toString(),
+  sufficientBalance: balance >= requiredStartingBalanceFri,
 };
 if (action === "estimate") {
   process.stdout.write(`${JSON.stringify(evidence, null, 2)}\n`);
   process.exit(0);
 }
-if (!evidence.sufficientBalance) throw new Error("The relayer lacks public STRK for registration.");
+if (!evidence.sufficientBalance) {
+  throw new Error("The policy account lacks public STRK for the pool fee plus registration gas.");
+}
 if (process.env.PAYO_POLICY_TREASURY_CONFIRM !== "REGISTER_PAYO_POLICY_TREASURY_MAINNET") {
   throw new Error(
     "Refusing registration without PAYO_POLICY_TREASURY_CONFIRM=REGISTER_PAYO_POLICY_TREASURY_MAINNET.",
   );
 }
-const submitted = await relayer.execute(call, {
+const submitted = await policyOwner.execute(registrationCalls, {
   resourceBounds: estimate.resourceBounds,
   tip: 1n,
+  ...privateProofOptions,
 });
 process.stderr.write(
   `${JSON.stringify({
@@ -187,11 +256,40 @@ const confirmed = await registeredKey();
 if (!sameFelt(confirmed, viewingPublicKey)) {
   throw new Error("The STRK20 registration failed final read-back.");
 }
+const confirmedAllowanceResult = await provider.callContract({
+  contractAddress: STRK_TOKEN_ADDRESS,
+  entrypoint: "allowance",
+  calldata: [policyAccountAddress, poolAddress],
+}, "latest");
+if (confirmedAllowanceResult.length !== 2) {
+  throw new Error("STRK returned an invalid post-registration pool allowance.");
+}
+const confirmedPoolFeeAllowanceFri = uint256.uint256ToBN({
+  low: confirmedAllowanceResult[0],
+  high: confirmedAllowanceResult[1],
+});
+if (confirmedPoolFeeAllowanceFri !== poolFeePlan.expectedAllowanceAfterRegistrationFri) {
+  throw new Error("The bounded STRK20 pool allowance failed final read-back.");
+}
+const confirmedBalanceResult = await provider.callContract({
+  contractAddress: STRK_TOKEN_ADDRESS,
+  entrypoint: "balance_of",
+  calldata: [policyAccountAddress],
+}, "latest");
+if (confirmedBalanceResult.length !== 2) {
+  throw new Error("STRK returned an invalid post-registration policy balance.");
+}
+const confirmedPolicyAccountBalanceFri = uint256.uint256ToBN({
+  low: confirmedBalanceResult[0],
+  high: confirmedBalanceResult[1],
+});
 process.stdout.write(`${JSON.stringify({
   ...evidence,
   mutation: true,
   transactionHash: submitted.transaction_hash,
   confirmedViewingPublicKey: confirmed,
+  confirmedPoolFeeAllowanceFri: confirmedPoolFeeAllowanceFri.toString(),
+  confirmedPolicyAccountBalanceFri: confirmedPolicyAccountBalanceFri.toString(),
 }, null, 2)}\n`);
 }
 

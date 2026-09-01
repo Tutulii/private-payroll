@@ -81,22 +81,27 @@ stdin or a protected environment file and checked by name only afterward.
 ## Cutover order
 
 1. Run `phase4:treasury:status`, then `phase4:treasury:estimate` with the new
-   viewing key and current owner. Record the pinned block, registration public
-   key and fee. After exact approval, run `phase4:treasury:register` and read the
-   same public key back from STRK20.
-2. Estimate the policy account's public-gas requirement. Fund only the reviewed
-   canary/rotation budget and verify the resulting public STRK balance.
-3. Run `phase4:owner:plan` and `phase4:owner:estimate`. Compare account, current
-   owner, new owner, nonce, acceptance digest and fee. After exact approval, run
-   `phase4:owner:rotate`, wait for finality and run `phase4:owner:verify`.
-4. Create/configure the private signer application and deploy exactly one
-   machine. Confirm configuration by querying `/health` only from a sibling Fly
-   machine. Test missing HMAC, bad HMAC, stale timestamp, nonce replay, malformed
-   body, forbidden method and owner/viewing mismatch rejection.
-5. Put only signer URL, shared HMAC, expected owner public key and treasury
-   viewing private key in the web/worker secret store. Confirm no policy-owner
-   key exists there.
-6. Run the complete pinned attestation again. Do not enable the executor yet.
+   viewing key and current owner. Record the pinned proof block, registration
+   public key, live pool fee, bounded allowance and required starting balance.
+2. Estimate the exact public funding transfer. After explicit approval, fund
+   only that reviewed registration/rotation/canary budget and verify the policy
+   account's public STRK balance.
+3. Re-run the registration estimate. After exact approval, atomically approve
+   only the bounded pool allowance and run `phase4:treasury:register`; verify the
+   viewing public key, remaining allowance and public balance from Mainnet.
+4. Configure the stopped private signer application with its owner key and
+   public deployment constraints. Run `phase4:owner:plan` and
+   `phase4:owner:estimate`; compare account, current owner, new owner, nonce,
+   acceptance digest and fee. After exact approval, rotate with
+   `phase4:owner:rotate`, verify the new owner, then deploy exactly one signer
+   machine.
+5. Query signer `/health` only from a sibling Fly machine. Test missing/bad
+   HMAC, stale timestamp, nonce replay, malformed body, forbidden method and
+   owner/viewing mismatch rejection. Then place only signer URL, shared HMAC,
+   expected owner public key and treasury viewing private key in the web/worker
+   secret store; confirm no policy-owner key exists there.
+6. Run the complete pinned attestation and contract inventory again. Keep
+   `PAYO_AGENT_EXECUTOR_ENABLED=false` until the reviewed canary is active.
 
 ## One-run autonomous canary
 

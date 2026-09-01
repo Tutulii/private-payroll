@@ -62,7 +62,11 @@ import {
 } from "@/lib/client/agent-capabilities";
 import { runProgressiveTasks, type ProgressiveTask } from "@/lib/client/progressive-tasks";
 import type { AgentExecutionReceipt } from "@/lib/domain/agent-execution";
-import type { AgentMcpConnection, DirectPrivacyAccountClientSummary } from "@/lib/client/payo-client";
+import type {
+  AgentMcpConnection,
+  DirectPrivacyAccountClientSummary,
+  DirectPrivacyActivationEstimate,
+} from "@/lib/client/payo-client";
 
 const teamFilters = ["Everyone", "Humans", "Agents"] as const;
 const memberTones = ["coral", "blue", "green", "yellow"] as const;
@@ -70,6 +74,11 @@ type ClassificationFactKey = (typeof CLASSIFICATION_FACTS)[number]["key"];
 type ClassificationAnswerDraft = Record<ClassificationFactKey, "" | "yes" | "no">;
 const NET_INVOICE_POLICY_ID = "payo-net-invoice-no-withholding-v1";
 const MAX_PUBLIC_IDENTITY_FILE_BYTES = 16 * 1024;
+const ACTIVATION_REVIEW_MAX_AGE_MS = 2 * 60_000;
+type DirectPrivacyActivationReview = {
+  estimate: DirectPrivacyActivationEstimate;
+  reviewedAt: number;
+};
 
 function classificationAnswerDraft(principalKind: "human" | "agent"): ClassificationAnswerDraft {
   return Object.fromEntries(CLASSIFICATION_FACTS.map(({ key }) => [key, principalKind === "agent" ? "no" : ""])) as ClassificationAnswerDraft;
@@ -113,6 +122,8 @@ export default function TeamPage() {
   const [capabilities, setCapabilities] = useState<AgentCapabilityDirectoryRecord[]>([]);
   const [agentExecutions, setAgentExecutions] = useState<AgentExecutionReceipt[]>([]);
   const [directPrivacyAccounts, setDirectPrivacyAccounts] = useState<DirectPrivacyAccountClientSummary[]>([]);
+  const [activationReviews, setActivationReviews] = useState<Record<string, DirectPrivacyActivationReview>>({});
+  const [activationActionId, setActivationActionId] = useState<string | null>(null);
   const [approvalActionId, setApprovalActionId] = useState<string | null>(null);
   const [directoryLoading, setDirectoryLoading] = useState(false);
   const [directoryError, setDirectoryError] = useState("");
@@ -617,6 +628,70 @@ export default function TeamPage() {
     }
   };
 
+  const reviewDirectAccountActivation = async (account: DirectPrivacyAccountClientSummary) => {
+    if (!vault.client || account.activationState !== "pending") return;
+    setActivationActionId(account.id);
+    setDirectoryError("");
+    try {
+      const { estimate } = await vault.client.estimateDirectPrivacyAccountActivation(account.id);
+      if (
+        estimate.accountId !== account.id
+        || BigInt(estimate.policyId) !== BigInt(account.config.policyId)
+        || BigInt(estimate.validBeforeUnix) !== BigInt(account.config.validBeforeUnix)
+        || estimate.maxCallsPerPeriod !== account.config.maxCallsPerPeriod
+        || estimate.maxCallCount !== account.config.maxCallCount
+      ) throw new Error("The signer estimate is not bound to this exact one-run policy.");
+      setActivationReviews((current) => ({
+        ...current,
+        [account.id]: { estimate, reviewedAt: Date.now() },
+      }));
+      notify("Exact one-run policy checked · no Mainnet transaction submitted");
+    } catch (error) {
+      setDirectoryError(error instanceof Error ? error.message : "The policy activation estimate could not be loaded.");
+    } finally {
+      setActivationActionId(null);
+    }
+  };
+
+  const activateDirectAccount = async (account: DirectPrivacyAccountClientSummary) => {
+    if (!vault.client || account.activationState !== "pending") return;
+    const review = activationReviews[account.id];
+    if (!review) {
+      setDirectoryError("Review this exact one-run policy and its Mainnet fee before activation.");
+      return;
+    }
+    if (Date.now() - review.reviewedAt > ACTIVATION_REVIEW_MAX_AGE_MS) {
+      setDirectoryError("The Mainnet fee review is older than two minutes. Refresh it before approval.");
+      return;
+    }
+    if (
+      review.estimate.accountId !== account.id
+      || BigInt(review.estimate.policyId) !== BigInt(account.config.policyId)
+    ) {
+      setDirectoryError("The reviewed activation no longer matches this one-run policy.");
+      return;
+    }
+    setActivationActionId(account.id);
+    setDirectoryError("");
+    try {
+      const activated = await vault.client.activateDirectPrivacyAccount(account.id);
+      if (activated.account.activationState !== "active") {
+        throw new Error("The one-run policy did not become active after Mainnet confirmation.");
+      }
+      setActivationReviews((current) => {
+        const next = { ...current };
+        delete next[account.id];
+        return next;
+      });
+      await refreshPayees();
+      notify("One-run agent policy active · autonomous execution remains paused");
+    } catch (error) {
+      setDirectoryError(error instanceof Error ? error.message : "The one-run policy was not activated.");
+    } finally {
+      setActivationActionId(null);
+    }
+  };
+
   return (
     <div className="product-page team-page">
       <section className="page-heading reveal reveal--one">
@@ -884,6 +959,8 @@ export default function TeamPage() {
               const payee = payees.find(({ principalId }) => principalId === record.principalId);
               const policy = record.signedCapability.capability;
               const directAccount = directPrivacyAccounts.find(({ capabilityId }) => capabilityId === record.id);
+              const activationReview = directAccount ? activationReviews[directAccount.id] : undefined;
+              const activationBusy = directAccount ? activationActionId === directAccount.id : false;
               const capabilityExecutions = agentExecutions.filter(({ capabilityId }) => capabilityId === record.id);
               const policyStatus = record.revokedAt
                 ? "REVOKED"
@@ -899,6 +976,18 @@ export default function TeamPage() {
                   <span><small>OPERATIONS</small><strong>{capabilityExecutions.length} recorded · max {policy.maxCallCount} calls{directAccount ? ` · ${directAccount.authorizedRunCount} exact runs` : ""}</strong></span>
                   <span><small>EXPIRES</small><strong>{new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(new Date(policy.expiresAt))}</strong></span>
                   {!record.revokedAt && <div className="agent-approval-row__actions">
+                    {directAccount?.activationState === "pending" && <>
+                      <button type="button" onClick={() => void reviewDirectAccountActivation(directAccount)} disabled={activationBusy}>
+                        {activationBusy ? "Checking…" : activationReview ? "Refresh estimate" : "Review activation"}
+                      </button>
+                      <button type="button" onClick={() => void activateDirectAccount(directAccount)} disabled={activationBusy || !activationReview}>
+                        {activationBusy ? "Working…" : activationReview
+                          ? activationReview.estimate.replayed
+                            ? "Record verified activation"
+                            : `Approve · ${formatTokenAmount(BigInt(activationReview.estimate.estimatedFeeFri), "STRK")} STRK`
+                          : "Approve after review"}
+                      </button>
+                    </>}
                     <button type="button" onClick={() => void issueMcpConnection(record)} disabled={directoryLoading}>{mcpConnection?.capabilityId === record.id ? "Rotate MCP key" : "Issue MCP key"}</button>
                     <button type="button" onClick={() => void revokeMcpConnections(record)} disabled={directoryLoading}>Revoke MCP keys</button>
                     <button type="button" onClick={() => void revokeAgentCapability(record)} disabled={directoryLoading}>Revoke capability</button>

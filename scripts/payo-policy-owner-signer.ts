@@ -120,7 +120,11 @@ const server = createServer(async (request, response) => {
   const path = request.url ?? "";
   if (
     request.method !== "POST"
-    || (path !== "/v1/sign-proof-invocation" && path !== "/v1/configure-policy")
+    || ![
+      "/v1/sign-proof-invocation",
+      "/v1/estimate-policy",
+      "/v1/configure-policy",
+    ].includes(path)
   ) {
     json(response, 404, { code: "SIGNER_ROUTE_NOT_FOUND" });
     return;
@@ -144,7 +148,9 @@ const server = createServer(async (request, response) => {
     try { parsed = JSON.parse(rawBody); } catch { throw new Error("SIGNER_JSON_INVALID"); }
     const result = path === "/v1/sign-proof-invocation"
       ? await service.signProofInvocation(parsed)
-      : await service.configurePolicy(parsed);
+      : path === "/v1/estimate-policy"
+        ? await service.estimatePolicy(parsed)
+        : await service.configurePolicy(parsed);
     json(response, 200, result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "SIGNER_REQUEST_REJECTED";

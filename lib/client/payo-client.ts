@@ -122,6 +122,20 @@ export type DirectPrivacyAccountClientPublic = {
     activatedAt: string;
   } | null;
 };
+
+export type DirectPrivacyActivationEstimate = {
+  accountId: string;
+  configCommitment: string;
+  policyId: string;
+  validBeforeUnix: string;
+  maxCallsPerPeriod: number;
+  maxCallCount: number;
+  pinnedBlockNumber: string;
+  pinnedBlockHash: string;
+  estimatedFeeFri: string;
+  replayed: boolean;
+};
+
 export type AgentAccessTokenSummary = {
   tokenId: string;
   capabilityId: string;
@@ -1272,6 +1286,12 @@ export class PayoClient {
       method: "POST",
       body: JSON.stringify({ encryptedWitness: input.encryptedWitness }),
     });
+  }
+
+  async estimateDirectPrivacyAccountActivation(accountId: string) {
+    return this.request<{ estimate: DirectPrivacyActivationEstimate }>(
+      `/api/v1/direct-privacy-accounts/${encodeURIComponent(accountId)}/activation`,
+    );
   }
 
   async activateDirectPrivacyAccount(accountId: string) {

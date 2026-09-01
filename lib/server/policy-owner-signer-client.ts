@@ -13,6 +13,7 @@ import {
 import type { z } from "zod";
 import {
   createSignerAuthorization,
+  policyConfigurationEstimateResponseSchema,
   policyConfigurationResponseSchema,
   policySignerResponseSchema,
   serializePolicyConfigurationRequest,
@@ -142,6 +143,31 @@ export class PolicyOwnerSignerClient extends SignerInterface {
       || !sameFelt(response.signerPublicKey, this.expectedPublicKey)
     ) throw new Error("The isolated policy signer response is not bound to this request.");
     return response.signature as Signature;
+  }
+
+  async estimatePolicy(call: Call): Promise<{
+    blockNumber: number;
+    blockHash: string;
+    estimatedFeeFri: string;
+    replayed: boolean;
+  }> {
+    const request = serializePolicyConfigurationRequest({ requestId: randomUUID(), call });
+    const response = await this.#post({
+      path: "/v1/estimate-policy",
+      body: request,
+      schema: policyConfigurationEstimateResponseSchema,
+      timeoutMs: this.#proofTimeoutMs,
+    });
+    if (
+      response.requestId !== request.requestId
+      || !sameFelt(response.signerPublicKey, this.expectedPublicKey)
+    ) throw new Error("The isolated policy signer estimate is not bound to this request.");
+    return {
+      blockNumber: response.blockNumber,
+      blockHash: response.blockHash,
+      estimatedFeeFri: response.estimatedFeeFri,
+      replayed: response.replayed,
+    };
   }
 
   async configurePolicy(call: Call): Promise<{ transactionHash?: string; replayed: boolean }> {

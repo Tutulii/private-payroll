@@ -164,6 +164,50 @@ describe("isolated policy-owner signer protocol", () => {
     expect(() => assertRestrictedPolicyConfiguration(arbitrary, constraints, now)).toThrow("only accepts");
   });
 
+  it("returns a pinned fee review without submitting the policy", async () => {
+    const request = serializePolicyConfigurationRequest({
+      requestId: randomUUID(),
+      call: configurationCall(),
+    });
+    let submissions = 0;
+    let estimatedAt: unknown;
+    const service = new PolicyOwnerSignerService({
+      provider: {
+        getBlock: async () => ({ block_hash: "0xabc", block_number: 42 }),
+        getChainId: async () => constraints.chainId,
+        callContract: async (call: { entrypoint: string }) => {
+          if (call.entrypoint === "get_public_key") return [signerPublicKey(ownerPrivateKey)];
+          if (call.entrypoint === "get_policy") return ["0x0", ...Array.from({ length: 22 }, () => "0x0")];
+          throw new Error("unexpected call");
+        },
+      } as never,
+      account: {
+        estimateInvokeFee: async (_call: unknown, options: { blockIdentifier?: unknown }) => {
+          estimatedAt = options.blockIdentifier;
+          return ({
+            overall_fee: 123n,
+            resourceBounds: details.resourceBounds,
+          });
+        },
+        execute: async () => {
+          submissions += 1;
+          throw new Error("estimate must not submit");
+        },
+      } as never,
+      ownerPrivateKey,
+      constraints,
+      now: () => new Date(now * 1_000),
+    });
+    await expect(service.estimatePolicy(request)).resolves.toMatchObject({
+      blockNumber: 42,
+      blockHash: "0xabc",
+      estimatedFeeFri: "123",
+      replayed: false,
+    });
+    expect(submissions).toBe(0);
+    expect(estimatedAt).toBe("0xabc");
+  });
+
   it("serializes concurrent configuration, submits once and returns an idempotent replay", async () => {
     const call = serializePolicyConfigurationRequest({ requestId: randomUUID(), call: configurationCall() });
     let state = ["0x0", ...Array.from({ length: 22 }, () => "0x0")];

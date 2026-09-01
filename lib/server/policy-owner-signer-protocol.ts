@@ -86,6 +86,16 @@ export const policyConfigurationResponseSchema = z.object({
   replayed: z.boolean(),
 }).strict();
 
+export const policyConfigurationEstimateResponseSchema = z.object({
+  version: z.literal("payo-policy-configuration-estimate-response-v1"),
+  requestId: requestIdSchema,
+  signerPublicKey: canonicalFeltSchema,
+  blockNumber: z.number().int().nonnegative(),
+  blockHash: canonicalFeltSchema,
+  estimatedFeeFri: z.string().regex(/^(?:0|[1-9][0-9]*)$/),
+  replayed: z.boolean(),
+}).strict();
+
 export type PolicySignerConstraints = {
   chainId: string;
   policyAccountAddress: string;
