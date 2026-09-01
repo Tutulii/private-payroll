@@ -168,6 +168,14 @@ const submitted = await simulated.account.execute(planned.call, {
   resourceBounds: simulated.fee.resourceBounds,
   tip: 1n,
 });
+process.stderr.write(
+  `${JSON.stringify({
+    checkpoint: "submitted",
+    operation: "policy-owner-rotation",
+    transactionHash: submitted.transaction_hash,
+    warning: "Do not retry until this hash has been reconciled on Starknet.",
+  })}\n`,
+);
 const receipt = await provider.waitForTransaction(submitted.transaction_hash, {
   retries: 400,
   retryInterval: 3_000,

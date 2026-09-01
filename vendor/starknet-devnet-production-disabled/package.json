@@ -1,0 +1,22 @@
+{
+  "name": "starknet-devnet",
+  "version": "0.0.0-payo-production-disabled",
+  "description": "Fail-closed PAYO production replacement for the privacy SDK's unused Devnet-only test dependency.",
+  "private": true,
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js",
+      "default": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md"
+  ],
+  "license": "UNLICENSED"
+}

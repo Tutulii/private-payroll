@@ -162,7 +162,14 @@ server.headersTimeout = 10_000;
 server.keepAliveTimeout = 5_000;
 server.maxHeadersCount = 32;
 const port = positiveInteger("PORT", 3000, 65_535);
-server.listen(port, "0.0.0.0");
+// Fly's private 6PN DNS resolves internal applications over IPv6. Binding to
+// IPv4 only makes an otherwise healthy isolated signer unreachable from the
+// web/worker even though the machine-local health check can still pass.
+const listenHost = process.env.HOST?.trim() || "::";
+if (!["::", "::1", "0.0.0.0", "127.0.0.1"].includes(listenHost)) {
+  throw new Error("HOST must be an explicit IPv4 or IPv6 listen address.");
+}
+server.listen(port, listenHost);
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => server.close(() => process.exit(0)));

@@ -170,6 +170,14 @@ const submitted = await relayer.execute(call, {
   resourceBounds: estimate.resourceBounds,
   tip: 1n,
 });
+process.stderr.write(
+  `${JSON.stringify({
+    checkpoint: "submitted",
+    operation: "policy-treasury-registration",
+    transactionHash: submitted.transaction_hash,
+    warning: "Do not retry until this hash has been reconciled on Starknet.",
+  })}\n`,
+);
 const receipt = await provider.waitForTransaction(submitted.transaction_hash, {
   retries: 400,
   retryInterval: 3_000,

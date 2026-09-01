@@ -20,3 +20,29 @@ These rules are mandatory for every future task in this repository:
 6. When evidence is incomplete, say so explicitly and keep the requirement partial, missing, or blocked. Never weaken the requirement to improve the percentage.
 
 The normative execution plan is `MASTER_PLAN.md`. The machine-readable source of current completion truth is `docs/implementation-status.json`.
+
+## Active work target
+
+The active repository target is **Phase 5 — Mainnet evidence and release**, as
+executed by `docs/PHASE5_RELEASE_PLAN.md`. Keep
+this target active across context compaction until its evidence gates pass; then
+remove or replace this section rather than silently changing scope.
+
+- Starting state: Phase 4 AI agents can inspect scope, read due metadata, submit
+  encrypted drafts, validate bounded intents, request payroll, and track receipts,
+  but live Mainnet execution still requires human PAYO/Ready approval.
+- First production block: complete the isolated policy-signer cutover, private
+  Fly networking, replay-protected HMAC authentication, strict owner/viewing-key
+  separation, pinned configuration attestation, treasury registration, and any
+  reviewed owner/policy activation transactions.
+- First live gate: authorize one exact short-lived policy and record a deliberately
+  small autonomous Mainnet payroll canary through private settlement, finality,
+  proof receipt, and reconciliation. Human approval remains the default fallback.
+- Release gate: record the required STRK, USDC, and advanced/agent Mainnet evidence;
+  publish addresses, class hashes, proof benchmarks, demo URL and three-minute
+  demo; complete `strk20.json` and the deployment, recovery, security, and known-
+  limitations runbooks.
+- Never claim Phase 5 complete until `README.md`, `MASTER_PLAN.md`, all of
+  `architecture.md`, actual integrated code, `docs/implementation-status.json`,
+  deployment read-backs, live canary evidence, and `npm run verify:completion`
+  agree.

@@ -24,7 +24,9 @@ primary_region = "sin"
   NEXT_PUBLIC_PAYO_PROVER_URL = "https://private-payroll-prover.fly.dev"
   NEXT_PUBLIC_PAYO_AGENT_SEAL_ADDRESS = "0x1b0208114f33ea0ac800f6474307680a0cf239d13ac11818523f70cba49c84a"
   NEXT_PUBLIC_PAYO_AGENT_POLICY_ACCOUNT_ADDRESS = "0x656928a6f3aeb62c2e62ff7457d351a41ed987ceed07c514539165662ecb7e0"
-  PAYO_AGENT_EXECUTOR_ENABLED = "true"
+  # Phase 5 enables this only after the isolated signer, treasury registration,
+  # owner rotation, policy activation and pinned canary preflight all pass.
+  PAYO_AGENT_EXECUTOR_ENABLED = "false"
   PAYO_AGENT_WORKER_LIMIT = "1"
   PAYO_AGENT_RELAYER_ADDRESS = "0x0126a7a572cf8935d069af937e9f7b27a24949e271e1fbccfe4de0c0d8dc8ea9"
   PAYO_AGENT_PROVER_URL = "https://private-payroll-prover.fly.dev"

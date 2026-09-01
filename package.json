@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "postinstall": "node vendor/install-bb-native-wrapper.mjs",
+    "audit:production": "npm audit --omit=dev --audit-level=moderate",
     "proof:exception:verify": "node --conditions=react-server --import tsx scripts/verify-exception-prover.ts",
     "dev": "next dev --webpack",
     "build": "next build --webpack",
@@ -23,6 +24,9 @@
     "verify:payo-strk": "node scripts/verify-payo-strk-mainnet.mjs",
     "verify:payo-usdc": "node scripts/verify-payo-payroll-mainnet.mjs evidence/payo-usdc-mainnet.json",
     "verify:payo-mixed": "node scripts/verify-payo-payroll-mainnet.mjs evidence/payo-mixed-mainnet.json",
+    "verify:mainnet-contracts": "node --env-file-if-exists=.env.local scripts/verify-mainnet-contract-inventory.mjs",
+    "verify:strk20:draft": "node scripts/verify-strk20-submission.mjs --allow-missing-video",
+    "verify:strk20": "node scripts/verify-strk20-submission.mjs",
     "proof:input": "tsx scripts/generate-payroll-proof-input.ts",
     "proof:prove": "node scripts/prove-payroll-starknet.mjs",
     "phase3:proof:fixtures": "tsx scripts/generate-phase3-proof-fixtures.ts",
@@ -82,6 +86,10 @@
     "mcp": "tsx packages/mcp/src/server.ts",
     "policy-signer": "tsx scripts/payo-policy-owner-signer.ts",
     "policy-signer:bundle": "node scripts/build-policy-owner-signer.mjs",
+    "phase5:secrets:generate": "node scripts/generate-phase5-cutover-secrets.mjs",
+    "phase5:gas:status": "node --env-file-if-exists=.env.local scripts/payo-policy-gas-funding.mjs status",
+    "phase5:gas:estimate": "node --env-file-if-exists=.env.local scripts/payo-policy-gas-funding.mjs estimate",
+    "phase5:gas:fund": "node --env-file-if-exists=.env.local scripts/payo-policy-gas-funding.mjs fund",
     "phase4:owner:plan": "node --env-file-if-exists=.env.local scripts/payo-policy-owner-rotation.mjs plan",
     "phase4:owner:estimate": "node --env-file-if-exists=.env.local scripts/payo-policy-owner-rotation.mjs estimate",
     "phase4:owner:rotate": "node --env-file-if-exists=.env.local scripts/payo-policy-owner-rotation.mjs rotate",
@@ -147,6 +155,7 @@
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "server-only": "0.0.1",
+    "starknet-devnet": "file:vendor/starknet-devnet-production-disabled",
     "starknet": "10.4.0",
     "zod": "4.4.3"
   },
@@ -163,6 +172,7 @@
     "vitest": "4.1.11"
   },
   "overrides": {
+    "starknet-devnet": "$starknet-devnet",
     "ws@^8.0.0": "8.21.3",
     "uuid@<11.1.1": "11.1.1"
   }

@@ -125,9 +125,17 @@ The roadmap below is the target, not a completion claim. The evidence-backed sta
 
 ### Phase 5 — Mainnet evidence and release
 
+- **Starting state:** Phase 4 agents can inspect scope, read due metadata, submit encrypted drafts, validate bounded payment intents, request payroll, and track receipts; Mainnet execution still stops for human PAYO/Ready approval.
+- Begin Phase 5 with the isolated-signer cutover: configure the private signer service and private Fly networking, separate the owner and treasury-viewing secrets, add replay-protected HMAC authentication, attest the pinned chain/account/pool configuration, and keep owner material out of the web, MCP, worker, prover, and relayer.
+- Register and verify the treasury viewing identity, complete any required owner rotation or policy activation transactions, fund only the policy account's public gas budget, and read every resulting Mainnet value back before enabling dispatch.
+- Authorize one exact, short-lived, one-run policy and complete a small autonomous Mainnet payroll canary through private settlement, finality, proof receipt, and reconciliation. Human-approved execution remains the default and fail-safe path.
 - Record at least three successful Mainnet transactions that touch STRK20 and PAYO contracts.
 - Demonstrate STRK payroll, USDC payroll, and one advanced obligation or agent flow.
 - Publish contract addresses, class hashes, proof benchmarks, demo URL, and a three-minute demo.
+- The current application topology and RPC-verifiable class hashes are published
+  in [Active PAYO Mainnet contracts](./docs/MAINNET_CONTRACTS.md).
+- Reproducible proof timings and historical/Phase 5 gas evidence are published in
+  [PAYO proof and Mainnet gas benchmarks](./docs/MAINNET_BENCHMARKS.md).
 - Complete `strk20.json` and publish deployment, recovery, security, and known-limitations runbooks.
 
 ## Privacy model
@@ -234,6 +242,10 @@ npm run workers
 Use a process supervisor in hosted environments. The full Mainnet database,
 relayer, secret, indexer, and incident precautions are in
 [the Phase 2 deployment runbook](./docs/phase2-mainnet-deployment.md).
+
+The ordered signer cutover, autonomous canary, rollback, privacy, security,
+legal-boundary and known-limitations procedure is in the
+[Phase 5 Mainnet release runbook](./docs/MAINNET_RELEASE_RUNBOOK.md).
 
 Circuit, proof, and contract verification:
 

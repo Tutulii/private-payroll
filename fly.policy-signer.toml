@@ -5,6 +5,9 @@ primary_region = "sin"
   dockerfile = "Dockerfile.policy-signer"
 
 [env]
+  # Fly private application DNS is IPv6. Keep the signer off the public proxy
+  # while allowing the web/worker to reach it through the private 6PN network.
+  HOST = "::"
   PAYO_CHAIN_ID = "0x534e5f4d41494e"
   PAYO_AGENT_POLICY_ACCOUNT_ADDRESS = "0x656928a6f3aeb62c2e62ff7457d351a41ed987ceed07c514539165662ecb7e0"
   PAYO_STRK20_POOL_ADDRESS = "0x40337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a"

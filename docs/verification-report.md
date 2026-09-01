@@ -31,6 +31,22 @@ The production build warnings originate in optional Privy/viem dependency paths 
 
 `npm audit --omit=dev` currently reports 10 moderate and no high or critical production findings. They are transitive through Privy's EVM/wagmi/MetaMask dependency path; npm's suggested remedy is a breaking Privy downgrade. No unsafe forced downgrade was applied. This must be reassessed and explicitly resolved or accepted before the Phase 5 dependency gate.
 
+## Phase 5 dependency revalidation
+
+Recorded on 2026-09-01. The application no longer ships the privacy SDK's
+unused Node-only `starknet-devnet` downloader/process dependency. The exact
+reviewed SDK archive remains pinned by SHA-256, while a local production package
+fails closed if that test-only Devnet API is called. PAYO's proof gates continue
+to use the independently pinned external Devnet binary from
+`toolchains.lock.json`.
+
+`npm run audit:production` now reports **0 critical, 0 high, 0 moderate and 5
+low** production findings. The five lows are the known `elliptic` chain through
+the pinned Garaga JavaScript verifier dependency; npm offers only a Garaga
+downgrade, so no unsafe forced change was applied. CI now enforces failure at
+moderate severity or above, and the runtime-boundary regression test confirms
+that application source cannot import the disabled SDK testing path.
+
 ## Phase 0 hard gate still open
 
 Native Circle USDC shielding and a cross-account private transaction are proven at the Ready `wallet confirmed` evidence level. The shield's USDC details are public; the private transaction's asset and recipient relationship are Ready/user-attested because the pool hides them by design. This is not SettlementMatch. Exact evidence and limitations are recorded in `evidence/usdc-mainnet.json` and `docs/usdc-mainnet-evidence.md`.

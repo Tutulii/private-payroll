@@ -9,6 +9,8 @@
     "privacySdk": "0.14.3-rc.5",
     "privacySdkRegistry": "https://npm.pkg.github.com",
     "privacySdkSource": "https://github.com/starkware-libs/starknet-privacy/tree/main/sdk",
+    "privacySdkTarballSha256": "7236e515afaefb1858b89428f8f44a22b706df126abc6275d3d6b14f331904fa",
+    "privacySdkDevnetRuntime": "production-disabled; use pinned external starknetDevnet",
     "walletApiMinimum": "0.10.3",
     "scarb": "2.16.1",
     "cairo": "2.16.1",
