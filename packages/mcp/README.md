@@ -17,7 +17,32 @@ PAYO_CAPABILITY_ISSUER_PUBLIC_KEY='<pinned Ed25519 public key, base64>' \
 npm run mcp
 ```
 
+Configure an MCP-capable client to launch that command from the cloned PAYO
+repository. Adapt the field names to the client, but keep the credential values
+in its secret/environment store rather than a prompt:
+
+```json
+{
+  "mcpServers": {
+    "payo": {
+      "command": "npm",
+      "args": ["run", "mcp"],
+      "cwd": "/path/to/private-payroll",
+      "env": {
+        "PAYO_API_URL": "https://private-payroll.fly.dev",
+        "PAYO_API_ACCESS_TOKEN": "<one-time-issued bearer token>",
+        "PAYO_CAPABILITY_ID": "<registered capability id>",
+        "PAYO_CAPABILITY_ISSUER_PUBLIC_KEY": "<pinned Ed25519 key>"
+      }
+    }
+  }
+}
+```
+
+Do not use raw REST probes in place of the adapter. `payo_get_capability` returns the signed `organizationId` required by the other tools.
+
 For local development, `PAYO_API_URL=http://localhost:3000` is accepted.
+
 Remote plaintext HTTP, credential-bearing URLs, query strings, and fragments
 are rejected. Keep the Ready session token in the AI client's secret/env
 configuration; never place it in prompts or commit it to the repository.

@@ -16,7 +16,7 @@
     "test:browser:phase4": "playwright test --config playwright.phase4.config.ts",
     "test:db": "vitest run lib/persistence/database.integration.test.ts",
     "test:db:phase4-migration": "node scripts/test-phase4-migration-gate.mjs",
-    "test:mcp": "vitest run packages/mcp/src/payo-server.test.ts",
+    "test:mcp": "vitest run packages/mcp/src",
     "test:watch": "vitest",
     "verify:status": "node scripts/verify-completion.mjs",
     "verify:completion": "node scripts/verify-completion.mjs --require-complete",

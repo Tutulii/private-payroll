@@ -101,6 +101,8 @@ function localDateTimeInputValue(value: Date): string {
 }
 function mcpConnectionText(connection: AgentMcpConnection, apiUrl: string): string {
   return [
+    "# PAYO MCP uses local stdio from the cloned PAYO repository; this is not a raw REST bundle.",
+    "# Configure the MCP client command as: npm run mcp",
     "PAYO_API_URL=" + JSON.stringify(apiUrl),
     "PAYO_API_ACCESS_TOKEN=" + JSON.stringify(connection.accessToken),
     "PAYO_CAPABILITY_ID=" + JSON.stringify(connection.capabilityId),

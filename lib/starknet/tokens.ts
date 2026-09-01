@@ -1,5 +1,3 @@
-import { num } from "starknet";
-
 export type PayrollTokenSymbol = "STRK" | "USDC";
 
 export type PayrollToken = {
@@ -59,8 +57,8 @@ export function zeroTokenBalances(): Record<PayrollTokenSymbol, bigint> {
 
 export function tokenByAddress(address: string): PayrollToken | undefined {
   try {
-    const normalized = num.toBigInt(address);
-    return PAYROLL_TOKEN_LIST.find((token) => num.toBigInt(token.address) === normalized);
+    const normalized = BigInt(address);
+    return PAYROLL_TOKEN_LIST.find((token) => BigInt(token.address) === normalized);
   } catch {
     return undefined;
   }
