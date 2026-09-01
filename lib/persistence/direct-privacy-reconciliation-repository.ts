@@ -23,6 +23,7 @@ import {
   auditEvents,
   directPrivacyAccounts,
   directPrivacyReconciliations,
+  directPrivacyTreasuries,
   directPrivacySubmissions,
 } from "./schema";
 
@@ -169,16 +170,22 @@ export async function storeDirectPrivacyProofDraft(input: {
     const [joined] = await transaction.select({
       row: directPrivacyReconciliations,
       account: directPrivacyAccounts,
+      treasury: directPrivacyTreasuries,
     }).from(directPrivacyReconciliations).innerJoin(
       directPrivacyAccounts,
       eq(directPrivacyAccounts.id, directPrivacyReconciliations.accountId),
+    ).innerJoin(
+      directPrivacyTreasuries,
+      eq(directPrivacyTreasuries.policyAccountAddress, directPrivacyAccounts.treasuryAddress),
     ).where(eq(directPrivacyReconciliations.executionId, input.executionId))
       .limit(1).for("update");
     if (
       !joined
       || joined.account.revokedAt
-      || joined.account.activeExecutionId !== input.executionId
-      || joined.account.stateVersion !== draft.expectedStateVersion
+      || joined.treasury.organizationId !== joined.account.organizationId
+      || joined.treasury.activeAccountId !== joined.account.id
+      || joined.treasury.activeExecutionId !== input.executionId
+      || joined.treasury.stateVersion !== draft.expectedStateVersion
     ) throw new Error("DIRECT_PROOF_DRAFT_ACCOUNT_STALE");
     if (
       draft.settlement.settlementRoot.toLowerCase() !== joined.row.settlementRoot

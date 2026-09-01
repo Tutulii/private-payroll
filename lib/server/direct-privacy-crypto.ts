@@ -23,6 +23,7 @@ import {
   directPrivacyRunMaterialSchema,
   directPrivacySecretsSchema,
   directPrivacyStateSchema,
+  directPrivacyTreasurySecretsSchema,
   type DirectPrivacyPreparation,
   type DirectPrivacyPayrollAuthorization,
   type DirectPrivacyProofDraft,
@@ -32,6 +33,7 @@ import {
   type DirectPrivacyRunMaterial,
   type DirectPrivacySecrets,
   type DirectPrivacyState,
+  type DirectPrivacyTreasurySecrets,
 } from "@/lib/domain/direct-privacy";
 
 export const encryptedDirectPrivacyPayloadSchema = z.object({
@@ -43,13 +45,12 @@ export const encryptedDirectPrivacyPayloadSchema = z.object({
 }).strict();
 export type EncryptedDirectPrivacyPayload = z.infer<typeof encryptedDirectPrivacyPayloadSchema>;
 
-export type DirectPrivacyCryptoContext = {
+type DirectPrivacyAccountCryptoContext = {
   accountId: string;
   organizationId: string;
   capabilityId: string;
 } & (
   | { purpose: "secrets" }
-  | { purpose: "state"; stateVersion: number }
   | { purpose: "run"; runId: string; runVersion: number; materialCommitment: string }
   | { purpose: "preparation"; executionId: string; preparationCommitment: string }
   | {
@@ -68,9 +69,23 @@ export type DirectPrivacyCryptoContext = {
   }
 );
 
+type DirectPrivacyTreasuryCryptoContext = {
+  policyAccountAddress: string;
+  organizationId: string;
+  poolAddress: string;
+} & (
+  | { purpose: "treasury-secrets" }
+  | { purpose: "treasury-state"; stateVersion: number }
+);
+
+export type DirectPrivacyCryptoContext =
+  | DirectPrivacyAccountCryptoContext
+  | DirectPrivacyTreasuryCryptoContext;
+
 type PayloadByPurpose = {
   secrets: DirectPrivacySecrets;
-  state: DirectPrivacyState;
+  "treasury-secrets": DirectPrivacyTreasurySecrets;
+  "treasury-state": DirectPrivacyState;
   run: DirectPrivacyRunMaterial;
   preparation: DirectPrivacyPreparation;
   "payroll-authorization": DirectPrivacyPayrollAuthorization;
@@ -82,7 +97,8 @@ type PayloadByPurpose = {
 
 const schemas = {
   secrets: directPrivacySecretsSchema,
-  state: directPrivacyStateSchema,
+  "treasury-secrets": directPrivacyTreasurySecretsSchema,
+  "treasury-state": directPrivacyStateSchema,
   run: directPrivacyRunMaterialSchema,
   preparation: directPrivacyPreparationSchema,
   "payroll-authorization": directPrivacyPayrollAuthorizationSchema,

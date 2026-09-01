@@ -1050,6 +1050,39 @@ export const agentExecutions = pgTable(
   ],
 );
 
+/**
+ * Canonical private-note identity and state for one deployed policy address.
+ * Capabilities rotate; this treasury identity must not, otherwise notes become
+ * undiscoverable or independently spendable from divergent registries.
+ */
+export const directPrivacyTreasuries = pgTable(
+  "direct_privacy_treasuries",
+  {
+    policyAccountAddress: text("policy_account_address").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "restrict" }),
+    poolAddress: text("pool_address").notNull(),
+    encryptedSecrets: jsonb("encrypted_secrets").notNull(),
+    encryptedState: jsonb("encrypted_state").notNull(),
+    stateVersion: integer("state_version").default(1).notNull(),
+    registrationState: text("registration_state").default("pending").notNull(),
+    registrationPublicKey: text("registration_public_key"),
+    registrationBlockNumber: bigint("registration_block_number", { mode: "bigint" }),
+    registrationBlockHash: text("registration_block_hash"),
+    registeredAt: timestamp("registered_at", { withTimezone: true }),
+    activeExecutionId: text("active_execution_id"),
+    activeAccountId: text("active_account_id"),
+    activeLeaseExpiresAt: timestamp("active_lease_expires_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("direct_privacy_treasuries_organization_idx").on(table.organizationId),
+    index("direct_privacy_treasuries_registration_idx").on(table.registrationState),
+  ],
+);
+
 /** One explicitly provisioned direct-SDK account per autonomous capability. */
 export const directPrivacyAccounts = pgTable(
   "direct_privacy_accounts",
@@ -1062,18 +1095,17 @@ export const directPrivacyAccounts = pgTable(
       .notNull()
       .unique()
       .references(() => agentCapabilities.id, { onDelete: "restrict" }),
+    treasuryAddress: text("treasury_address")
+      .notNull()
+      .references(() => directPrivacyTreasuries.policyAccountAddress, { onDelete: "restrict" }),
     config: jsonb("config").notNull(),
     encryptedSecrets: jsonb("encrypted_secrets").notNull(),
-    encryptedState: jsonb("encrypted_state").notNull(),
-    stateVersion: integer("state_version").default(1).notNull(),
     activationState: text("activation_state").default("pending").notNull(),
     activationBlockNumber: bigint("activation_block_number", { mode: "bigint" }),
     activationBlockHash: text("activation_block_hash"),
     activationClassHash: text("activation_class_hash"),
     activationBlockTimestamp: bigint("activation_block_timestamp", { mode: "bigint" }),
     activatedAt: timestamp("activated_at", { withTimezone: true }),
-    activeExecutionId: text("active_execution_id"),
-    activeLeaseExpiresAt: timestamp("active_lease_expires_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),

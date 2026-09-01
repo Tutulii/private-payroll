@@ -365,6 +365,43 @@ fn policy_account_supports_snip6_and_snip9_and_executes_one_bound_run() {
 }
 
 #[test]
+fn policy_owner_recovery_requires_acceptance_and_rotates_the_snip6_key() {
+    let current_owner = StarkCurveKeyPairImpl::generate();
+    let replacement_owner = StarkCurveKeyPairImpl::generate();
+    let account = deploy_policy_account(current_owner.public_key);
+    let digest = poseidon_hash_span(
+        array![
+            'StarkNet Message', 'accept_ownership', account.into(), current_owner.public_key,
+        ]
+            .span(),
+    );
+    let (r, s) = replacement_owner.sign(digest).unwrap();
+    start_cheat_caller_address(account, account);
+    let dispatcher = AccountABIDispatcher { contract_address: account };
+    dispatcher.set_public_key(replacement_owner.public_key, array![r, s].span());
+    assert(dispatcher.get_public_key() == replacement_owner.public_key, 'owner not rotated');
+}
+
+#[test]
+#[should_panic(expected: 'Account: invalid signature')]
+fn policy_owner_recovery_rejects_acceptance_by_a_different_key() {
+    let current_owner = StarkCurveKeyPairImpl::generate();
+    let replacement_owner = StarkCurveKeyPairImpl::generate();
+    let unauthorized_signer = StarkCurveKeyPairImpl::generate();
+    let account = deploy_policy_account(current_owner.public_key);
+    let digest = poseidon_hash_span(
+        array![
+            'StarkNet Message', 'accept_ownership', account.into(), current_owner.public_key,
+        ]
+            .span(),
+    );
+    let (r, s) = unauthorized_signer.sign(digest).unwrap();
+    start_cheat_caller_address(account, account);
+    AccountABIDispatcher { contract_address: account }
+        .set_public_key(replacement_owner.public_key, array![r, s].span());
+}
+
+#[test]
 #[should_panic(expected: 'PAYO_POLICY_SETTLEMENT')]
 fn policy_account_rejects_a_run_without_atomic_settlement_proof() {
     let owner = StarkCurveKeyPairImpl::generate();

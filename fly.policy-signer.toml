@@ -1,0 +1,30 @@
+app = "payo-policy-signer"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile.policy-signer"
+
+[env]
+  PAYO_CHAIN_ID = "0x534e5f4d41494e"
+  PAYO_AGENT_POLICY_ACCOUNT_ADDRESS = "0x656928a6f3aeb62c2e62ff7457d351a41ed987ceed07c514539165662ecb7e0"
+  PAYO_STRK20_POOL_ADDRESS = "0x40337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a"
+  PAYO_AGENT_SEAL_ADDRESS = "0x1b0208114f33ea0ac800f6474307680a0cf239d13ac11818523f70cba49c84a"
+  PAYO_POLICY_SIGNER_MAX_LIFETIME_SECONDS = "31622400"
+  PAYO_POLICY_SIGNER_MAX_CALLS = "256"
+  PAYO_POLICY_SIGNER_MAX_PROOF_ACTIONS = "64"
+  PAYO_POLICY_SIGNER_MAX_CREATED_NOTES = "8"
+  PAYO_AGENT_STRK_TOKEN_ADDRESS = "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d"
+  PAYO_AGENT_USDC_TOKEN_ADDRESS = "0x033068f6539f8e6e6b131e6b2b814e6c34a5224bc66947c47dab9dfee93b35fb"
+
+[checks.signer]
+  grace_period = "15s"
+  interval = "30s"
+  method = "get"
+  path = "/health"
+  port = 3000
+  timeout = "5s"
+  type = "http"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

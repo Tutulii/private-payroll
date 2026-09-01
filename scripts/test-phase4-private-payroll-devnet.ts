@@ -4,7 +4,7 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 import { readdir, readFile, stat, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   Account,
@@ -60,6 +60,7 @@ import {
   type DirectPrivacyAccountConfig,
 } from "@/lib/domain/direct-privacy";
 import { PAYROLL_TOKENS } from "@/lib/starknet/tokens";
+import { AgentProofClient } from "@/lib/server/agent-proof-client";
 
 const root = resolve(import.meta.dirname, "..");
 const rpcUrl = process.env.PAYO_DEVNET_RPC_URL ?? "http://127.0.0.1:5050";
@@ -138,6 +139,34 @@ async function readJson(path: string): Promise<any> {
   return JSON.parse(await readFile(resolve(root, path), "utf8"));
 }
 
+function privacyPoolArtifacts(sdkRoot: string): {
+  sierra: string;
+  casm: string;
+  sources: string;
+} {
+  const configuredSierra = process.env.PAYO_PRIVACY_POOL_SIERRA?.trim();
+  const configuredCasm = process.env.PAYO_PRIVACY_POOL_CASM?.trim();
+  if (Boolean(configuredSierra) !== Boolean(configuredCasm)) {
+    throw new Error("PAYO_PRIVACY_POOL_SIERRA and PAYO_PRIVACY_POOL_CASM must be configured together.");
+  }
+  if (configuredSierra && configuredCasm) {
+    if (!isAbsolute(configuredSierra) || !isAbsolute(configuredCasm)) {
+      throw new Error("The configured Privacy Pool artifacts must use absolute paths.");
+    }
+    return {
+      sierra: configuredSierra,
+      casm: configuredCasm,
+      sources: process.env.PAYO_PRIVACY_POOL_SOURCE_ROOT?.trim()
+        || resolve(configuredSierra, "../../../packages/privacy"),
+    };
+  }
+  return {
+    sierra: resolve(sdkRoot, "../target/release/privacy_Privacy.contract_class.json"),
+    casm: resolve(sdkRoot, "../target/release/privacy_Privacy.compiled_contract_class.json"),
+    sources: resolve(sdkRoot, "../packages/privacy"),
+  };
+}
+
 async function rpc(method: string, params: unknown = {}): Promise<any> {
   const response = await fetch(rpcUrl, {
     method: "POST",
@@ -184,9 +213,8 @@ async function assertFreshArtifacts(): Promise<void> {
     }
   }
   const sdk = await loadPinnedPrivacySdk();
-  const poolSierra = await readJson(
-    resolve(sdk.root, "../target/release/privacy_Privacy.contract_class.json"),
-  );
+  const poolArtifacts = privacyPoolArtifacts(sdk.root);
+  const poolSierra = await readJson(poolArtifacts.sierra);
   const actualPoolClassHash = num.toHex(BigInt(hash.computeContractClassHash(poolSierra)));
   if (actualPoolClassHash !== expectedPoolClassHash) {
     throw new Error(`Pinned Privacy Pool class is ${actualPoolClassHash}, expected ${expectedPoolClassHash}.`);
@@ -317,11 +345,7 @@ async function deploy(
 if (action === "deploy") {
   await rpc("devnet_setTime", { time: 9_000 });
   const sdk = await loadPinnedPrivacySdk();
-  const poolDefinition: Artifact = {
-    sierra: resolve(sdk.root, "../target/release/privacy_Privacy.contract_class.json"),
-    casm: resolve(sdk.root, "../target/release/privacy_Privacy.compiled_contract_class.json"),
-    sources: resolve(sdk.root, "../packages/privacy"),
-  };
+  const poolDefinition: Artifact = privacyPoolArtifacts(sdk.root);
   const screeningModule = await import(
     pathToFileURL(resolve(sdk.root, "dist/testing/screening-signer.js")).href
   ) as { SCREENING_SIGNER_PUBLIC_KEY: bigint };
@@ -795,7 +819,7 @@ if (action === "settle") {
     throw new Error(`Recipient setup balance is ${recipientBefore}, expected one atomic STRK.`);
   }
 
-  const runId = "phase4-private-payroll-run-0001";
+  const runId = "00000000-0000-4000-8000-000000000004";
   const organizationId = "phase4-private-payroll-organization";
   const capabilityId = "phase4-private-payroll-capability";
   const amountAtomic = payroll.calculatedLines[0].netAtomic.toString();
@@ -983,12 +1007,28 @@ if (action === "settle") {
     },
     [proofPrincipal],
   );
-  const settlementProof = await proveSettlementMatchOnSelfHostedNode({
+  const settlementProofInput = {
     requestId: runId,
     encryptedPayrollWitness,
     encryptedSettlementWitness,
     principal: proofPrincipal,
-  });
+  };
+  const agentProverUrl = process.env.PAYO_AGENT_PROVER_URL?.trim();
+  const settlementProof = agentProverUrl
+    ? await (async () => {
+        const workerSecret = process.env.PAYO_WORKER_SECRET?.trim();
+        if (!workerSecret) {
+          throw new Error("PAYO_WORKER_SECRET is required for the remote Phase 4 prover.");
+        }
+        const proofClient = new AgentProofClient(agentProverUrl, workerSecret);
+        for (let attempt = 0; attempt < 240; attempt += 1) {
+          const result = await proofClient.settlement(settlementProofInput);
+          if (result) return result;
+          await new Promise((resolvePromise) => setTimeout(resolvePromise, 5_000));
+        }
+        throw new Error("The remote SettlementMatch proof exceeded its 20-minute deadline.");
+      })()
+    : await proveSettlementMatchOnSelfHostedNode(settlementProofInput);
   const expectedSettlementRoot = buildSettlementRoot(settlementEvidence.emittedNotes);
   if (
     settlementProof.chunks.length !== 1
@@ -1157,6 +1197,7 @@ if (action === "settle") {
         typeof sdkResult.callAndProof.proof.data === "string"
         && sdkResult.callAndProof.proof.data.length > 0,
       sdkProofFactsPresent: sdkResult.callAndProof.proof.proofFacts.length > 0,
+      settlementProver: agentProverUrl ? "remote-self-hosted" : "local-self-hosted",
     },
     checks: {
       payrollIntegrityPrecommittedBeforePayment: true,

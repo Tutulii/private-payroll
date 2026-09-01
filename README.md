@@ -35,8 +35,8 @@ PAYO labels capabilities according to evidence, not intention.
 | PAYO payroll-seal contract | Deployed and live-proven for STRK, USDC, and mixed batches | The five-contract Mainnet topology is binding-verified. Ready STRK-only, native-USDC-only, and mixed STRK/USDC payrolls reached durable `confirmed`, seal `proven`, and two-shard `onchain_verified` states in [Phase 2 evidence](./docs/phase2-evidence.md) |
 | Advanced obligation engine | Transaction-safe merged v2 deployed and active on Mainnet; fresh PAYO payroll E2E pending | One proof retains PayrollIntegrity plus statutory, FX, classification, schedules, vesting, and offboarding constraints; both 3,223-felt shards passed the deployed verifier, tamper rejection, deterministic class-hash read-back, and registry activation recorded in [Phase 3 evidence](./docs/phase3-evidence.md) |
 | Compliance proof export | Built and tested locally | Balanced journal and verifier-bound ZIP package |
-| MCP policy gateway | Built and tested locally | Signed capabilities and adversarial tests; generic wallet signing is prohibited |
-| SettlementMatch proof | Research dependency | Ready does not expose its viewing key |
+| MCP policy gateway | Phase 4 complete; Mainnet agent canary remains Phase 5 | All eight tools, encrypted capability authority, transactional limits, human approval and bounded direct-SDK execution are linked in [Phase 4 evidence](./docs/phase4-evidence.md) |
+| SettlementMatch proof | Working for direct Privacy SDK policy accounts | Real proof, generated verifier, atomic `FINALIZE`, exact private balance delta and replay rejection are recorded in [Phase 4 evidence](./docs/phase4-evidence.md); Ready does not expose its viewing key, so Ready-backed runs remain `confirmed` |
 
 Three distinct states are never collapsed into one:
 

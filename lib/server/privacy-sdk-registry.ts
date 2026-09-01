@@ -1,8 +1,10 @@
 import "server-only";
 
 import {
+  directPrivacyHistoryTransactionSchema,
   directPrivacyHistoryCursorSchema,
   serializedPrivateRegistrySchema,
+  type DirectPrivacyHistoryTransaction,
   type SerializedPrivateRegistry,
 } from "@/lib/domain/direct-privacy";
 import type { PrivacySdkCodecs } from "./privacy-sdk-loader";
@@ -174,4 +176,97 @@ export function deserializePrivacyHistoryCursor(input: unknown) {
     ...(cursor.beginBlockNumber === null ? {} : { beginBlockNumber: cursor.beginBlockNumber }),
     historyComplete: cursor.historyComplete,
   };
+}
+
+type SdkHistoryTransaction = {
+  blockNumber: number;
+  transactionHash: bigint;
+  notes: Array<{
+    channelKind: string;
+    token: bigint;
+    noteIndex: number;
+    noteId: bigint;
+    counterparty: bigint;
+    amount: bigint;
+    salt: bigint;
+  }>;
+  deposits: Array<{ fromAddress: bigint; token: bigint; amount: bigint }>;
+  withdrawals: Array<{ toAddress: bigint; token: bigint; amount: bigint }>;
+  openNoteDeposits: Array<{
+    depositor: bigint;
+    token: bigint;
+    noteId: bigint;
+    amount: bigint;
+  }>;
+  registeredPubkey?: bigint;
+};
+
+/** Converts SDK history into a JSON-safe shape before it enters treasury encryption. */
+export function serializePrivacyHistoryTransaction(
+  input: unknown,
+): DirectPrivacyHistoryTransaction {
+  const transaction = input as SdkHistoryTransaction;
+  if (!transaction || !Array.isArray(transaction.notes)) {
+    throw new Error("The Privacy SDK returned an invalid private-history transaction.");
+  }
+  return directPrivacyHistoryTransactionSchema.parse({
+    blockNumber: transaction.blockNumber,
+    transactionHash: felt(transaction.transactionHash),
+    notes: transaction.notes.map((note) => ({
+      channelKind: note.channelKind,
+      token: felt(note.token),
+      noteIndex: note.noteIndex,
+      noteId: felt(note.noteId),
+      counterparty: felt(note.counterparty),
+      amount: BigInt(note.amount).toString(),
+      salt: felt(note.salt),
+    })),
+    deposits: transaction.deposits.map((deposit) => ({
+      fromAddress: felt(deposit.fromAddress),
+      token: felt(deposit.token),
+      amount: BigInt(deposit.amount).toString(),
+    })),
+    withdrawals: transaction.withdrawals.map((withdrawal) => ({
+      toAddress: felt(withdrawal.toAddress),
+      token: felt(withdrawal.token),
+      amount: BigInt(withdrawal.amount).toString(),
+    })),
+    openNoteDeposits: transaction.openNoteDeposits.map((deposit) => ({
+      depositor: felt(deposit.depositor),
+      token: felt(deposit.token),
+      noteId: felt(deposit.noteId),
+      amount: BigInt(deposit.amount).toString(),
+    })),
+    registeredPubkey: transaction.registeredPubkey === undefined
+      ? null
+      : felt(transaction.registeredPubkey),
+  });
+}
+
+/**
+ * Merge newest-first pages without accepting two different plaintexts for the
+ * same Starknet transaction hash. The result remains bounded before encryption.
+ */
+export function mergePrivacyHistory(
+  existing: readonly DirectPrivacyHistoryTransaction[],
+  incoming: readonly DirectPrivacyHistoryTransaction[],
+  maximum = 1_024,
+): DirectPrivacyHistoryTransaction[] {
+  if (!Number.isInteger(maximum) || maximum < 1 || maximum > 1_024) {
+    throw new Error("Private-history retention is outside PAYO's bound.");
+  }
+  const byHash = new Map<string, DirectPrivacyHistoryTransaction>();
+  for (const raw of [...existing, ...incoming]) {
+    const transaction = directPrivacyHistoryTransactionSchema.parse(raw);
+    const key = BigInt(transaction.transactionHash).toString(16);
+    const prior = byHash.get(key);
+    if (prior && JSON.stringify(prior) !== JSON.stringify(transaction)) {
+      throw new Error("The private indexer returned conflicting history for one transaction.");
+    }
+    byHash.set(key, transaction);
+  }
+  return [...byHash.values()]
+    .sort((left, right) => right.blockNumber - left.blockNumber
+      || (BigInt(right.transactionHash) > BigInt(left.transactionHash) ? 1 : -1))
+    .slice(0, maximum);
 }

@@ -407,9 +407,44 @@ approval_threshold
 nonce
 ```
 
-The target signer accepts a structured `PaymentIntent`, loads the capability available to that signer, validates it, reconstructs STRK20 actions, simulates, proves, and signs. It never signs an arbitrary hash or caller-provided call array. The current MCP gateway implements signed, revocable capability validation and approval routing but deliberately contains no wallet signer; in-policy autonomous requests return `delegated_signer_not_configured` until a restricted policy-account/session-key implementation is available.
+The MCP boundary accepts only a structured `PaymentIntent`. The execution
+gateway reloads its tenant, capability, run and proof records from PostgreSQL,
+reserves limits transactionally, reconstructs the exact STRK20 actions, proves,
+simulates and recovers idempotently. MCP callers never supply hashes, calldata,
+calls, targets, proofs, signer methods or private keys.
 
-Human approval remains the default. Autonomous execution is enabled per capability only after contract, signer, and adversarial MCP tests pass.
+One policy-account address owns one durable encrypted private-treasury state and
+viewing key. Short-lived capability records contain only their own session key
+and proof principal; they share neither divergent note registries nor parallel
+spend leases. The one global treasury lease serializes proof generation,
+private-note selection, submission and final state advancement across every
+capability for that address.
+
+STRK20 proof invocations require the policy account's owner signature, while
+SNIP-9 execution uses the capability's short-lived session signature. Those are
+separate trust domains:
+
+- `payo-policy-signer` alone holds the owner key and has no public Fly service;
+- web/worker authenticate with a replay-protected HMAC but never receive that key;
+- the signer accepts only the canonical zero-fee, no-paymaster, one-call
+  `compile_actions` envelope for the pinned chain, pool, treasury and registered
+  viewing key, or one bounded `configure_policy` self-call;
+- message, declare, deploy, rotation, pause, revocation and arbitrary-call
+  signing methods fail closed;
+- the fee relayer has a different role and cannot satisfy owner validation;
+- the session key signs only the time-bounded `execute_from_outside_v2` call,
+  after which the policy account re-parses pool actions, limits and PAYO roots
+  onchain before settlement.
+
+Activation is a pinned read-back, not a configuration claim: class hash, owner,
+policy fields, active state and STRK20 registration key must all match. Missing
+registration is not reported as zero balance. Policy configuration and owner
+recovery additionally require a small public-STRK gas budget on the policy
+account; private payroll principal remains in STRK20 notes.
+
+Human approval remains the default. Autonomous execution is enabled per
+capability only after contract, isolated-signer, database and adversarial MCP
+tests plus an explicitly approved live canary pass.
 
 ## 15. Failure behavior
 
@@ -417,6 +452,8 @@ Human approval remains the default. Autonomous execution is enabled per capabili
 |---|---|
 | Ready missing or old Wallet API | Show unsupported state; do not attempt a private request |
 | STRK20 registration missing | Link setup flow; do not label as zero balance |
+| Isolated owner signer unavailable or mismatched | Stop before proof generation; never fall back to the session or fee-relayer key |
+| Policy account lacks public owner-operation gas | Block configuration/rotation and show the simulated requirement; do not consume a capability reservation |
 | USDC pool support missing | Disable USDC; do not substitute another token |
 | Fee or public balance unavailable | Disable shielding and offer explicit retry |
 | Wallet rejection | Preserve the pre-wallet durable approval intent, mark it cancelled only after the operator confirms Ready submitted no transaction, and return the obligation schedule to a retryable state; never record a transaction hash that does not exist |

@@ -25,8 +25,10 @@ import { leaseAgentExecutions } from "./agent-execution-worker-repository";
 import {
   leaseDirectPrivacyExecutionContext,
   activateDirectPrivacyAccount,
+  deriveDirectPrivacyViewingPublicKey,
   provisionDirectPrivacyAccount,
   provisionDirectPrivacyAccountFromRuns,
+  releaseDirectPrivacyExecution,
   saveDirectPrivacyState,
   stageDirectPrivacyRunWitness,
   stageDirectPrivacyRunMaterial,
@@ -37,6 +39,7 @@ import {
   directPrivacyAccounts,
   directPrivacyAuthorizedRuns,
   directPrivacyRunMaterials,
+  directPrivacyTreasuries,
   organizationMembers,
   organizations,
   proofBundles,
@@ -50,20 +53,33 @@ export const principal: AuthenticatedPrincipal = {
 export const now = new Date("2026-08-30T11:00:00.000Z");
 const root = (byte: string) => `0x${byte.repeat(64)}` as `0x${string}`;
 
-export async function fixture(options: { activate?: boolean; authoritativeProvision?: boolean; proofVerificationState?: string } = {}) {
-  const organizationId = generateUuidV7();
+export async function fixture(options: {
+  activate?: boolean;
+  authoritativeProvision?: boolean;
+  proofVerificationState?: string;
+  registrationPublicKey?: string;
+  runNullifierByte?: string;
+  organizationId?: string;
+  policyId?: `0x${string}`;
+  sessionKeyByte?: string;
+} = {}) {
+  const organizationId = options.organizationId ?? generateUuidV7();
   const runId = generateUuidV7();
-  await getDatabase().insert(organizations).values({
-    id: organizationId,
-    encryptedProfile: { ciphertext: "direct-privacy-test" },
-    recoveryState: "package_downloaded",
-  });
-  await getDatabase().insert(organizationMembers).values({
-    organizationId,
-    principalId: principal.principalId,
-    role: "admin",
-    vaultPublicKey: "direct-privacy-public-key",
-  });
+  const runNullifier = root(options.runNullifierByte ?? "5");
+  const policyId = options.policyId ?? "0x222";
+  if (!options.organizationId) {
+    await getDatabase().insert(organizations).values({
+      id: organizationId,
+      encryptedProfile: { ciphertext: "direct-privacy-test" },
+      recoveryState: "package_downloaded",
+    });
+    await getDatabase().insert(organizationMembers).values({
+      organizationId,
+      principalId: principal.principalId,
+      role: "admin",
+      vaultPublicKey: "direct-privacy-public-key",
+    });
+  }
   await getDatabase().insert(payrollRuns).values({
     id: runId,
     organizationId,
@@ -75,7 +91,7 @@ export async function fixture(options: { activate?: boolean; authoritativeProvis
     manifestRoot: root("2"),
     policyRoot: root("3"),
     fxRoot: root("4"),
-    runNullifier: root("5"),
+    runNullifier,
   });
   await getDatabase().insert(proofBundles).values({
     id: generateUuidV7(),
@@ -122,7 +138,7 @@ export async function fixture(options: { activate?: boolean; authoritativeProvis
     usedCallCount: 0,
     validAfter: "2026-08-30T00:00:00.000Z",
     expiresAt: "2026-08-31T00:00:00.000Z",
-    nonce: "direct-privacy-capability-nonce-0001",
+    nonce: `direct-privacy-capability:${runId}`,
   };
   const capabilityHash = hashCapability(capability);
   await getDatabase().insert(agentCapabilities).values({
@@ -140,7 +156,7 @@ export async function fixture(options: { activate?: boolean; authoritativeProvis
   });
   const scope = commitPolicyCapability(capability);
   const policyContext = {
-    policyId: "0x222",
+    policyId,
     sealMode: 0 as const,
     proofVersion: 1,
     schemaVersion: 1,
@@ -150,7 +166,7 @@ export async function fixture(options: { activate?: boolean; authoritativeProvis
   const authorizedTree = buildAuthorizedPolicyRunTree(policyContext, [{
     agreementRoot: root("1"),
     manifestRoot: root("2"),
-    runNullifier: root("5"),
+    runNullifier,
   }]);
   const authorizedProof = authorizedTree.proofs[0];
   const proofPrincipal = generateVaultPrincipal(`agent-proof:${runId}`);
@@ -161,7 +177,7 @@ export async function fixture(options: { activate?: boolean; authoritativeProvis
         runIds: [runId],
         request: {
           policyAccountAddress: "0x111",
-          policyId: "0x222",
+          policyId,
           validForSeconds: 3_600,
           periodSeconds: 3_600,
           maxCallsPerPeriod: 1,
@@ -194,7 +210,7 @@ export async function fixture(options: { activate?: boolean; authoritativeProvis
         config: {
           chainId: "0x534e5f5345504f4c4941",
           policyAccountAddress: "0x111",
-          policyId: "0x222",
+          policyId,
           sealMode: 0,
           proofVersion: 1,
           schemaVersion: 1,
@@ -211,7 +227,7 @@ export async function fixture(options: { activate?: boolean; authoritativeProvis
           tokenAddresses: { STRK: "0x555", USDC: "0x666" },
         },
         testSecrets: {
-          sessionPrivateKey: `0x${"01".repeat(32)}`,
+          sessionPrivateKey: `0x${(options.sessionKeyByte ?? "01").repeat(32)}`,
           viewingKey: "0x123",
           proofPrincipal,
         },
@@ -223,6 +239,8 @@ export async function fixture(options: { activate?: boolean; authoritativeProvis
       accountId: account.id,
       configCommitment: commitDirectPrivacyAccountConfig(account.config),
       expectedClassHash: "0xabc",
+      registrationPublicKey: options.registrationPublicKey
+        ?? deriveDirectPrivacyViewingPublicKey("0x123"),
       principal,
       now,
       snapshot: {
@@ -304,7 +322,7 @@ export async function fixture(options: { activate?: boolean; authoritativeProvis
     policyRun: {
       agreementRoot: root("1"),
       manifestRoot: root("2"),
-      runNullifier: root("5"),
+      runNullifier,
       pathBits: authorizedProof.pathBits,
       siblings: authorizedProof.siblings,
     },
@@ -358,6 +376,67 @@ export function registerDirectPrivacyRepositoryIntegrationTests(): void {
       code: "DIRECT_POLICY_RUN_BINDING_INVALID",
     });
     expect(await getDatabase().select().from(directPrivacyAccounts)).toHaveLength(0);
+  });
+
+  it("rejects activation when STRK20 has no matching treasury registration", async () => {
+    await expect(fixture({ registrationPublicKey: "0x0" })).rejects.toMatchObject({
+      code: "DIRECT_TREASURY_NOT_REGISTERED",
+    });
+    const [account] = await getDatabase().select().from(directPrivacyAccounts);
+    const [treasury] = await getDatabase().select().from(directPrivacyTreasuries);
+    expect(account.activationState).toBe("pending");
+    expect(treasury.registrationState).toBe("pending");
+  });
+
+  it("prevents one policy-account treasury from crossing organization boundaries", async () => {
+    await fixture();
+    await expect(fixture({ runNullifierByte: "7" })).rejects.toMatchObject({
+      code: "DIRECT_TREASURY_DEPLOYMENT_MISMATCH",
+    });
+  });
+
+  it("serializes different capabilities through one durable treasury state", async () => {
+    const first = await fixture({ runNullifierByte: "8" });
+    const second = await fixture({
+      organizationId: first.organizationId,
+      runNullifierByte: "7",
+      policyId: "0x223",
+      sessionKeyByte: "02",
+    });
+    expect(await getDatabase().select().from(directPrivacyAccounts)).toHaveLength(2);
+    expect(await getDatabase().select().from(directPrivacyTreasuries)).toHaveLength(1);
+    for (const input of [first, second]) {
+      await stageDirectPrivacyRunWitness({
+        accountId: input.account.id,
+        encryptedWitness: input.material.encryptedWitness,
+        principal,
+        now,
+      });
+    }
+    await requestAgentExecution({
+      capabilityId: first.capability.id,
+      idempotencyKey: `global-treasury:first:${first.runId}`,
+      request: first.request,
+      principal,
+      now,
+    });
+    const [firstJob] = await leaseAgentExecutions("global-treasury-worker-1", 1, now);
+    const firstContext = await leaseDirectPrivacyExecutionContext(firstJob, now);
+    await requestAgentExecution({
+      capabilityId: second.capability.id,
+      idempotencyKey: `global-treasury:second:${second.runId}`,
+      request: second.request,
+      principal,
+      now,
+    });
+    const [secondJob] = await leaseAgentExecutions("global-treasury-worker-2", 1, now);
+    await expect(leaseDirectPrivacyExecutionContext(secondJob, now))
+      .rejects.toThrow("DIRECT_TREASURY_BUSY");
+    await releaseDirectPrivacyExecution(firstJob, now);
+    const secondContext = await leaseDirectPrivacyExecutionContext(secondJob, now);
+    expect(secondContext.treasuryAddress).toBe(firstContext.treasuryAddress);
+    expect(secondContext.viewingKey).toBe(firstContext.viewingKey);
+    expect(secondContext.stateVersion).toBe(firstContext.stateVersion);
   });
 
   it("blocks staging until the exact on-chain policy account is activated", async () => {
@@ -426,7 +505,7 @@ export function registerDirectPrivacyRepositoryIntegrationTests(): void {
     expect(context.secrets.proofPrincipal).toEqual(input.proofPrincipal);
 
     await expect(leaseDirectPrivacyExecutionContext({ ...job, id: generateUuidV7() }, now))
-      .rejects.toThrow("DIRECT_ACCOUNT_BUSY");
+      .rejects.toThrow("DIRECT_TREASURY_BUSY");
     const nextState = { ...context.state, pinnedBlock: { number: 20, hash: "0xabc" as const } };
     await expect(saveDirectPrivacyState({
       job,

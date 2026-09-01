@@ -1,4 +1,4 @@
-FROM node:24.17.0-bookworm-slim AS dependencies
+FROM node:24.17.0-trixie-slim AS dependencies
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY vendor ./vendor
@@ -23,12 +23,13 @@ ENV NEXT_PUBLIC_PAYO_AGENT_POLICY_ACCOUNT_ADDRESS=${NEXT_PUBLIC_PAYO_AGENT_POLIC
 COPY . .
 RUN npm run build
 
-FROM node:24.17.0-bookworm-slim AS runtime
+FROM node:24.17.0-trixie-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 ENV PAYO_BB_PATH=/usr/local/bin/payo-bb
+ENV PAYO_BB_CRS_PATH=/tmp/payo-bb-crs
 ENV PAYO_PRIVACY_SDK_ROOT=/app/node_modules/@starkware-libs/starknet-privacy-sdk
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl \
@@ -39,6 +40,7 @@ RUN apt-get update \
   && tar -xzf /tmp/payo-bb.tar.gz -C /tmp \
   && echo "1c28d0bcd137ee1101eb12df8274c9118a4dda48b74872bae067e3c63879a7d0  /tmp/bb" | sha256sum --check \
   && install -m 0755 /tmp/bb /usr/local/bin/payo-bb \
+  && install -d -m 0700 -o node -g node /tmp/payo-bb-crs \
   && rm -f /tmp/bb /tmp/payo-bb.tar.gz \
   && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./

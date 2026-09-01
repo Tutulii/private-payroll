@@ -52,6 +52,7 @@ import {
   auditEvents,
   directPrivacyAccounts,
   directPrivacyAuthorizedRuns,
+  directPrivacyTreasuries,
   directPrivacyRunMaterials,
   proofBundles,
   payrollRuns,
@@ -95,6 +96,35 @@ function viewingKey(): `0x${string}` {
     const scalar = BigInt(candidate);
     if (scalar > 0n && scalar <= limit) return `0x${scalar.toString(16)}`;
   }
+}
+
+function canonicalFelt(value: string): `0x${string}` {
+  return `0x${BigInt(value).toString(16)}`;
+}
+
+export function deriveDirectPrivacyViewingPublicKey(viewingKey: string): `0x${string}` {
+  let scalar: bigint;
+  try { scalar = BigInt(viewingKey); } catch {
+    throw new Error("The treasury viewing key is invalid.");
+  }
+  if (scalar <= 0n || scalar > ec.starkCurve.CURVE.n / 2n) {
+    throw new Error("The treasury viewing key is invalid.");
+  }
+  return canonicalFelt(ec.starkCurve.getStarkKey(viewingKey));
+}
+
+function configuredViewingKey(testValue?: string): `0x${string}` {
+  const value = testValue
+    ?? process.env.PAYO_AGENT_POLICY_VIEWING_KEY?.trim()
+    ?? (process.env.NODE_ENV === "test" ? viewingKey() : "");
+  let scalar: bigint;
+  try { scalar = BigInt(value); } catch {
+    throw new Error("PAYO_AGENT_POLICY_VIEWING_KEY must be a Stark-curve private scalar.");
+  }
+  if (scalar <= 0n || scalar > ec.starkCurve.CURVE.n / 2n) {
+    throw new Error("PAYO_AGENT_POLICY_VIEWING_KEY is outside the supported private-key range.");
+  }
+  return `0x${scalar.toString(16)}`;
 }
 
 function sessionPublicKey(secret: string): `0x${string}` {
@@ -156,7 +186,11 @@ export async function provisionDirectPrivacyAccount(input: {
   >;
   principal: AuthenticatedPrincipal;
   /** Deterministic keys are accepted only by integration tests. */
-  testSecrets?: Pick<DirectPrivacySecrets, "sessionPrivateKey" | "viewingKey" | "proofPrincipal">;
+  testSecrets?: {
+    sessionPrivateKey: `0x${string}`;
+    viewingKey: `0x${string}`;
+    proofPrincipal: DirectPrivacySecrets["proofPrincipal"];
+  };
   now?: Date;
 }): Promise<DirectPrivacyAccountPublic> {
   if (input.testSecrets && process.env.NODE_ENV !== "test") {
@@ -165,9 +199,8 @@ export async function provisionDirectPrivacyAccount(input: {
   const now = input.now ?? new Date();
   const id = generateUuidV7(now.getTime());
   const secrets: DirectPrivacySecrets = {
-    version: "payo-direct-privacy-secrets-v1",
+    version: "payo-direct-privacy-secrets-v2",
     sessionPrivateKey: input.testSecrets?.sessionPrivateKey ?? privateKey(),
-    viewingKey: input.testSecrets?.viewingKey ?? viewingKey(),
     proofPrincipal: input.testSecrets?.proofPrincipal
       ?? generateVaultPrincipal(`agent-proof:${id}`),
   };
@@ -300,24 +333,66 @@ export async function provisionDirectPrivacyAccount(input: {
       }
       return { authorization, proof };
     });
+    const policyAccountAddress = canonicalFelt(config.policyAccountAddress);
+    const poolAddress = canonicalFelt(config.poolAddress);
+    const treasurySecrets = {
+      version: "payo-direct-privacy-treasury-secrets-v1" as const,
+      viewingKey: configuredViewingKey(input.testSecrets?.viewingKey),
+    };
+    const initialTreasuryStateVersion = 1;
+    await transaction.insert(directPrivacyTreasuries).values({
+      policyAccountAddress,
+      organizationId: input.organizationId,
+      poolAddress,
+      encryptedSecrets: encryptDirectPrivacyPayload(treasurySecrets, {
+        policyAccountAddress,
+        organizationId: input.organizationId,
+        poolAddress,
+        purpose: "treasury-secrets",
+      }),
+      encryptedState: encryptDirectPrivacyPayload(emptyDirectPrivacyState(), {
+        policyAccountAddress,
+        organizationId: input.organizationId,
+        poolAddress,
+        purpose: "treasury-state",
+        stateVersion: initialTreasuryStateVersion,
+      }),
+      stateVersion: initialTreasuryStateVersion,
+      registrationState: "pending",
+      createdAt: now,
+      updatedAt: now,
+    }).onConflictDoNothing();
+    const [treasury] = await transaction.select().from(directPrivacyTreasuries).where(
+      eq(directPrivacyTreasuries.policyAccountAddress, policyAccountAddress),
+    ).limit(1).for("update");
+    if (
+      !treasury
+      || treasury.organizationId !== input.organizationId
+      || BigInt(treasury.poolAddress) !== BigInt(poolAddress)
+    ) {
+      throw new ApiError(409, "The reviewed policy account targets a different private treasury.", "DIRECT_TREASURY_DEPLOYMENT_MISMATCH");
+    }
+    const storedTreasurySecrets = decryptDirectPrivacyPayload(treasury.encryptedSecrets, {
+      policyAccountAddress,
+      organizationId: input.organizationId,
+      poolAddress,
+      purpose: "treasury-secrets",
+    });
+    if (BigInt(storedTreasurySecrets.viewingKey) !== BigInt(treasurySecrets.viewingKey)) {
+      throw new ApiError(503, "The configured treasury viewing identity does not match its encrypted record.", "DIRECT_TREASURY_KEY_MISMATCH");
+    }
     const encryptedSecrets = encryptDirectPrivacyPayload(
       secrets,
       { accountId: id, organizationId: input.organizationId, capabilityId: input.capabilityId, purpose: "secrets" },
-    );
-    const stateVersion = 1;
-    const encryptedState = encryptDirectPrivacyPayload(
-      emptyDirectPrivacyState(),
-      { accountId: id, organizationId: input.organizationId, capabilityId: input.capabilityId, purpose: "state", stateVersion },
     );
     try {
       await transaction.insert(directPrivacyAccounts).values({
         id,
         organizationId: input.organizationId,
         capabilityId: input.capabilityId,
+        treasuryAddress: policyAccountAddress,
         config,
         encryptedSecrets,
-        encryptedState,
-        stateVersion,
         activationState: "pending",
         createdAt: now,
         updatedAt: now,
@@ -364,7 +439,7 @@ export async function provisionDirectPrivacyAccount(input: {
         principalId: secrets.proofPrincipal.principalId,
         publicKey: secrets.proofPrincipal.publicKey,
       },
-      stateVersion,
+      stateVersion: treasury.stateVersion,
       authorizedRunCount: authorizedRuns.length,
       activationState: "pending",
       activation: null,
@@ -534,6 +609,7 @@ export async function activateDirectPrivacyAccount(input: {
   accountId: string;
   configCommitment: string;
   snapshot: PolicyAccountActivationSnapshot;
+  registrationPublicKey: string;
   expectedClassHash: string;
   principal: AuthenticatedPrincipal;
   now?: Date;
@@ -551,6 +627,38 @@ export async function activateDirectPrivacyAccount(input: {
     if (configCommitment !== input.configCommitment) {
       throw new ApiError(409, "The pending policy configuration changed during verification.", "DIRECT_POLICY_ACTIVATION_RACE");
     }
+    const [treasury] = await transaction.select().from(directPrivacyTreasuries).where(
+      eq(directPrivacyTreasuries.policyAccountAddress, account.treasuryAddress),
+    ).limit(1).for("update");
+    if (
+      !treasury
+      || treasury.organizationId !== account.organizationId
+      || BigInt(treasury.policyAccountAddress) !== BigInt(config.policyAccountAddress)
+      || BigInt(treasury.poolAddress) !== BigInt(config.poolAddress)
+    ) {
+      throw new ApiError(409, "The policy account is not bound to the reviewed private treasury.", "DIRECT_TREASURY_DEPLOYMENT_MISMATCH");
+    }
+    const treasurySecrets = decryptDirectPrivacyPayload(treasury.encryptedSecrets, {
+      policyAccountAddress: treasury.policyAccountAddress,
+      organizationId: treasury.organizationId,
+      poolAddress: treasury.poolAddress,
+      purpose: "treasury-secrets",
+    });
+    const expectedRegistrationPublicKey = deriveDirectPrivacyViewingPublicKey(
+      treasurySecrets.viewingKey,
+    );
+    let registrationMatches = false;
+    try {
+      registrationMatches = BigInt(input.registrationPublicKey)
+        === BigInt(expectedRegistrationPublicKey);
+    } catch { /* invalid pool result remains a mismatch */ }
+    if (!registrationMatches) {
+      throw new ApiError(
+        409,
+        "The policy account is not registered in STRK20 with PAYO's encrypted viewing identity.",
+        "DIRECT_TREASURY_NOT_REGISTERED",
+      );
+    }
     try {
       assertPolicyAccountActivation({ config, snapshot: input.snapshot, expectedClassHash: input.expectedClassHash });
     } catch (error) {
@@ -564,6 +672,34 @@ export async function activateDirectPrivacyAccount(input: {
       throw new ApiError(409, "The capability became inactive before activation.", "CAPABILITY_INACTIVE");
     }
     const activationState = parseActivationState(account.activationState);
+    const registrationWasPending = treasury.registrationState !== "registered";
+    await transaction.update(directPrivacyTreasuries).set({
+      registrationState: "registered",
+      registrationPublicKey: expectedRegistrationPublicKey,
+      registrationBlockNumber: input.snapshot.blockNumber,
+      registrationBlockHash: input.snapshot.blockHash,
+      registeredAt: treasury.registeredAt ?? now,
+      updatedAt: now,
+    }).where(eq(
+      directPrivacyTreasuries.policyAccountAddress,
+      treasury.policyAccountAddress,
+    ));
+    if (registrationWasPending) {
+      await transaction.insert(auditEvents).values({
+        id: generateUuidV7(),
+        organizationId: account.organizationId,
+        actorId: input.principal.principalId,
+        action: "direct_privacy_treasury.registration_verified",
+        subjectId: treasury.policyAccountAddress,
+        metadata: {
+          accountId: account.id,
+          poolAddress: treasury.poolAddress,
+          publicKey: expectedRegistrationPublicKey,
+          blockNumber: input.snapshot.blockNumber.toString(),
+          blockHash: input.snapshot.blockHash,
+        },
+      });
+    }
     if (activationState === "active") {
       return {
         id: account.id,
@@ -919,8 +1055,10 @@ export async function stageDirectPrivacyRunMaterial(input: {
 
 export type DirectPrivacyExecutionContext = {
   accountId: string;
+  treasuryAddress: string;
   config: DirectPrivacyAccountConfig;
   secrets: DirectPrivacySecrets;
+  viewingKey: `0x${string}`;
   state: DirectPrivacyState;
   stateVersion: number;
   material: DirectPrivacyRunMaterial;
@@ -938,12 +1076,18 @@ export async function leaseDirectPrivacyExecutionContext(
     if (!account || account.revokedAt || account.activationState !== "active" || account.organizationId !== job.organizationId) {
       throw new Error("DIRECT_ACCOUNT_INACTIVE");
     }
+    const [treasury] = await transaction.select().from(directPrivacyTreasuries).where(
+      eq(directPrivacyTreasuries.policyAccountAddress, account.treasuryAddress),
+    ).limit(1).for("update");
+    if (!treasury || treasury.registrationState !== "registered") {
+      throw new Error("DIRECT_TREASURY_NOT_REGISTERED");
+    }
     if (
-      account.activeExecutionId
-      && account.activeExecutionId !== job.id
-      && account.activeLeaseExpiresAt
-      && account.activeLeaseExpiresAt > now
-    ) throw new Error("DIRECT_ACCOUNT_BUSY");
+      treasury.activeExecutionId
+      && treasury.activeExecutionId !== job.id
+      && treasury.activeLeaseExpiresAt
+      && treasury.activeLeaseExpiresAt > now
+    ) throw new Error("DIRECT_TREASURY_BUSY");
     const [materialRow] = await transaction.select().from(directPrivacyRunMaterials).where(and(
       eq(directPrivacyRunMaterials.accountId, account.id),
       eq(directPrivacyRunMaterials.runId, job.runId),
@@ -970,30 +1114,44 @@ export async function leaseDirectPrivacyExecutionContext(
       || commitAgentExecutionRequest(job.request) !== job.requestCommitment
     ) throw new Error("DIRECT_REQUEST_TAMPERED");
     const config = directPrivacyAccountConfigSchema.parse(account.config);
+    if (
+      treasury.organizationId !== account.organizationId
+      || BigInt(config.policyAccountAddress) !== BigInt(treasury.policyAccountAddress)
+      || BigInt(config.poolAddress) !== BigInt(treasury.poolAddress)
+    ) throw new Error("DIRECT_TREASURY_DEPLOYMENT_MISMATCH");
     const secrets = decryptDirectPrivacyPayload(account.encryptedSecrets, {
       accountId: account.id,
       organizationId: account.organizationId,
       capabilityId: account.capabilityId,
       purpose: "secrets",
     });
-    const state = decryptDirectPrivacyPayload(account.encryptedState, {
-      accountId: account.id,
-      organizationId: account.organizationId,
-      capabilityId: account.capabilityId,
-      purpose: "state",
-      stateVersion: account.stateVersion,
+    const treasurySecrets = decryptDirectPrivacyPayload(treasury.encryptedSecrets, {
+      policyAccountAddress: treasury.policyAccountAddress,
+      organizationId: treasury.organizationId,
+      poolAddress: treasury.poolAddress,
+      purpose: "treasury-secrets",
     });
-    await transaction.update(directPrivacyAccounts).set({
+    const state = decryptDirectPrivacyPayload(treasury.encryptedState, {
+      policyAccountAddress: treasury.policyAccountAddress,
+      organizationId: treasury.organizationId,
+      poolAddress: treasury.poolAddress,
+      purpose: "treasury-state",
+      stateVersion: treasury.stateVersion,
+    });
+    await transaction.update(directPrivacyTreasuries).set({
       activeExecutionId: job.id,
+      activeAccountId: account.id,
       activeLeaseExpiresAt: new Date(now.getTime() + ACCOUNT_LEASE_MS),
       updatedAt: now,
-    }).where(eq(directPrivacyAccounts.id, account.id));
+    }).where(eq(directPrivacyTreasuries.policyAccountAddress, treasury.policyAccountAddress));
     return {
       accountId: account.id,
+      treasuryAddress: treasury.policyAccountAddress,
       config,
       secrets,
+      viewingKey: treasurySecrets.viewingKey,
       state,
-      stateVersion: account.stateVersion,
+      stateVersion: treasury.stateVersion,
       material,
       materialCommitment: materialRow.materialCommitment,
     };
@@ -1013,25 +1171,31 @@ export async function saveDirectPrivacyState(input: {
     const [account] = await transaction.select().from(directPrivacyAccounts).where(
       eq(directPrivacyAccounts.id, input.accountId),
     ).limit(1).for("update");
+    if (!account) throw new Error("DIRECT_STATE_VERSION_CONFLICT");
+    const [treasury] = await transaction.select().from(directPrivacyTreasuries).where(
+      eq(directPrivacyTreasuries.policyAccountAddress, account.treasuryAddress),
+    ).limit(1).for("update");
     if (
-      !account
-      || account.activeExecutionId !== input.job.id
-      || account.stateVersion !== input.expectedVersion
+      !treasury
+      || treasury.organizationId !== account.organizationId
+      || treasury.activeExecutionId !== input.job.id
+      || treasury.activeAccountId !== account.id
+      || treasury.stateVersion !== input.expectedVersion
     ) throw new Error("DIRECT_STATE_VERSION_CONFLICT");
-    const nextVersion = account.stateVersion + 1;
+    const nextVersion = treasury.stateVersion + 1;
     const encryptedState = encryptDirectPrivacyPayload(state, {
-      accountId: account.id,
-      organizationId: account.organizationId,
-      capabilityId: account.capabilityId,
-      purpose: "state",
+      policyAccountAddress: treasury.policyAccountAddress,
+      organizationId: treasury.organizationId,
+      poolAddress: treasury.poolAddress,
+      purpose: "treasury-state",
       stateVersion: nextVersion,
     });
-    await transaction.update(directPrivacyAccounts).set({
+    await transaction.update(directPrivacyTreasuries).set({
       encryptedState,
       stateVersion: nextVersion,
       activeLeaseExpiresAt: new Date(now.getTime() + ACCOUNT_LEASE_MS),
       updatedAt: now,
-    }).where(eq(directPrivacyAccounts.id, account.id));
+    }).where(eq(directPrivacyTreasuries.policyAccountAddress, treasury.policyAccountAddress));
     return nextVersion;
   });
 }
@@ -1040,12 +1204,20 @@ export async function releaseDirectPrivacyExecution(
   job: Pick<LeasedAgentExecution, "id" | "capabilityId">,
   now = new Date(),
 ): Promise<void> {
-  await getDatabase().update(directPrivacyAccounts).set({
-    activeExecutionId: null,
-    activeLeaseExpiresAt: null,
-    updatedAt: now,
-  }).where(and(
-    eq(directPrivacyAccounts.capabilityId, job.capabilityId),
-    eq(directPrivacyAccounts.activeExecutionId, job.id),
-  ));
+  await getDatabase().transaction(async (transaction) => {
+    const [account] = await transaction.select().from(directPrivacyAccounts).where(
+      eq(directPrivacyAccounts.capabilityId, job.capabilityId),
+    ).limit(1);
+    if (!account) return;
+    await transaction.update(directPrivacyTreasuries).set({
+      activeExecutionId: null,
+      activeAccountId: null,
+      activeLeaseExpiresAt: null,
+      updatedAt: now,
+    }).where(and(
+      eq(directPrivacyTreasuries.policyAccountAddress, account.treasuryAddress),
+      eq(directPrivacyTreasuries.activeAccountId, account.id),
+      eq(directPrivacyTreasuries.activeExecutionId, job.id),
+    ));
+  });
 }

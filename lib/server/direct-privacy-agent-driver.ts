@@ -5,7 +5,7 @@ import {
   EDAMode,
   OutsideExecutionVersion,
   RpcProvider,
-  Signer,
+  type SignerInterface,
   constants,
   hash,
   num,
@@ -18,6 +18,7 @@ import {
   directPrivacyAccountConfigSchema,
   directPrivacyFinalizationSubmissionSchema,
   directPrivacyPayrollAuthorizationSchema,
+  directPrivacyPreparationSchema,
   directPrivacyProofDraftSchema,
   directPrivacyPreparedSubmissionSchema,
   type DirectPrivacyFinalizationSubmission,
@@ -29,9 +30,11 @@ import {
 import {
   leaseDirectPrivacyExecutionContext,
   releaseDirectPrivacyExecution,
+  type DirectPrivacyExecutionContext,
 } from "@/lib/persistence/direct-privacy-repository";
 import {
   abandonDirectPrivacyPreparation,
+  findDirectPrivacyPreparation,
   loadDirectPrivacyPreparation,
   markDirectPrivacyPreparationSigned,
   storeDirectPrivacyPreparation,
@@ -60,7 +63,10 @@ import {
   type PrivacyTransfers,
 } from "./privacy-sdk-loader";
 import {
-  deserializePrivacyRegistry,
+  deserializePrivacyHistoryCursor,
+  mergePrivacyHistory,
+  serializePrivacyHistoryCursor,
+  serializePrivacyHistoryTransaction,
   serializePrivacyRegistry,
 } from "./privacy-sdk-registry";
 import {
@@ -102,11 +108,20 @@ import {
   PAYO_RUN_STATUS_SEALED,
   readProofSealState,
 } from "./proof-relayer";
+import { PolicyOwnerSignerClient } from "./policy-owner-signer-client";
+import { assertDirectPrivacyOutsideCall } from "@/lib/starknet/direct-privacy-outside-call";
+import {
+  findDirectPrivacyReadinessFailure,
+  isExactPinnedBlockReference,
+  type DirectPrivacyDiscoveredChannel,
+} from "./direct-privacy-discovery";
 
 const HASH_PATTERN = /^0x[0-9a-fA-F]{1,64}$/;
 const DEFAULT_INDEXER_MAX_LAG_SECONDS = 120;
 const DEFAULT_FINALITY_BLOCKS = 3;
 const OUTSIDE_WINDOW_SECONDS = 300n;
+const PRIVATE_HISTORY_PAGE_SIZE = 100;
+const PRIVATE_HISTORY_BACKFILL_PAGES = 4;
 
 type DriverOpaque = {
   kind: "payo-direct-privacy-preparation";
@@ -116,6 +131,25 @@ type DriverOpaque = {
 };
 
 type AcceptedBlock = { number: number; hash: `0x${string}`; timestamp: number };
+type PrivacyAddressMap<T> = {
+  entries(): IterableIterator<[bigint, T]>;
+  get(key: bigint): T | undefined;
+};
+type PrivacyDiscoverySnapshot = {
+  registry: {
+    channels: PrivacyAddressMap<DirectPrivacyDiscoveredChannel>;
+    notes: PrivacyAddressMap<unknown[]>;
+    cursor: unknown;
+  };
+  channelTotal: number | null;
+  history: DirectPrivacyProofDraft["nextState"]["history"];
+  historyCursor: DirectPrivacyProofDraft["nextState"]["historyCursor"];
+  historyPinnedBlock: DirectPrivacyProofDraft["nextState"]["historyPinnedBlock"];
+};
+type DirectPrivacyPolicyAuthorization = Pick<
+  DirectPrivacyPreparation,
+  "policyCall" | "proofValidAfterUnix" | "proofValidBeforeUnix"
+>;
 
 type DirectPrivacyDriverRuntime = {
   rpcUrl: string;
@@ -128,6 +162,7 @@ type DirectPrivacyDriverRuntime = {
   finalityBlocks: number;
   now: () => Date;
   proofClient: AgentProofClient;
+  policyOwnerSigner: SignerInterface;
   withRelayerLock: typeof withStarknetRelayerSubmissionLock;
 };
 
@@ -192,6 +227,195 @@ async function pinIndexerBlock(runtime: DirectPrivacyDriverRuntime, discovery: P
   return rpcBlock;
 }
 
+function privacyAddressMap<T>(value: unknown, label: string): PrivacyAddressMap<T> {
+  const candidate = value as Partial<PrivacyAddressMap<T>> | null;
+  if (!candidate || typeof candidate.entries !== "function" || typeof candidate.get !== "function") {
+    throw new AgentExecutionDriverError(
+      "DIRECT_DISCOVERY_RESPONSE_INVALID",
+      `The private indexer returned invalid ${label}.`,
+    );
+  }
+  return candidate as PrivacyAddressMap<T>;
+}
+
+function assertDiscoveryPin(value: unknown, pinned: AcceptedBlock, label: string): void {
+  if (!isExactPinnedBlockReference(value, pinned.hash)) {
+    throw new AgentExecutionDriverError(
+      "DIRECT_DISCOVERY_BLOCK_MISMATCH",
+      `The private indexer's ${label} response was not bound to the accepted block hash.`,
+    );
+  }
+}
+
+function channelRequirements(input: {
+  request: LeasedAgentExecution["request"];
+  config: Pick<
+    ReturnType<typeof directPrivacyAccountConfigSchema.parse>,
+    "policyAccountAddress" | "tokenAddresses"
+  >;
+}) {
+  const treasuryAddress = BigInt(input.config.policyAccountAddress);
+  const requirements = input.request.intents.map((intent) => ({
+    recipient: BigInt(intent.recipientAddress),
+    token: BigInt(input.config.tokenAddresses[intent.token]),
+  }));
+  for (const token of new Set(requirements.map(({ token }) => token))) {
+    requirements.push({ recipient: treasuryAddress, token });
+  }
+  return { treasuryAddress, requirements };
+}
+
+async function fetchPrivateHistoryPage(input: {
+  discovery: PrivacyDiscovery;
+  treasuryAddress: bigint;
+  notesCursor: unknown;
+  channels: PrivacyAddressMap<DirectPrivacyDiscoveredChannel>;
+  block: { number: number; hash: `0x${string}` };
+  historyCursor?: unknown;
+}) {
+  const page = await input.discovery.fetchHistory(
+    input.treasuryAddress,
+    input.notesCursor,
+    { channels: input.channels },
+    {
+      maxTransactions: PRIVATE_HISTORY_PAGE_SIZE,
+      blockIdentifier: input.block.hash,
+      ...(input.historyCursor === undefined ? {} : { historyCursor: input.historyCursor }),
+    },
+  );
+  assertDiscoveryPin(page.blockRef, { ...input.block, timestamp: 1 }, "history");
+  if (!Array.isArray(page.transactions) || page.transactions.length > PRIVATE_HISTORY_PAGE_SIZE) {
+    throw new AgentExecutionDriverError(
+      "DIRECT_PRIVATE_HISTORY_INVALID",
+      "The private indexer returned an invalid history page.",
+    );
+  }
+  return {
+    transactions: page.transactions.map(serializePrivacyHistoryTransaction),
+    cursor: serializePrivacyHistoryCursor(page.cursor),
+  };
+}
+
+function isHistoryBranchReset(error: unknown): boolean {
+  const name = error instanceof Error ? error.name : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return name === "ReorgError"
+    || /Block reorged during \/v1\/history/i.test(message)
+    || /Indexer API \/v1\/history failed \((?:404|409|410)\)/i.test(message);
+}
+
+/**
+ * One block-hash snapshot drives readiness, note selection and encrypted
+ * history. Full refresh avoids cursor drift; a bounded cursor resumes only the
+ * older history backfill and is reset safely if its old branch disappeared.
+ */
+export async function discoverDirectPrivacySnapshot(input: {
+  discovery: PrivacyDiscovery;
+  pinned: AcceptedBlock;
+  context: Pick<DirectPrivacyExecutionContext, "viewingKey" | "state"> & {
+    config: Pick<
+      DirectPrivacyExecutionContext["config"],
+      "policyAccountAddress" | "tokenAddresses"
+    >;
+  };
+  job: Pick<LeasedAgentExecution, "request">;
+}): Promise<PrivacyDiscoverySnapshot> {
+  const treasuryAddress = BigInt(input.context.config.policyAccountAddress);
+  const viewingKey = BigInt(input.context.viewingKey);
+  const [notesResult, channelsResult] = await Promise.all([
+    input.discovery.discoverNotes(treasuryAddress, viewingKey, {
+      blockIdentifier: input.pinned.hash,
+    }),
+    input.discovery.discoverChannels(treasuryAddress, viewingKey, "all", {
+      blockIdentifier: input.pinned.hash,
+    }),
+  ]);
+  assertDiscoveryPin(notesResult.timestamp, input.pinned, "note discovery");
+  assertDiscoveryPin(channelsResult.timestamp, input.pinned, "channel discovery");
+  const notes = privacyAddressMap<unknown[]>(notesResult.notes, "private notes");
+  const channels = privacyAddressMap<DirectPrivacyDiscoveredChannel>(
+    channelsResult.channels,
+    "private channels",
+  );
+  const needed = channelRequirements({ request: input.job.request, config: input.context.config });
+  const readiness = findDirectPrivacyReadinessFailure({
+    channels,
+    treasuryAddress: needed.treasuryAddress,
+    requirements: needed.requirements,
+  });
+  if (readiness) {
+    throw new AgentExecutionDriverError(readiness.code, readiness.message);
+  }
+  if (
+    channelsResult.total !== undefined
+    && (!Number.isSafeInteger(channelsResult.total) || channelsResult.total < 0)
+  ) {
+    throw new AgentExecutionDriverError(
+      "DIRECT_DISCOVERY_RESPONSE_INVALID",
+      "The private indexer returned an invalid outgoing-channel total.",
+    );
+  }
+
+  const fresh = await fetchPrivateHistoryPage({
+    discovery: input.discovery,
+    treasuryAddress,
+    notesCursor: notesResult.cursor,
+    channels,
+    block: input.pinned,
+  });
+  let history = mergePrivacyHistory(input.context.state.history, fresh.transactions);
+  let historyCursor = input.context.state.historyCursor;
+  let historyPinnedBlock = input.context.state.historyPinnedBlock;
+  let backfillCursor: unknown | undefined;
+  let backfillBlock: { number: number; hash: `0x${string}` } | null = null;
+  let remainingPages = 0;
+
+  if (historyCursor && historyPinnedBlock && !historyCursor.historyComplete) {
+    backfillCursor = deserializePrivacyHistoryCursor(historyCursor);
+    backfillBlock = historyPinnedBlock;
+    remainingPages = PRIVATE_HISTORY_BACKFILL_PAGES;
+  } else if (!historyCursor || !historyPinnedBlock) {
+    historyCursor = fresh.cursor;
+    historyPinnedBlock = { number: input.pinned.number, hash: input.pinned.hash };
+    backfillCursor = deserializePrivacyHistoryCursor(fresh.cursor);
+    backfillBlock = historyPinnedBlock;
+    remainingPages = fresh.cursor.historyComplete ? 0 : PRIVATE_HISTORY_BACKFILL_PAGES - 1;
+  }
+
+  try {
+    while (backfillCursor && backfillBlock && remainingPages > 0) {
+      const page = await fetchPrivateHistoryPage({
+        discovery: input.discovery,
+        treasuryAddress,
+        notesCursor: notesResult.cursor,
+        channels,
+        block: backfillBlock,
+        historyCursor: backfillCursor,
+      });
+      history = mergePrivacyHistory(history, page.transactions);
+      historyCursor = page.cursor;
+      backfillCursor = deserializePrivacyHistoryCursor(page.cursor);
+      remainingPages -= 1;
+      if (page.cursor.historyComplete) break;
+    }
+  } catch (error) {
+    if (!isHistoryBranchReset(error)) throw error;
+    // A persisted backfill cursor may point at a reorged/pruned branch. A new
+    // hash-pinned scan is complete with respect to the current branch and is a
+    // safe restart point; already encrypted history is retained and deduped.
+    historyCursor = fresh.cursor;
+    historyPinnedBlock = { number: input.pinned.number, hash: input.pinned.hash };
+  }
+
+  return {
+    registry: { channels, notes, cursor: notesResult.cursor },
+    channelTotal: channelsResult.total ?? null,
+    history,
+    historyCursor,
+    historyPinnedBlock,
+  };
+}
+
 function assertChain(actual: string, expected: string): void {
   if (BigInt(actual) !== BigInt(expected)) {
     throw new AgentExecutionDriverError(
@@ -202,7 +426,7 @@ function assertChain(actual: string, expected: string): void {
   }
 }
 
-function proofWindow(input: DirectPrivacyPreparation, blockTimestamp: number) {
+function proofWindow(input: DirectPrivacyPolicyAuthorization, blockTimestamp: number) {
   const validAfter = BigInt(input.proofValidAfterUnix);
   const validBefore = BigInt(input.proofValidBeforeUnix);
   const timestamp = BigInt(blockTimestamp);
@@ -226,7 +450,7 @@ function proofWindow(input: DirectPrivacyPreparation, blockTimestamp: number) {
   return { execute_after: timestamp - 1n, execute_before: executeBefore };
 }
 
-function policyCall(input: DirectPrivacyPreparation): Call {
+function policyCall(input: DirectPrivacyPolicyAuthorization): Call {
   return {
     contractAddress: input.policyCall.contractAddress,
     entrypoint: input.policyCall.entrypoint,
@@ -239,7 +463,7 @@ function outerCalls(input: {
   policyAccountAddress: string;
   sessionPrivateKey: string;
   relayerAddress: string;
-  preparation: DirectPrivacyPreparation;
+  preparation: DirectPrivacyPolicyAuthorization;
   blockTimestamp: number;
 }): Promise<Call[]> {
   const sessionAccount = new Account({
@@ -529,6 +753,21 @@ async function prepareSdkExecution(
   const context = await leaseDirectPrivacyExecutionContext(job, runtime.now());
   try {
     assertChain(await runtime.provider.getChainId(), context.config.chainId);
+    const existingPreparation = await findDirectPrivacyPreparation(job);
+    if (existingPreparation) {
+      if (
+        existingPreparation.accountId !== context.accountId
+        || existingPreparation.preparation.expectedStateVersion !== context.stateVersion
+      ) throw new AgentExecutionDriverError(
+        "DIRECT_PREPARATION_REPLAY_CONFLICT",
+        "The stored private preparation no longer matches the leased treasury state.",
+        true,
+      );
+      return {
+        preparation: existingPreparation.preparation,
+        accountId: existingPreparation.accountId,
+      };
+    }
     const discovery = new runtime.sdk.sdk.IndexerDiscoveryProvider(
       runtime.indexerUrl,
       context.config.poolAddress,
@@ -577,6 +816,12 @@ async function prepareSdkExecution(
         );
       }
     } else {
+      const snapshot = await discoverDirectPrivacySnapshot({
+        discovery,
+        pinned,
+        context,
+        job,
+      });
       let storedAuthorization = await loadDirectPrivacyPayrollAuthorization(job.id);
       let payrollProof: ProofWorkerSuccess;
       if (storedAuthorization) {
@@ -654,24 +899,18 @@ async function prepareSdkExecution(
       const transfers = runtime.sdk.sdk.createPrivateTransfers({
         account: {
           address: context.config.policyAccountAddress,
-          signer: new Signer(context.secrets.sessionPrivateKey),
+          signer: runtime.policyOwnerSigner,
         },
-        viewingKeyProvider: { getViewingKey: async () => BigInt(context.secrets.viewingKey) },
+        viewingKeyProvider: { getViewingKey: async () => BigInt(context.viewingKey) },
         provingProvider,
         discoveryProvider: discovery,
         poolContractAddress: context.config.poolAddress,
       }) as PrivacyTransfers;
-      const registry = deserializePrivacyRegistry(
-        context.state.registry,
-        runtime.sdk.codecs,
-        runtime.sdk.sdk.AddressMap,
-      );
       const invocation = await transfers.createProofInvocation(plan.actions, {
         autoRegister: false,
         autoSetup: false,
-        autoDiscover: { notes: "all", channels: "refresh" },
         autoSelectNotes: "all",
-        registry,
+        registry: snapshot.registry,
         registryConst: true,
       });
       const sdkResult = await transfers.executeWithInvocation(
@@ -685,7 +924,7 @@ async function prepareSdkExecution(
         invocation,
         poolAddress: context.config.poolAddress,
         policyAccountAddress: context.config.policyAccountAddress,
-        viewingKey: context.secrets.viewingKey,
+        viewingKey: context.viewingKey,
         chainId: context.config.chainId,
         poolCalldata,
         payrollLineCount: job.request.intents.length,
@@ -733,10 +972,13 @@ async function prepareSdkExecution(
         nextState: {
           ...context.state,
           registry: serializePrivacyRegistry(
-            sdkResult.registry,
+            { ...record(sdkResult.registry), cursor: snapshot.registry.cursor },
             runtime.sdk.codecs,
-            context.state.registry.channelTotal,
+            snapshot.channelTotal,
           ),
+          history: snapshot.history,
+          historyCursor: snapshot.historyCursor,
+          historyPinnedBlock: snapshot.historyPinnedBlock,
           pinnedBlock: { number: pinned.number, hash: pinned.hash },
         },
         expectedStateVersion: context.stateVersion,
@@ -805,7 +1047,7 @@ async function prepareSdkExecution(
       poolCalldata: draft.poolCalldata,
       settlementProofChunks: settlementProof.chunks,
     });
-    const provisional: DirectPrivacyPreparation = {
+    const provisional: Omit<DirectPrivacyPreparation, "outsideCall"> = {
       version: "payo-direct-privacy-preparation-v1",
       executionId: job.id,
       requestCommitment: job.requestCommitment as `0x${string}`,
@@ -831,6 +1073,21 @@ async function prepareSdkExecution(
       preparation: provisional,
       blockTimestamp: pinned.timestamp,
     });
+    if (sessionCalls.length !== 1) {
+      throw new AgentExecutionDriverError(
+        "DIRECT_OUTSIDE_CALL_INVALID",
+        "The session signer returned an invalid outside authorization.",
+        true,
+      );
+    }
+    assertDirectPrivacyOutsideCall({
+      outsideCall: sessionCalls[0],
+      policyCall: provisional.policyCall,
+      relayerAddress: runtime.relayer.address,
+      proofValidAfterUnix: provisional.proofValidAfterUnix,
+      proofValidBeforeUnix: provisional.proofValidBeforeUnix,
+      currentBlockTimestamp: pinned.timestamp,
+    });
     const simulation = await runtime.relayer.simulateTransaction(
       [{ type: "INVOKE", payload: sessionCalls }],
       {
@@ -843,7 +1100,11 @@ async function prepareSdkExecution(
     );
     return {
       accountId: context.accountId,
-      preparation: { ...provisional, feeEstimateAtomic: simulationFee(simulation) },
+      preparation: directPrivacyPreparationSchema.parse({
+        ...provisional,
+        outsideCall: sessionCalls[0],
+        feeEstimateAtomic: simulationFee(simulation),
+      }),
     };
   } catch (error) {
     await releaseDirectPrivacyExecution(job, runtime.now());
@@ -861,22 +1122,25 @@ async function createSignedSubmission(input: {
   if (existing) return existing;
   const loaded = await loadDirectPrivacyPreparation(input);
   const config = directPrivacyAccountConfigSchema.parse(loaded.account.config);
-  const secrets = decryptDirectPrivacyPayload(loaded.account.encryptedSecrets, {
-    accountId: loaded.account.id,
-    organizationId: loaded.account.organizationId,
-    capabilityId: loaded.account.capabilityId,
-    purpose: "secrets",
-  });
   assertChain(await input.runtime.provider.getChainId(), config.chainId);
   const latest = acceptedBlock(await input.runtime.provider.getBlock("latest"));
-  const calls = await outerCalls({
-    provider: input.runtime.provider,
-    policyAccountAddress: config.policyAccountAddress,
-    sessionPrivateKey: secrets.sessionPrivateKey,
-    relayerAddress: input.runtime.relayer.address,
-    preparation: loaded.preparation,
-    blockTimestamp: latest.timestamp,
-  });
+  try {
+    assertDirectPrivacyOutsideCall({
+      outsideCall: loaded.preparation.outsideCall,
+      policyCall: loaded.preparation.policyCall,
+      relayerAddress: input.runtime.relayer.address,
+      proofValidAfterUnix: loaded.preparation.proofValidAfterUnix,
+      proofValidBeforeUnix: loaded.preparation.proofValidBeforeUnix,
+      currentBlockTimestamp: latest.timestamp,
+    });
+  } catch (error) {
+    throw new AgentExecutionDriverError(
+      "DIRECT_OUTSIDE_CALL_SUBSTITUTED",
+      error instanceof Error ? error.message : "The persisted outside authorization is invalid.",
+      true,
+    );
+  }
+  const calls = [loaded.preparation.outsideCall];
   const raw = await input.runtime.relayer.getSignedTransaction(calls, {
     blockIdentifier: latest.hash,
     tip: 0,
@@ -1551,6 +1815,7 @@ export async function createDirectPrivacyAgentExecutionDriver(): Promise<Structu
     finalityBlocks: boundedInteger("PAYO_AGENT_FINALITY_BLOCKS", DEFAULT_FINALITY_BLOCKS, 1, 64),
     now: () => new Date(),
     proofClient: new AgentProofClient(agentProverUrl, workerSecret),
+    policyOwnerSigner: PolicyOwnerSignerClient.fromEnvironment(),
     withRelayerLock: withStarknetRelayerSubmissionLock,
   });
 }

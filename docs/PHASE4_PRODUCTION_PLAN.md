@@ -1,6 +1,6 @@
 # Phase 4 Production Plan — Human and AI-Agent Payroll
 
-Status: **active**
+Status: **complete — evidence recorded 2026-09-01**
 
 Normative sources: `MASTER_PLAN.md` Phase 4 and `architecture.md` sections 9, 14–16.
 
@@ -57,3 +57,6 @@ Gate: MCP transport/adversarial, concurrent-limit, approval/autonomy, direct-SDK
 ## Completion rule
 
 Phase 4 is complete only when all five blocks have integrated code, positive and negative tests, and linked evidence; `npm run verify:status` passes; and comparison with `MASTER_PLAN.md` Phase 4 plus relevant `architecture.md` requirements finds no partial or missing item. Then remove the temporary Phase 4 directive from `AGENTS.md`.
+
+Completion evidence: [`docs/phase4-evidence.md`](./phase4-evidence.md) and
+[`evidence/phase4-private-payroll-devnet.json`](../evidence/phase4-private-payroll-devnet.json).

@@ -17,8 +17,8 @@ import {
 } from "./direct-privacy-submission-repository";
 import { getDatabase } from "./db";
 import {
-  directPrivacyAccounts,
   directPrivacySubmissions,
+  directPrivacyTreasuries,
 } from "./schema";
 
 function preparedSubmission(input: {
@@ -134,8 +134,9 @@ export function registerDirectPrivacySubmissionRepositoryIntegrationTests(): voi
     });
     await finalizeDirectPrivacySubmission(expectedTransactionHash, now);
     await finalizeDirectPrivacySubmission(expectedTransactionHash, now);
-    expect((await getDatabase().select().from(directPrivacyAccounts))[0]).toMatchObject({
+    expect((await getDatabase().select().from(directPrivacyTreasuries))[0]).toMatchObject({
       stateVersion: context.stateVersion + 1,
+      activeAccountId: null,
       activeExecutionId: null,
     });
     expect((await getDatabase().select().from(directPrivacySubmissions))[0].state).toBe("confirmed");
@@ -170,7 +171,10 @@ export function registerDirectPrivacySubmissionRepositoryIntegrationTests(): voi
       now,
     });
     await failDirectPrivacySubmission(prepared.expectedTransactionHash, "reverted", now);
-    expect((await getDatabase().select().from(directPrivacyAccounts))[0].activeExecutionId).toBeNull();
+    expect((await getDatabase().select().from(directPrivacyTreasuries))[0]).toMatchObject({
+      activeAccountId: null,
+      activeExecutionId: null,
+    });
     expect((await getDatabase().select().from(directPrivacySubmissions))[0].state).toBe("reverted");
   });
 }

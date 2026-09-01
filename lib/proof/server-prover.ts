@@ -1,12 +1,14 @@
 import "server-only";
 
+import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
+import { promisify } from "node:util";
 import {
   BackendType,
   UltraHonkBackend,
-  UltraHonkVerifierBackend,
 } from "@aztec/bb.js";
 import { getZKHonkCallData, init as initGaraga } from "garaga";
 import { Noir, type CompiledCircuit, type InputMap } from "@noir-lang/noir_js";
@@ -70,6 +72,7 @@ type PinnedAssets = {
 const assetCache = new Map<string, Promise<PinnedAssets>>();
 let garagaReady: Promise<unknown> | undefined;
 let settlementBbReady: Promise<string> | undefined;
+const execFile = promisify(execFileCallback);
 
 const SETTLEMENT_BB_BINARY_SHA256: Partial<Record<NodeJS.Architecture, string>> = {
   arm64: "0x0d5df6541bf9a8235305b380e48d7cdcb71e9525eef955946c0d8ac7f2f3277f",
@@ -214,6 +217,32 @@ async function loadSettlementPinnedAssets(): Promise<PinnedAssets> {
     }));
   }
   return assetCache.get(cacheKey)!;
+}
+
+function decodeBbFieldVector(value: Uint8Array, label: string): string[] {
+  if (value.length === 0 || value.length % 32 !== 0) {
+    throw new Error(`${label} is not a canonical 32-byte field vector.`);
+  }
+  const fields: string[] = [];
+  for (let offset = 0; offset < value.length; offset += 32) {
+    fields.push(`0x${Buffer.from(value.subarray(offset, offset + 32)).toString("hex")}`);
+  }
+  return fields;
+}
+
+async function runPinnedBb(input: {
+  bbPath: string;
+  args: string[];
+  threads: number;
+}): Promise<void> {
+  await execFile(input.bbPath, input.args, {
+    env: {
+      ...process.env,
+      HARDWARE_CONCURRENCY: input.threads.toString(),
+    },
+    maxBuffer: 8 * 1_024 * 1_024,
+    timeout: 30 * 60_000,
+  });
 }
 
 function orderedSettlementPublicInputs(input: SettlementMatchPublicInputs): string[] {
@@ -441,55 +470,106 @@ export async function proveSettlementMatchOnSelfHostedNode(input: {
     loadPinnedSettlementBb(),
     garagaReady,
   ]).then(([pinnedAssets, pinnedBb]) => [pinnedAssets, pinnedBb] as const);
-  const nativeOptions = {
-    backend: BackendType.NativeUnixSocket,
-    threads: parseProverThreadCount(process.env.PAYO_PROVER_THREADS),
-    bbPath,
-  };
+  const threads = parseProverThreadCount(process.env.PAYO_PROVER_THREADS);
   const noir = new Noir(assets.circuit);
-  const backend = new UltraHonkBackend(assets.circuit.bytecode, nativeOptions);
-  const verifier = new UltraHonkVerifierBackend(nativeOptions);
   const startedAt = performance.now();
   let witnessToErase: Uint8Array | undefined;
+  const jobDirectory = await mkdtemp(resolve(tmpdir(), "payo-settlement-"));
   try {
+    await chmod(jobDirectory, 0o700);
+    const circuitPath = resolve(process.cwd(), "public/circuits/settlement_match-v8.json");
+    const circuitText = await readFile(circuitPath, "utf8");
+    if (sha256(circuitText) !== SETTLEMENT_MATCH_CIRCUIT_SHA256) {
+      throw new Error("The native SettlementMatch circuit changed after its pinned hash check.");
+    }
+    const verificationKeyPath = resolve(jobDirectory, "vk");
+    await writeFile(verificationKeyPath, assets.verificationKey, { mode: 0o600 });
+    const configuredCrsPath = process.env.PAYO_BB_CRS_PATH?.trim();
+    const crsPath = configuredCrsPath || resolve(jobDirectory, "crs");
+    if (!isAbsolute(crsPath)) {
+      throw new Error("PAYO_BB_CRS_PATH must be absolute when configured.");
+    }
+    await mkdir(crsPath, { recursive: true, mode: 0o700 });
+    const slowLowMemory = process.env.PAYO_BB_SLOW_LOW_MEMORY === "true";
     const chunks: SettlementMatchProofWorkerSuccess["chunks"] = [];
     for (let chunkIndex = 0; chunkIndex < built.circuitInputs.length; chunkIndex += 1) {
       const circuitInput = built.circuitInputs[chunkIndex];
       const { witness } = await noir.execute(circuitInput);
       witnessToErase = witness;
       built.circuitInputs[chunkIndex] = {};
-      const proofData = await backend.generateProof(witness, { keccakZK: true });
+      const chunkDirectory = resolve(jobDirectory, `chunk-${chunkIndex}`);
+      await mkdir(chunkDirectory, { mode: 0o700 });
+      const witnessPath = resolve(chunkDirectory, "witness.gz");
+      const proofPath = resolve(chunkDirectory, "proof");
+      const publicInputsPath = resolve(chunkDirectory, "public_inputs");
+      await writeFile(witnessPath, witness, { mode: 0o600 });
       witness.fill(0);
       witnessToErase = undefined;
-      const expectedPublicInputs = built.publicInputs[chunkIndex];
-      assertSettlementPublicInputs(proofData.publicInputs, expectedPublicInputs);
-      if (!await verifier.verifyProof({
-        ...proofData,
-        verificationKey: assets.verificationKey,
-      }, { keccakZK: true })) {
-        proofData.proof.fill(0);
-        throw new Error("SettlementMatch chunk " + chunkIndex + " failed local verification.");
+      try {
+        await runPinnedBb({
+          bbPath,
+          threads,
+          args: [
+            "prove",
+            "--scheme", "ultra_honk",
+            "--oracle_hash", "keccak",
+            "--bytecode_path", circuitPath,
+            "--witness_path", witnessPath,
+            "--output_path", chunkDirectory,
+            "--vk_path", verificationKeyPath,
+            "--crs_path", crsPath,
+            ...(slowLowMemory ? ["--slow_low_memory"] : []),
+          ],
+        });
+        await rm(witnessPath, { force: true });
+        const proof = await readFile(proofPath);
+        const publicInputBytes = await readFile(publicInputsPath);
+        try {
+          const publicInputs = decodeBbFieldVector(
+            publicInputBytes,
+            `SettlementMatch chunk ${chunkIndex} public inputs`,
+          );
+          const expectedPublicInputs = built.publicInputs[chunkIndex];
+          assertSettlementPublicInputs(publicInputs, expectedPublicInputs);
+          await runPinnedBb({
+            bbPath,
+            threads,
+            args: [
+              "verify",
+              "--scheme", "ultra_honk",
+              "--oracle_hash", "keccak",
+              "--vk_path", verificationKeyPath,
+              "--proof_path", proofPath,
+              "--public_inputs_path", publicInputsPath,
+              "--crs_path", crsPath,
+            ],
+          });
+          const proofCalldata = normalizeGaragaProofCalldata(getZKHonkCallData(
+            proof,
+            serializeSettlementMatchPublicInputs(publicInputs),
+            assets.verificationKey,
+          ));
+          if (proofCalldata.length > PAYO_MAX_PROOF_CALLDATA_FELTS) {
+            throw new Error(
+              "SettlementMatch chunk " + chunkIndex + " has " + proofCalldata.length
+                + " calldata felts; Starknet submissions permit at most "
+                + PAYO_MAX_PROOF_CALLDATA_FELTS + ".",
+            );
+          }
+          chunks.push({
+            chunkIndex,
+            chunkCount: built.circuitInputs.length,
+            proofCalldata,
+            calldataHash: hashProofCalldata(proofCalldata),
+            publicInputs: expectedPublicInputs,
+          });
+        } finally {
+          proof.fill(0);
+          publicInputBytes.fill(0);
+        }
+      } finally {
+        await rm(chunkDirectory, { recursive: true, force: true, maxRetries: 3 });
       }
-      const proofCalldata = normalizeGaragaProofCalldata(getZKHonkCallData(
-        proofData.proof,
-        serializeSettlementMatchPublicInputs(proofData.publicInputs),
-        assets.verificationKey,
-      ));
-      proofData.proof.fill(0);
-      if (proofCalldata.length > PAYO_MAX_PROOF_CALLDATA_FELTS) {
-        throw new Error(
-          "SettlementMatch chunk " + chunkIndex + " has " + proofCalldata.length
-            + " calldata felts; Starknet submissions permit at most "
-            + PAYO_MAX_PROOF_CALLDATA_FELTS + ".",
-        );
-      }
-      chunks.push({
-        chunkIndex,
-        chunkCount: built.circuitInputs.length,
-        proofCalldata,
-        calldataHash: hashProofCalldata(proofCalldata),
-        publicInputs: expectedPublicInputs,
-      });
     }
     return {
       version: 8,
@@ -506,7 +586,7 @@ export async function proveSettlementMatchOnSelfHostedNode(input: {
   } finally {
     witnessToErase?.fill(0);
     built.circuitInputs.fill({});
-    await Promise.all([backend.destroy(), verifier.destroy()]);
+    await rm(jobDirectory, { recursive: true, force: true, maxRetries: 3 });
   }
 }
 

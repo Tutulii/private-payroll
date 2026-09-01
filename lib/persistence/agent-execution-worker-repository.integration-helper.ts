@@ -1,5 +1,9 @@
 import { eq, sql } from "drizzle-orm";
 import { expect, it } from "vitest";
+import {
+  processAgentExecution,
+  type StructuredAgentExecutionDriver,
+} from "@/lib/server/agent-execution-worker";
 import { requestAgentExecution } from "./agent-execution-repository";
 import {
   commitAgentExecutionForSubmission,
@@ -48,6 +52,47 @@ async function fixture() {
 }
 
 export function registerAgentExecutionWorkerRepositoryIntegrationTests(): void {
+  it("runs the structured autonomous gateway from reservation through durable confirmation", async () => {
+    const input = await fixture();
+    const [job] = await leaseAgentExecutions("agent-gateway-e2e", 1, start);
+    const order: string[] = [];
+    const submissionCommitment = `0x${"88".repeat(32)}`;
+    const driver: StructuredAgentExecutionDriver = {
+      prepareAndVerify: async (leased) => {
+        order.push("rebuild-and-prove");
+        expect(leased.request).toEqual(input.request);
+        expect(Object.keys(leased.request).sort()).toEqual(["intents", "requestVersion", "runId"]);
+        return {
+          version: "payo-prepared-agent-execution-v1",
+          executionId: leased.id,
+          requestCommitment: leased.requestCommitment,
+          submissionCommitment,
+          opaque: { exactPreparedIntent: true },
+        };
+      },
+      simulate: async () => { order.push("simulate"); },
+      submit: async () => { order.push("sign-and-submit"); return "0xabc987"; },
+      recoverSubmission: async () => null,
+      observe: async () => ({ state: "confirmed" }),
+    };
+    await expect(processAgentExecution({ job, driver, now: start })).resolves.toBe("submitted");
+    expect(order).toEqual(["rebuild-and-prove", "simulate", "sign-and-submit"]);
+    expect((await getDatabase().select().from(agentExecutions))[0]).toMatchObject({
+      state: "submitted",
+      submissionCommitment,
+      transactionHash: "0xabc987",
+    });
+    expect((await getDatabase().select().from(capabilityReservations))[0].state).toBe("committed");
+
+    const confirmationAt = new Date(start.getTime() + 3_000);
+    const [confirmation] = await leaseAgentExecutions("agent-gateway-confirm", 1, confirmationAt);
+    await expect(processAgentExecution({ job: confirmation, driver, now: confirmationAt }))
+      .resolves.toBe("confirmed");
+    expect((await getDatabase().select().from(agentExecutions))[0].state).toBe("confirmed");
+    const audit = JSON.stringify(await getDatabase().select().from(auditEvents));
+    expect(audit).not.toMatch(/recipientAddress|amountAtomic|0x456/);
+  });
+
   it("leases once, commits before signing, recovers after lease expiry, and confirms idempotently", async () => {
     const input = await fixture();
     const firstLeases = await Promise.all([

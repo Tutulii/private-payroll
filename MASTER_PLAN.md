@@ -69,6 +69,14 @@ Gate: each workflow is created in UI, encrypted, proved, settled on devnet, disc
 
 Gate: MCP transport and adversarial tests, concurrent limit tests, approval/autonomy tests, direct-SDK recovery tests, and SettlementMatch tests pass.
 
+Phase 4 gate evidence: **passed on 2026-09-01**. Encrypted capabilities,
+server-authoritative reservations, the restricted SNIP-6/SNIP-9 policy account,
+structured-intent gateway, all eight MCP tools, direct Privacy SDK settlement and
+SettlementMatch `FINALIZE` are linked in
+[`docs/phase4-evidence.md`](./docs/phase4-evidence.md). The reproducible Devnet run
+uses real PAYO proofs and records its transaction-OS proof limitation explicitly;
+the Mainnet autonomous-agent canary remains a Phase 5 release item.
+
 ## Phase 5 — Mainnet evidence and release
 
 1. Record a human STRK payroll, a human native-USDC payroll, and an advanced obligation or agent payroll that each touch the live STRK20 pool and PAYO contracts.

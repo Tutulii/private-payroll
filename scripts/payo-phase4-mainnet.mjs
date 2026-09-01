@@ -4,7 +4,6 @@ import {
   Account,
   RpcProvider,
   constants,
-  ec,
   num,
   uint256,
   validateAndParseAddress,
@@ -192,20 +191,10 @@ async function readBalance(address) {
 }
 
 function policyOwnerPublicKey() {
-  if (process.env.PAYO_PHASE4_POLICY_OWNER_PUBLIC_KEY) {
-    return canonicalFelt(
-      process.env.PAYO_PHASE4_POLICY_OWNER_PUBLIC_KEY,
-      "PAYO_PHASE4_POLICY_OWNER_PUBLIC_KEY",
-    );
-  }
-  const privateKey = process.env.PAYO_PHASE4_POLICY_OWNER_PRIVATE_KEY
-    ?? process.env.PAYO_PROOF_RELAYER_PRIVATE_KEY;
-  if (!privateKey || !/^0x[0-9a-fA-F]+$/.test(privateKey)) {
-    throw new Error(
-      "PAYO_PHASE4_POLICY_OWNER_PUBLIC_KEY or a policy-owner private key is required.",
-    );
-  }
-  return canonicalFelt(ec.starkCurve.getStarkKey(privateKey), "Derived policy owner public key");
+  return canonicalFelt(
+    process.env.PAYO_PHASE4_POLICY_OWNER_PUBLIC_KEY,
+    "PAYO_PHASE4_POLICY_OWNER_PUBLIC_KEY",
+  );
 }
 
 function accountFromEnvironment(expectedAddress) {

@@ -16,6 +16,7 @@ import {
   auditEvents,
   directPrivacyAccounts,
   directPrivacyPayrollAuthorizations,
+  directPrivacyTreasuries,
 } from "./schema";
 
 const HASH_PATTERN = /^0x[0-9a-fA-F]{1,64}$/;
@@ -70,10 +71,17 @@ export async function storeDirectPrivacyPayrollAuthorization(input: {
       eq(directPrivacyAccounts.id, input.accountId),
       eq(directPrivacyAccounts.organizationId, input.organizationId),
     )).limit(1).for("update");
+    if (!account || account.revokedAt) {
+      throw new Error("DIRECT_PAYROLL_AUTHORIZATION_ACCOUNT_STALE");
+    }
+    const [treasury] = await transaction.select().from(directPrivacyTreasuries).where(
+      eq(directPrivacyTreasuries.policyAccountAddress, account.treasuryAddress),
+    ).limit(1).for("update");
     if (
-      !account
-      || account.revokedAt
-      || account.activeExecutionId !== input.executionId
+      !treasury
+      || treasury.organizationId !== account.organizationId
+      || treasury.activeAccountId !== account.id
+      || treasury.activeExecutionId !== input.executionId
     ) throw new Error("DIRECT_PAYROLL_AUTHORIZATION_ACCOUNT_STALE");
     const [existing] = await transaction.select()
       .from(directPrivacyPayrollAuthorizations)

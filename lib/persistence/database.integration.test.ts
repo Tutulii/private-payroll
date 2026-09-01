@@ -202,6 +202,7 @@ async function resetDatabase() {
       direct_privacy_authorized_runs,
       agent_access_tokens,
       direct_privacy_accounts,
+      direct_privacy_treasuries,
       audit_events,
       capability_reservations,
       agent_capabilities,

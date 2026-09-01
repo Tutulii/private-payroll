@@ -17,6 +17,7 @@ import {
   auditEvents,
   directPrivacyAccounts,
   directPrivacyPreparations,
+  directPrivacyTreasuries,
   directPrivacySubmissions,
 } from "./schema";
 
@@ -58,8 +59,16 @@ export async function storeDirectPrivacyPreparation(input: {
       !account
       || account.revokedAt
       || account.organizationId !== input.job.organizationId
-      || account.activeExecutionId !== input.job.id
-      || account.stateVersion !== preparation.expectedStateVersion
+    ) throw new Error("DIRECT_PREPARATION_ACCOUNT_STALE");
+    const [treasury] = await transaction.select().from(directPrivacyTreasuries).where(
+      eq(directPrivacyTreasuries.policyAccountAddress, account.treasuryAddress),
+    ).limit(1).for("update");
+    if (
+      !treasury
+      || treasury.organizationId !== account.organizationId
+      || treasury.activeAccountId !== account.id
+      || treasury.activeExecutionId !== input.job.id
+      || treasury.stateVersion !== preparation.expectedStateVersion
     ) throw new Error("DIRECT_PREPARATION_ACCOUNT_STALE");
     const [existing] = await transaction.select().from(directPrivacyPreparations).where(
       eq(directPrivacyPreparations.executionId, input.job.id),
@@ -117,9 +126,13 @@ export async function loadDirectPrivacyPreparation(input: {
   const [joined] = await getDatabase().select({
     row: directPrivacyPreparations,
     account: directPrivacyAccounts,
+    treasury: directPrivacyTreasuries,
   }).from(directPrivacyPreparations).innerJoin(
     directPrivacyAccounts,
     eq(directPrivacyAccounts.id, directPrivacyPreparations.accountId),
+  ).innerJoin(
+    directPrivacyTreasuries,
+    eq(directPrivacyTreasuries.policyAccountAddress, directPrivacyAccounts.treasuryAddress),
   ).where(and(
     eq(directPrivacyPreparations.executionId, input.executionId),
     eq(directPrivacyPreparations.preparationCommitment, input.preparationCommitment),
@@ -128,7 +141,9 @@ export async function loadDirectPrivacyPreparation(input: {
     !joined
     || joined.row.state === "abandoned"
     || joined.account.revokedAt
-    || joined.account.activeExecutionId !== input.executionId
+    || joined.treasury.organizationId !== joined.account.organizationId
+    || joined.treasury.activeAccountId !== joined.account.id
+    || joined.treasury.activeExecutionId !== input.executionId
   ) throw new Error("DIRECT_PREPARATION_NOT_FOUND");
   const preparation = decryptPreparation(joined.row, joined.account);
   if (
@@ -136,6 +151,42 @@ export async function loadDirectPrivacyPreparation(input: {
     || commitDirectPrivacyPreparation(preparation) !== input.preparationCommitment
   ) throw new Error("DIRECT_PREPARATION_TAMPERED");
   return { preparation, account: joined.account, state: joined.row.state };
+}
+
+/** Recovers the exact encrypted, already-simulated preparation after a worker restart. */
+export async function findDirectPrivacyPreparation(
+  job: LeasedAgentExecution,
+): Promise<{
+  preparation: DirectPrivacyPreparation;
+  accountId: string;
+  preparationCommitment: `0x${string}`;
+} | null> {
+  const [row] = await getDatabase().select({
+    accountId: directPrivacyPreparations.accountId,
+    organizationId: directPrivacyPreparations.organizationId,
+    preparationCommitment: directPrivacyPreparations.preparationCommitment,
+  }).from(directPrivacyPreparations).where(
+    eq(directPrivacyPreparations.executionId, job.id),
+  ).limit(1);
+  if (!row) return null;
+  if (
+    row.organizationId !== job.organizationId
+    || !COMMITMENT_PATTERN.test(row.preparationCommitment)
+  ) throw new Error("DIRECT_PREPARATION_REPLAY_CONFLICT");
+  const loaded = await loadDirectPrivacyPreparation({
+    executionId: job.id,
+    requestCommitment: job.requestCommitment,
+    preparationCommitment: row.preparationCommitment,
+  });
+  if (
+    loaded.account.id !== row.accountId
+    || loaded.account.capabilityId !== job.capabilityId
+  ) throw new Error("DIRECT_PREPARATION_REPLAY_CONFLICT");
+  return {
+    preparation: loaded.preparation,
+    accountId: row.accountId,
+    preparationCommitment: row.preparationCommitment as `0x${string}`,
+  };
 }
 
 export async function markDirectPrivacyPreparationSigned(
@@ -178,15 +229,22 @@ export async function abandonDirectPrivacyPreparation(input: {
     if (submission || row.state !== "prepared") {
       throw new Error("DIRECT_PREPARATION_ALREADY_SIGNED");
     }
+    const [account] = await transaction.select().from(directPrivacyAccounts).where(
+      eq(directPrivacyAccounts.id, row.accountId),
+    ).limit(1);
     await transaction.update(directPrivacyPreparations).set({ state: "abandoned", updatedAt: now })
       .where(eq(directPrivacyPreparations.executionId, input.executionId));
-    await transaction.update(directPrivacyAccounts).set({
-      activeExecutionId: null,
-      activeLeaseExpiresAt: null,
-      updatedAt: now,
-    }).where(and(
-      eq(directPrivacyAccounts.id, row.accountId),
-      eq(directPrivacyAccounts.activeExecutionId, input.executionId),
-    ));
+    if (account) {
+      await transaction.update(directPrivacyTreasuries).set({
+        activeExecutionId: null,
+        activeAccountId: null,
+        activeLeaseExpiresAt: null,
+        updatedAt: now,
+      }).where(and(
+        eq(directPrivacyTreasuries.policyAccountAddress, account.treasuryAddress),
+        eq(directPrivacyTreasuries.activeAccountId, account.id),
+        eq(directPrivacyTreasuries.activeExecutionId, input.executionId),
+      ));
+    }
   });
 }

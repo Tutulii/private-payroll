@@ -5,6 +5,7 @@ import { directPrivacyAccountConfigSchema } from "@/lib/domain/direct-privacy";
 import {
   directPrivacyAccounts,
   directPrivacyAuthorizedRuns,
+  directPrivacyTreasuries,
 } from "@/lib/persistence/schema";
 import type {
   DirectPrivacyAccountPublic,
@@ -36,21 +37,28 @@ function activationEvidence(account: typeof directPrivacyAccounts.$inferSelect):
 
 function accountSummary(
   account: typeof directPrivacyAccounts.$inferSelect,
+  treasury: typeof directPrivacyTreasuries.$inferSelect,
   authorizedRunCount: number,
 ): DirectPrivacyAccountSummary {
   const config = directPrivacyAccountConfigSchema.parse(account.config);
+  if (
+    treasury.organizationId !== account.organizationId
+    || BigInt(config.policyAccountAddress) !== BigInt(treasury.policyAccountAddress)
+  ) {
+    throw new Error("DIRECT_TREASURY_DEPLOYMENT_MISMATCH");
+  }
   return {
     id: account.id,
     capabilityId: account.capabilityId,
     config,
-    stateVersion: account.stateVersion,
+    stateVersion: treasury.stateVersion,
     authorizedRunCount,
     activationState: account.activationState as "pending" | "active",
     activation: activationEvidence(account),
-    activeExecutionId: account.activeExecutionId,
-    activeLeaseExpiresAt: account.activeLeaseExpiresAt?.toISOString() ?? null,
+    activeExecutionId: treasury.activeExecutionId,
+    activeLeaseExpiresAt: treasury.activeLeaseExpiresAt?.toISOString() ?? null,
     createdAt: account.createdAt.toISOString(),
-    updatedAt: account.updatedAt.toISOString(),
+    updatedAt: new Date(Math.max(account.updatedAt.getTime(), treasury.updatedAt.getTime())).toISOString(),
   };
 }
 
@@ -66,6 +74,10 @@ export async function getDirectPrivacyAccountPublic(input: {
       throw new ApiError(404, "Direct private account not found.", "DIRECT_ACCOUNT_NOT_FOUND");
     }
     await requireOrganizationRoleWith(transaction, account.organizationId, input.principal, ["admin"]);
+    const [treasury] = await transaction.select().from(directPrivacyTreasuries).where(
+      eq(directPrivacyTreasuries.policyAccountAddress, account.treasuryAddress),
+    ).limit(1);
+    if (!treasury) throw new Error("DIRECT_TREASURY_NOT_FOUND");
     const authorizedRuns = await transaction.select({ id: directPrivacyAuthorizedRuns.id })
       .from(directPrivacyAuthorizedRuns)
       .where(eq(directPrivacyAuthorizedRuns.accountId, account.id));
@@ -75,7 +87,7 @@ export async function getDirectPrivacyAccountPublic(input: {
       capabilityId: account.capabilityId,
       purpose: "secrets",
     });
-    const summary = accountSummary(account, authorizedRuns.length);
+    const summary = accountSummary(account, treasury, authorizedRuns.length);
     return {
       id: summary.id,
       config: summary.config,
@@ -120,6 +132,10 @@ export async function getDirectPrivacyProvisioningReplay(input: {
     )).limit(1);
     if (!account) return null;
     const config = directPrivacyAccountConfigSchema.parse(account.config);
+    const [treasury] = await transaction.select().from(directPrivacyTreasuries).where(
+      eq(directPrivacyTreasuries.policyAccountAddress, account.treasuryAddress),
+    ).limit(1);
+    if (!treasury) throw new Error("DIRECT_TREASURY_NOT_FOUND");
     const authorizedRuns = await transaction.select({
       id: directPrivacyAuthorizedRuns.id,
       runId: directPrivacyAuthorizedRuns.runId,
@@ -150,7 +166,7 @@ export async function getDirectPrivacyProvisioningReplay(input: {
       capabilityId: account.capabilityId,
       purpose: "secrets",
     });
-    const summary = accountSummary(account, authorizedRuns.length);
+    const summary = accountSummary(account, treasury, authorizedRuns.length);
     return {
       id: summary.id,
       config: summary.config,
@@ -178,7 +194,13 @@ export async function listDirectPrivacyAccountsPublic(input: {
       input.principal,
       ["admin", "operator", "reviewer"],
     );
-    const rows = await transaction.select().from(directPrivacyAccounts).where(and(
+    const rows = await transaction.select({
+      account: directPrivacyAccounts,
+      treasury: directPrivacyTreasuries,
+    }).from(directPrivacyAccounts).innerJoin(
+      directPrivacyTreasuries,
+      eq(directPrivacyTreasuries.policyAccountAddress, directPrivacyAccounts.treasuryAddress),
+    ).where(and(
       eq(directPrivacyAccounts.organizationId, input.organizationId),
       isNull(directPrivacyAccounts.revokedAt),
     ));
@@ -195,6 +217,7 @@ export async function listDirectPrivacyAccountsPublic(input: {
     for (const row of counts) {
       countByAccount.set(row.accountId, (countByAccount.get(row.accountId) ?? 0) + 1);
     }
-    return rows.map((row) => accountSummary(row, countByAccount.get(row.id) ?? 0));
+    return rows.map(({ account, treasury }) =>
+      accountSummary(account, treasury, countByAccount.get(account.id) ?? 0));
   });
 }

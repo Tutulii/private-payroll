@@ -85,9 +85,35 @@ export type PrivacyDiscovery = {
     chain_head?: { block_number: number; block_hash: string; timestamp: number };
     lag_secs?: number;
   }>;
-  discoverNotes: (...args: unknown[]) => Promise<Record<string, unknown>>;
-  discoverChannels: (...args: unknown[]) => Promise<Record<string, unknown>>;
-  fetchHistory: (...args: unknown[]) => Promise<Record<string, unknown>>;
+  discoverNotes: (
+    address: bigint,
+    viewingKey: bigint,
+    params?: Record<string, unknown>,
+  ) => Promise<{
+    timestamp: unknown;
+    notes: unknown;
+    cursor: unknown;
+  }>;
+  discoverChannels: (
+    address: bigint,
+    viewingKey: bigint,
+    recipients: bigint[] | "all" | "total-only",
+    params?: Record<string, unknown>,
+  ) => Promise<{
+    timestamp: unknown;
+    channels?: unknown;
+    total?: number;
+  }>;
+  fetchHistory: (
+    userAddress: bigint,
+    notesCursor: unknown,
+    channelCursor: unknown,
+    options?: Record<string, unknown>,
+  ) => Promise<{
+    blockRef: unknown;
+    transactions: unknown[];
+    cursor: unknown;
+  }>;
 };
 
 export type PrivacySdkCodecs = {

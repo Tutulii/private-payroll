@@ -50,14 +50,19 @@ function assertDirectPrivacyDeployment(
   }
 }
 
+export type DirectPrivacyActivationSnapshot = PolicyAccountActivationSnapshot & {
+  registrationPublicKey?: `0x${string}`;
+};
+
 export async function readPolicyAccountActivationSnapshot(input: {
   provider: RpcProvider;
   policyAccountAddress: string;
   policyId: string;
-}): Promise<PolicyAccountActivationSnapshot> {
+  poolAddress?: string;
+}): Promise<DirectPrivacyActivationSnapshot> {
   const block = await input.provider.getBlock("latest");
   const pinnedBlock = block.block_hash;
-  const [chainId, classHash, state, active, paused] = await Promise.all([
+  const [chainId, classHash, state, active, paused, registration] = await Promise.all([
     input.provider.getChainId(),
     input.provider.getClassHashAt(input.policyAccountAddress, pinnedBlock),
     input.provider.callContract({
@@ -75,7 +80,17 @@ export async function readPolicyAccountActivationSnapshot(input: {
       entrypoint: "is_policy_account_paused",
       calldata: [],
     }, pinnedBlock),
+    input.poolAddress
+      ? input.provider.callContract({
+          contractAddress: input.poolAddress,
+          entrypoint: "get_public_key",
+          calldata: [input.policyAccountAddress],
+        }, pinnedBlock)
+      : Promise.resolve(undefined),
   ]);
+  if (registration && registration.length !== 1) {
+    throw new Error("STRK20 get_public_key returned an invalid value.");
+  }
   return {
     chainId: chainId as `0x${string}`,
     classHash: classHash as `0x${string}`,
@@ -85,12 +100,13 @@ export async function readPolicyAccountActivationSnapshot(input: {
     active: booleanResult(active, "is_policy_active"),
     paused: booleanResult(paused, "is_policy_account_paused"),
     policy: decodePolicyAccountState(state),
+    registrationPublicKey: registration?.[0] as `0x${string}` | undefined,
   };
 }
 
 async function persistVerifiedActivation(input: {
   candidate: Awaited<ReturnType<typeof getDirectPrivacyAccountActivationCandidate>>;
-  snapshot: PolicyAccountActivationSnapshot;
+  snapshot: DirectPrivacyActivationSnapshot;
   expectedClassHash: string;
   principal: AuthenticatedPrincipal;
   now?: Date;
@@ -108,10 +124,18 @@ async function persistVerifiedActivation(input: {
       "DIRECT_POLICY_CHAIN_MISMATCH",
     );
   }
+  if (!input.snapshot.registrationPublicKey) {
+    throw new ApiError(
+      409,
+      "The STRK20 pool did not return a registration key for the policy account.",
+      "DIRECT_TREASURY_NOT_REGISTERED",
+    );
+  }
   return activateDirectPrivacyAccount({
     accountId: input.candidate.id,
     configCommitment: input.candidate.configCommitment,
     snapshot: input.snapshot,
+    registrationPublicKey: input.snapshot.registrationPublicKey,
     expectedClassHash: input.expectedClassHash,
     principal: input.principal,
     now: input.now,
@@ -139,6 +163,7 @@ export async function verifyAndActivateDirectPrivacyAccount(input: {
     provider: input.provider,
     policyAccountAddress: candidate.config.policyAccountAddress,
     policyId: candidate.config.policyId,
+    poolAddress: candidate.config.poolAddress,
   });
   return persistVerifiedActivation({
     candidate,
@@ -159,8 +184,8 @@ export async function configureAndActivateDirectPrivacyAccount(input: {
   principal: AuthenticatedPrincipal;
   provider: RpcProvider;
   deployment: DirectPrivacyDeploymentConfig;
-  ownerPrivateKey: string;
-  submitConfiguration: (call: Call) => Promise<string>;
+  ownerPublicKey: string;
+  submitConfiguration: (call: Call) => Promise<string | undefined>;
   now?: Date;
 }): Promise<{
   account: Awaited<ReturnType<typeof activateDirectPrivacyAccount>>;
@@ -175,6 +200,7 @@ export async function configureAndActivateDirectPrivacyAccount(input: {
     provider: input.provider,
     policyAccountAddress: candidate.config.policyAccountAddress,
     policyId: candidate.config.policyId,
+    poolAddress: candidate.config.poolAddress,
   });
   if (snapshot.policy.configured) {
     return {
@@ -206,11 +232,12 @@ export async function configureAndActivateDirectPrivacyAccount(input: {
   }, snapshot.blockHash);
   let configuredOwnerPublicKey: `0x${string}`;
   try {
-    configuredOwnerPublicKey = derivePolicyOwnerPublicKey(input.ownerPrivateKey);
+    configuredOwnerPublicKey = `0x${BigInt(input.ownerPublicKey).toString(16)}`;
+    if (BigInt(configuredOwnerPublicKey) <= 0n) throw new Error("invalid");
   } catch {
     throw new ApiError(
       503,
-      "The policy owner signer is not configured.",
+      "The isolated policy owner signer is not configured.",
       "DIRECT_POLICY_OWNER_NOT_CONFIGURED",
     );
   }

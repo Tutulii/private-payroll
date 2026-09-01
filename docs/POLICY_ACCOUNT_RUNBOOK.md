@@ -4,12 +4,21 @@ Status: Phase 4 operational procedure. The policy account is a bounded AI-agent 
 
 ## Security boundary
 
-- The owner key is the recovery and administration key. Store it outside the agent runtime.
+- The owner key is the recovery and administration key. It exists only in the
+  isolated `payo-policy-signer` service (plus an offline recovery backup), never
+  in the web, MCP, worker, prover, discovery or transaction-relayer runtimes.
 - The agent receives only one short-lived Stark-curve session key.
 - A session key may call only `execute_from_outside_v2`, with one outer call back to the account's `execute_policy_intent` entrypoint.
 - Each authorized run is committed in the policy's depth-8 Merkle root. The leaf binds the policy, agreement root, manifest root and run nullifier.
 - The account parses the exact STRK20 action list, rejects public deposits, withdrawals and transfers, and permits exactly one invocation of the configured PAYO seal.
 - Pausing, key rotation, policy creation and revocation require an owner-signed self-call. An MCP or gateway process must never hold the owner key.
+- The web authenticates to the signer with a distinct 32-byte-or-longer HMAC
+  secret over timestamp, nonce, method, path and body hash. The signer rejects
+  stale or replayed nonces and is reachable only over Fly private networking.
+- The online signer exposes only canonical STRK20 `compile_actions` proof
+  signatures and bounded `configure_policy` submissions. It rejects typed
+  messages, declarations, deployments, owner rotation, pause, revocation,
+  arbitrary calls, paymasters and nonzero proof-invocation fees.
 
 ## Pre-deployment gate
 
@@ -20,7 +29,36 @@ Status: Phase 4 operational procedure. The policy account is a bounded AI-agent 
 5. Start with a short validity window, a one-call period limit and a deliberately small authorized-run tree.
 6. Simulate deployment and policy configuration at the same pinned block before broadcasting.
 
-Mainnet deployment is a Phase 5 release action. Phase 4 evidence uses Devnet and must not reuse production keys.
+Every Mainnet mutation requires a fresh simulation, an explicit human approval,
+and a pinned read-back. Never reuse Devnet keys on Mainnet.
+
+## Isolated signer cutover
+
+1. Generate a fresh owner key outside the repository, logs and shell history;
+   store its recovery copy offline. Derive and record only its public key.
+2. Generate one distinct treasury viewing key. Before owner rotation, run the
+   digest-pinned `phase4:treasury:estimate` bootstrap and inspect its exact pool,
+   account, block and fee. After explicit approval, run
+   `phase4:treasury:register`; retain only its public-key and transaction evidence.
+3. Fund the policy account with only the public STRK operational gas budget.
+   Run `phase4:owner:estimate`, then after explicit approval rotate with
+   `phase4:owner:rotate` and prove the new key with `phase4:owner:verify`.
+4. Set `PAYO_POLICY_OWNER_PRIVATE_KEY`, `STARKNET_RPC_URL`,
+   `PAYO_POLICY_SIGNER_SECRET` and `PAYO_AGENT_POLICY_VIEWING_PUBLIC_KEY` only on
+   the private signer app. The private viewing key is never a signer variable.
+5. Set `PAYO_POLICY_SIGNER_URL`, the same HMAC secret, the expected owner public
+   key and `PAYO_AGENT_POLICY_VIEWING_KEY` only in the web/worker secret store.
+   PAYO encrypts that viewing key again before database storage. Remove any
+   policy-owner private key from the web/worker app.
+6. Before starting, the signer must attest at one pinned block that chain,
+   policy-account owner and STRK20 registration public key all match its config.
+7. Start one signer machine with no public Fly service. Confirm `/health` only
+   through the private network, then run rejection tests before a canary policy.
+8. Maintain only the public STRK operational gas budget;
+   private payroll value remains in STRK20 notes. Alert before the gas floor.
+
+Do not enable autonomous dispatch if rotation, signer attestation, web-secret
+removal, policy-account gas, or the canary read-back is incomplete.
 
 ## Deploy and configure
 

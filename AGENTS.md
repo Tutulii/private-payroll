@@ -20,11 +20,3 @@ These rules are mandatory for every future task in this repository:
 6. When evidence is incomplete, say so explicitly and keep the requirement partial, missing, or blocked. Never weaken the requirement to improve the percentage.
 
 The normative execution plan is `MASTER_PLAN.md`. The machine-readable source of current completion truth is `docs/implementation-status.json`.
-
-## Active work directive — Phase 4
-
-The repository's current primary target is production completion of Phase 4, **Human and AI-agent payroll**, using `docs/PHASE4_PRODUCTION_PLAN.md` as the active execution plan.
-
-Work in its block order, preserve Ready human approval as the default, and never count an interface, mock, or unintegrated signer as completion. Before claiming Phase 4 complete, apply the completion rules above and pass the plan's final gate. Remove this entire temporary directive only after Phase 4 is evidence-complete.
-
-During active implementation, a user question is an interruption, not a stop condition: answer it concisely, then immediately resume the active plan in the same turn. Stop only when the requested work is complete or a concrete external action is required from the user.

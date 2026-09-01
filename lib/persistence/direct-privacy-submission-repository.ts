@@ -17,6 +17,7 @@ import {
   auditEvents,
   directPrivacyAccounts,
   directPrivacySubmissions,
+  directPrivacyTreasuries,
 } from "./schema";
 
 const COMMITMENT_PATTERN = /^0x[0-9a-f]{64}$/;
@@ -43,11 +44,18 @@ export async function storePreparedDirectPrivacySubmission(input: {
       eq(directPrivacyAccounts.id, input.accountId),
       eq(directPrivacyAccounts.capabilityId, input.job.capabilityId),
     )).limit(1).for("update");
+    if (!account || account.organizationId !== input.job.organizationId) {
+      throw new Error("DIRECT_PREPARED_ACCOUNT_STALE");
+    }
+    const [treasury] = await transaction.select().from(directPrivacyTreasuries).where(
+      eq(directPrivacyTreasuries.policyAccountAddress, account.treasuryAddress),
+    ).limit(1).for("update");
     if (
-      !account
-      || account.organizationId !== input.job.organizationId
-      || account.activeExecutionId !== input.job.id
-      || account.stateVersion !== prepared.expectedStateVersion
+      !treasury
+      || treasury.organizationId !== account.organizationId
+      || treasury.activeAccountId !== account.id
+      || treasury.activeExecutionId !== input.job.id
+      || treasury.stateVersion !== prepared.expectedStateVersion
     ) throw new Error("DIRECT_PREPARED_ACCOUNT_STALE");
     const [existing] = await transaction.select().from(directPrivacySubmissions).where(
       eq(directPrivacySubmissions.executionId, input.job.id),
@@ -250,28 +258,36 @@ export async function finalizeDirectPrivacySubmission(
     const [account] = await transaction.select().from(directPrivacyAccounts).where(
       eq(directPrivacyAccounts.id, row.accountId),
     ).limit(1).for("update");
-    if (!account || account.activeExecutionId !== row.executionId) {
-      throw new Error("DIRECT_ACCOUNT_LEASE_LOST");
-    }
+    if (!account) throw new Error("DIRECT_ACCOUNT_LEASE_LOST");
+    const [treasury] = await transaction.select().from(directPrivacyTreasuries).where(
+      eq(directPrivacyTreasuries.policyAccountAddress, account.treasuryAddress),
+    ).limit(1).for("update");
+    if (
+      !treasury
+      || treasury.organizationId !== account.organizationId
+      || treasury.activeAccountId !== account.id
+      || treasury.activeExecutionId !== row.executionId
+    ) throw new Error("DIRECT_ACCOUNT_LEASE_LOST");
     const prepared = decryptPrepared(row, account);
-    if (account.stateVersion !== prepared.expectedStateVersion) {
+    if (treasury.stateVersion !== prepared.expectedStateVersion) {
       throw new Error("DIRECT_STATE_VERSION_CONFLICT");
     }
-    const nextVersion = account.stateVersion + 1;
+    const nextVersion = treasury.stateVersion + 1;
     const encryptedState = encryptDirectPrivacyPayload(prepared.nextState, {
-      accountId: account.id,
-      organizationId: account.organizationId,
-      capabilityId: account.capabilityId,
-      purpose: "state",
+      policyAccountAddress: treasury.policyAccountAddress,
+      organizationId: treasury.organizationId,
+      poolAddress: treasury.poolAddress,
+      purpose: "treasury-state",
       stateVersion: nextVersion,
     });
-    await transaction.update(directPrivacyAccounts).set({
+    await transaction.update(directPrivacyTreasuries).set({
       encryptedState,
       stateVersion: nextVersion,
       activeExecutionId: null,
+      activeAccountId: null,
       activeLeaseExpiresAt: null,
       updatedAt: now,
-    }).where(eq(directPrivacyAccounts.id, account.id));
+    }).where(eq(directPrivacyTreasuries.policyAccountAddress, treasury.policyAccountAddress));
     await transaction.update(directPrivacySubmissions).set({ state: "confirmed", updatedAt: now })
       .where(eq(directPrivacySubmissions.executionId, row.executionId));
   });
@@ -291,14 +307,21 @@ export async function failDirectPrivacySubmission(
     await transaction.update(directPrivacySubmissions).set({ state, updatedAt: now })
       .where(eq(directPrivacySubmissions.executionId, row.executionId));
     if (state === "reverted") {
-      await transaction.update(directPrivacyAccounts).set({
-        activeExecutionId: null,
-        activeLeaseExpiresAt: null,
-        updatedAt: now,
-      }).where(and(
+      const [account] = await transaction.select().from(directPrivacyAccounts).where(
         eq(directPrivacyAccounts.id, row.accountId),
-        eq(directPrivacyAccounts.activeExecutionId, row.executionId),
-      ));
+      ).limit(1);
+      if (account) {
+        await transaction.update(directPrivacyTreasuries).set({
+          activeExecutionId: null,
+          activeAccountId: null,
+          activeLeaseExpiresAt: null,
+          updatedAt: now,
+        }).where(and(
+          eq(directPrivacyTreasuries.policyAccountAddress, account.treasuryAddress),
+          eq(directPrivacyTreasuries.activeAccountId, account.id),
+          eq(directPrivacyTreasuries.activeExecutionId, row.executionId),
+        ));
+      }
     }
   });
 }

@@ -4,7 +4,9 @@ import { describe, expect, it } from "vitest";
 import {
   deserializePrivacyHistoryCursor,
   deserializePrivacyRegistry,
+  mergePrivacyHistory,
   serializePrivacyHistoryCursor,
+  serializePrivacyHistoryTransaction,
   serializePrivacyRegistry,
 } from "./privacy-sdk-registry";
 import { loadPinnedPrivacySdk } from "./privacy-sdk-loader";
@@ -87,5 +89,51 @@ describe("encrypted Privacy SDK state codec", () => {
       beginBlockNumber: 10,
       historyComplete: false,
     });
+  });
+
+  it("serializes and deduplicates bounded private history without bigint loss", () => {
+    const first = serializePrivacyHistoryTransaction({
+      blockNumber: 12,
+      transactionHash: 101n,
+      notes: [{
+        channelKind: "outgoing",
+        token: 7n,
+        noteIndex: 2,
+        noteId: 33n,
+        counterparty: 9n,
+        amount: 44n,
+        salt: 55n,
+      }],
+      deposits: [{ fromAddress: 1n, token: 7n, amount: 50n }],
+      withdrawals: [],
+      openNoteDeposits: [],
+    });
+    const second = serializePrivacyHistoryTransaction({
+      blockNumber: 13,
+      transactionHash: 102n,
+      notes: [],
+      deposits: [],
+      withdrawals: [{ toAddress: 8n, token: 7n, amount: 3n }],
+      openNoteDeposits: [],
+      registeredPubkey: 99n,
+    });
+    expect(first.notes[0]).toMatchObject({ amount: "44", noteId: "0x21" });
+    expect(mergePrivacyHistory([first], [first, second])).toEqual([second, first]);
+    expect(mergePrivacyHistory([first], [second], 1)).toEqual([second]);
+  });
+
+  it("rejects conflicting history for one transaction hash", () => {
+    const transaction = serializePrivacyHistoryTransaction({
+      blockNumber: 12,
+      transactionHash: 101n,
+      notes: [],
+      deposits: [],
+      withdrawals: [],
+      openNoteDeposits: [],
+    });
+    expect(() => mergePrivacyHistory([transaction], [{
+      ...transaction,
+      blockNumber: 13,
+    }])).toThrow("conflicting history");
   });
 });

@@ -1,0 +1,22 @@
+FROM node:24.17.0-bookworm-slim AS builder
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY vendor ./vendor
+RUN npm ci
+COPY lib/server/policy-owner-signer-protocol.ts ./lib/server/policy-owner-signer-protocol.ts
+COPY lib/server/policy-owner-signer-service.ts ./lib/server/policy-owner-signer-service.ts
+COPY scripts/payo-policy-owner-signer.ts ./scripts/payo-policy-owner-signer.ts
+COPY scripts/build-policy-owner-signer.mjs ./scripts/build-policy-owner-signer.mjs
+RUN npm run policy-signer:bundle
+
+FROM node:24.17.0-bookworm-slim AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=3000
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+COPY --chown=node:node --from=builder /app/dist/payo-policy-owner-signer.mjs ./payo-policy-owner-signer.mjs
+USER node
+EXPOSE 3000
+CMD ["node", "payo-policy-owner-signer.mjs"]

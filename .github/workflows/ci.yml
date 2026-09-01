@@ -41,10 +41,13 @@ jobs:
         run: |
           npm run db:migrate
           npm run test:db
-      - name: Install Chromium for rendered Phase 3 controls
+          npm run test:db:phase4-migration
+      - name: Install Chromium for rendered production controls
         run: npx playwright install --with-deps chromium
       - name: Exercise rendered Phase 3 production controls
         run: npm run test:browser:phase3
+      - name: Exercise rendered Phase 4 production controls
+        run: npm run test:browser:phase4
       - name: Upload rendered Phase 3 evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -55,6 +58,16 @@ jobs:
             playwright-report
           if-no-files-found: error
           retention-days: 30
+      - name: Upload rendered Phase 4 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase4-rendered-browser-evidence
+          path: |
+            test-results/phase4-browser
+            playwright-report-phase4
+          if-no-files-found: error
+          retention-days: 30
       - name: Verify Phase 3 UI-to-proof evidence
         run: |
           npm run phase3:matrix:validate
@@ -62,6 +75,8 @@ jobs:
           npm run phase3:strk20:verify-evidence
           npm run phase3:strk20:verify-exceptions
           npm run phase3:matrix:verify-disclosure
+      - name: Verify Phase 4 evidence bindings
+        run: npm run phase4:verify-evidence
       - run: npm run lint
       - run: npm run verify:status
       - run: npm run build

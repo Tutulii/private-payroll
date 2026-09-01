@@ -17,6 +17,8 @@ import {
 } from "@/lib/crypto/vault";
 import { hashCanonicalJson } from "@/lib/crypto/digest";
 import { hashCapability, type SignedCapability } from "@/lib/domain/capability";
+import type { AgentExecutionReceipt } from "@/lib/domain/agent-execution";
+import type { DirectPrivacyAccountClientSummary } from "@/lib/client/payo-client";
 
 const ORGANIZATION_ID = "018f1000-0000-7000-8000-000000000030";
 const ORGANIZATION_SECRET = `0x${"30".repeat(32)}`;
@@ -46,6 +48,16 @@ type StoredRecord = {
 type BrowserEvidenceState = {
   records: StoredRecord[];
   runs: Array<Record<string, unknown>>;
+  agentExecutions: AgentExecutionReceipt[];
+  directPrivacyAccounts: DirectPrivacyAccountClientSummary[];
+  auditEvents: Array<{
+    id: string;
+    actorId: string;
+    action: string;
+    subjectId: string | null;
+    metadata: Record<string, unknown>;
+    createdAt: string;
+  }>;
   schedules: Array<{
     agreementId: string;
     agreementRevision: number;
@@ -59,6 +71,9 @@ export type BrowserEvidenceExport = {
   organizationId: string;
   records: Array<StoredRecord & { plaintext: unknown; envelopeHash: string }>;
   runs: Array<Record<string, unknown>>;
+  agentExecutions: BrowserEvidenceState["agentExecutions"];
+  directPrivacyAccounts: BrowserEvidenceState["directPrivacyAccounts"];
+  auditEvents: BrowserEvidenceState["auditEvents"];
   schedules: BrowserEvidenceState["schedules"];
 };
 
@@ -68,12 +83,22 @@ declare global {
       reset: () => void;
       exportState: () => BrowserEvidenceExport;
       setRuns: (runs: Array<Record<string, unknown>>) => void;
+      setAgentExecutions: (executions: AgentExecutionReceipt[]) => void;
+      setDirectPrivacyAccounts: (accounts: DirectPrivacyAccountClientSummary[]) => void;
+      setAuditEvents: (events: BrowserEvidenceState["auditEvents"]) => void;
     };
   }
 }
 
 function emptyState(): BrowserEvidenceState {
-  return { records: [], runs: [], schedules: [] };
+  return {
+    records: [],
+    runs: [],
+    agentExecutions: [],
+    directPrivacyAccounts: [],
+    auditEvents: [],
+    schedules: [],
+  };
 }
 
 function readState(): BrowserEvidenceState {
@@ -85,6 +110,11 @@ function readState(): BrowserEvidenceState {
     return {
       records: Array.isArray(parsed.records) ? parsed.records : [],
       runs: Array.isArray(parsed.runs) ? parsed.runs : [],
+      agentExecutions: Array.isArray(parsed.agentExecutions) ? parsed.agentExecutions : [],
+      directPrivacyAccounts: Array.isArray(parsed.directPrivacyAccounts)
+        ? parsed.directPrivacyAccounts
+        : [],
+      auditEvents: Array.isArray(parsed.auditEvents) ? parsed.auditEvents : [],
       schedules: Array.isArray(parsed.schedules) ? parsed.schedules : [],
     };
   } catch {
@@ -399,10 +429,10 @@ export function PayoBrowserEvidenceProvider({ children }: { children: ReactNode 
       return { revocation: { capabilityId, revokedCount: 1 } };
     },
     async listAgentExecutions() {
-      return { executions: [] };
+      return { executions: readState().agentExecutions };
     },
     async listDirectPrivacyAccounts() {
-      return { accounts: [] };
+      return { accounts: readState().directPrivacyAccounts };
     },
     async listSettlements() {
       return { settlements: [{
@@ -426,7 +456,7 @@ export function PayoBrowserEvidenceProvider({ children }: { children: ReactNode 
       }] };
     },
     async listAuditEvents() {
-      return { events: [] };
+      return { events: readState().auditEvents };
     },
     async listDisclosureGrants() {
       return { grants: [] };
@@ -449,11 +479,23 @@ export function PayoBrowserEvidenceProvider({ children }: { children: ReactNode 
             envelopeHash: hashCanonicalJson(record.envelope),
           })),
           runs: state.runs,
+          agentExecutions: state.agentExecutions,
+          directPrivacyAccounts: state.directPrivacyAccounts,
+          auditEvents: state.auditEvents,
           schedules: state.schedules,
         };
       },
       setRuns(runs) {
         mutate((state) => ({ ...state, runs }));
+      },
+      setAgentExecutions(agentExecutions) {
+        mutate((state) => ({ ...state, agentExecutions }));
+      },
+      setDirectPrivacyAccounts(directPrivacyAccounts) {
+        mutate((state) => ({ ...state, directPrivacyAccounts }));
+      },
+      setAuditEvents(auditEvents) {
+        mutate((state) => ({ ...state, auditEvents }));
       },
     };
     return () => {

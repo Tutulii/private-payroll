@@ -1,0 +1,118 @@
+{
+  "schemaVersion": "payo.phase4.private-payroll-devnet.v1",
+  "generatedAt": "2026-09-01T03:33:18.673Z",
+  "chainId": "0x534e5f5345504f4c4941",
+  "rpcVersion": "0.10.2",
+  "devnetVersion": "0.8.0-rc.3",
+  "proofMode": "none",
+  "privacySdk": {
+    "version": "0.14.3-rc.5",
+    "revision": "66e3caae8c0201227a6719696d004e30d90aea65",
+    "poolClassHash": "0x52107fadffab71bdcbb6b2ccb68ba3e1b5558d94036538053e159d3076ad633"
+  },
+  "run": {
+    "runId": "00000000-0000-4000-8000-000000000004",
+    "requestCommitment": "0x30da116c6590dc89a337c928696ef36904db0a24e8f013c6a07109cb1f4b7298",
+    "agreementRoot": "0x0dc3d28242bc00065052aefd86d9954b504e5cc9f064d909d57bc8775c5cb1ce",
+    "manifestRoot": "0x21bcfc6f85e8cf0c22b4c95b5bfdb470a374492b36bb3bdb0591473e18a82aa4",
+    "policyRoot": "0x16575a4f2517b43a894ae1d8ad892448892830da2cb8162b50354f396e3d6073",
+    "fxRoot": "0x0dc39b22c333cb4c86f1088c7d9e5d80346c8c035126daca8eae41bb03520f8c",
+    "runNullifier": "0xe77407bde3b6aa3497f939d5251950aa004c05f3c82252d6b0e58bed54f049fe",
+    "settlementRoot": "0x4b6a2e733a384a39a3ac42cd494792912930b3656ba5f9564d7fdf3b129018b9",
+    "transactionReference": "0x545fdbed6cff92f1828dc2033fe7a10eb871a4d4667e6afd753b8e152a1ac8e3",
+    "token": "STRK",
+    "amountAtomic": "1000000000000000",
+    "recipient": "0x2939f2dc3f80cc7d620e8a86f2e69c1e187b7ff44b74056647368b5c49dc370"
+  },
+  "contracts": {
+    "pool": {
+      "address": "0x5f67fe83b67be05bf94d0b2b348781ec0c5c5f4b040d0a311cc9a6e47d4a69d",
+      "transactionHash": "0xd42719647fb36cad276aa50d462ba5b7a903ae249413b50643e7b622348f88"
+    },
+    "integrityVerifier": {
+      "address": "0x6660f15fc1fa6f95b65fa67d161e6a49a541ef9d45bb55172298ad93a2776f5",
+      "transactionHash": "0x13fb248f010a841741ab6ff8f09f2d1065ba2c027a4439ba116fb3f7fbc3513"
+    },
+    "integrityBundle": {
+      "address": "0x27b8c8c3d85d560a72733cf33a6de8ef246c57b8917d53d9d9910589758071f",
+      "transactionHash": "0x4bf0eafb636bd6cf43f1a0b8ca8c9b4a8bbf1536143f825f3b24fa9c22e90a2"
+    },
+    "policyRegistry": {
+      "address": "0x5ea3cdfbb60eb56bc63477d131b68b3bdb1243f8827f5d3235d77f41033a0c2",
+      "transactionHash": "0x6fddf73217e6ef84d28ae43321f7580f477b04d0da52d29a5cd056cf9b62968"
+    },
+    "obligationRegistry": {
+      "address": "0x2bbf6376b0d3ee58c896968d72e9e144a834ca691f19fd5f74197edd0b6456",
+      "transactionHash": "0x276ec2f355e6e2b3ac5984f08beaced1ad50bc58013ea32b7c6e957dd15a0f9"
+    },
+    "settlementVerifier": {
+      "address": "0x1fabf3c0661c4cb9e2952bdb368363c89b9a97be0ad872f4e99ef3a1e3cd33d",
+      "transactionHash": "0x196d5126addaa7597b6cb0eca45e29f4de8d410d15e2095c60424e9516c6b5"
+    },
+    "payrollSeal": {
+      "address": "0x24335c5735d94fef7316bd8ffb3d9b1ecd9cb5005f0bb07462a27ac5c20357d",
+      "transactionHash": "0x137501ac0364bef33056b4c3fb03dc90e5a30b4c1fa338c29d3e8fc2ee7980b"
+    },
+    "policyAccount": {
+      "address": "0x8fefaccce442643a9b83d60ce0377875f098aa5045b014ed907735c0c31c13",
+      "transactionHash": "0x1023242755f19c789b35e641abd736c3a7eb46939e80cb52628d5deb45d8dc0"
+    }
+  },
+  "transactions": {
+    "registryConfiguration": "0x1a74bacc379818858c34c589b3df430cb881d48d1f432176d940dd37c67136e",
+    "fxPublication": "0x4bcb932e06312ab012b65b6caed6e07a1bd6ab8f0772edb7629d3d97eda6cbd",
+    "payrollPrecommit": "0x3dfa7ee030c322894b50aab65e091fcf9e44fee3bd4fad0d341d5bf5650d25a",
+    "payrollProofShards": [
+      "0x3b214b34bda56c52ce3c2baa925319ad5d2c09b1c6cd117d21618e46985c9a5",
+      "0x1008553c27947fe862c8e4489fe3b36947b0e2d07ab1c8adb3b8d9c8178ac66"
+    ],
+    "recipientRegistration": "0x599106d83492363cccaff5319a87fde17d742bd12f1a96370bab83686acf926",
+    "tokenApproval": "0x3d700b34c548439571da7caedbc2e7b0c9b7d0aeab1727d3dceaf79616dd74c",
+    "accountProvisioning": "0x2b1168e6b16aa630eb71aee3e15d5210bce6df08a3ba3d839f099b7c1bacd7d",
+    "policyConfiguration": "0x3de6e81f03e660820abcbe13f4b3343dc820a1b5c25d9066a39321555e99b6c",
+    "atomicPrivatePayrollAndFinalization": "0x9796b90a7edd2a9692b3153aea17c9de6c1baf564b426fa9222b74fa7e8604"
+  },
+  "settlementBlockNumber": 60,
+  "proofs": {
+    "payrollIntegrity": {
+      "circuitSha256": "0x3c739cc5bc376bfc3a9c46d316118107e9c97acd4e37e938de116c841b678f78",
+      "shardCalldataHashes": [
+        "0x441d012ba6780aabb38b198b8807aa3918a7e6e8211fe508e4ab0d4180a29dd",
+        "0x369dba07c8e284b6df0d600580ae08f39f17dd3625fe731474bc89560cbb65e"
+      ]
+    },
+    "settlementMatch": {
+      "circuitSha256": "0xa208f7c548a5205e9e777f4926e282510e918bee4ce7902db3bb8b2d46454033",
+      "verificationKeySha256": "0x4dba54029e3b3b507baad28f6f4f416b9eca9651f98cbad9312d91a637528e23",
+      "calldataHash": "0x5ddcb0673ee2a052df9e7685b29702237aff5ddde8e2610840b9a8a72a3ff04",
+      "provingTimeMs": 143281
+    },
+    "sdkTransactionProofBytesPresent": false,
+    "sdkProofFactsPresent": true,
+    "settlementProver": "remote-self-hosted"
+  },
+  "checks": {
+    "payrollIntegrityPrecommittedBeforePayment": true,
+    "bothPayrollIntegrityShardsVerifiedBeforePayment": true,
+    "payrollIntegrityProvenBeforePayment": true,
+    "exactSdkCiphertextExtractedBeforeSettlementProof": true,
+    "settlementMatchVerifiedOnchain": true,
+    "privatePaymentAndFinalizationAtomic": true,
+    "policyScopeAndAuthorizedRunEnforced": true,
+    "recipientPrivateNoteDiscovered": true,
+    "recipientBalanceDeltaExact": true,
+    "settlementReceiptMatchesProof": true,
+    "sealFinalized": true,
+    "replayRejected": true
+  },
+  "privateBalanceEvidenceAtomic": {
+    "recipientBefore": "1",
+    "recipientAfter": "1000000000000001",
+    "delta": "1000000000000000"
+  },
+  "limitations": [
+    "Devnet evidence uses one synthetic STRK payroll line and deterministic local accounts.",
+    "The official Privacy Pool integration runs with Devnet transaction-proof verification disabled because Devnet's fake proof facts are wire-incompatible with the pinned pool; this is not full transaction-OS proof evidence.",
+    "Mainnet declaration, deployment and public operator addresses remain a Phase 5 release gate."
+  ]
+}

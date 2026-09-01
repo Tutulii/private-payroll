@@ -13,6 +13,17 @@ import { hashProofCalldata } from "@/lib/proof/starknet-calldata";
 
 const feltSchema = z.string().regex(/^0x(?:0|[1-9a-fA-F][0-9a-fA-F]{0,63})$/)
   .transform((value) => value as `0x${string}`);
+const wireFeltSchema = z.string()
+  .regex(/^(?:0x(?:0|[1-9a-fA-F][0-9a-fA-F]{0,63})|(?:0|[1-9]\d*))$/)
+  .transform((value, context) => {
+    const parsed = BigInt(value);
+    const starkPrime = (1n << 251n) + 17n * (1n << 192n) + 1n;
+    if (parsed >= starkPrime) {
+      context.addIssue({ code: "custom", message: "Value is outside the Starknet field." });
+      return z.NEVER;
+    }
+    return `0x${parsed.toString(16)}` as `0x${string}`;
+  });
 const commitmentSchema = z.string().regex(/^0x[0-9a-fA-F]{64}$/)
   .transform((value) => value as `0x${string}`);
 const uintStringSchema = z.string().regex(/^(?:0|[1-9]\d*)$/);
@@ -24,9 +35,8 @@ const blockIdentifierSchema = z.union([
 ]);
 
 export const directPrivacySecretsSchema = z.object({
-  version: z.literal("payo-direct-privacy-secrets-v1"),
+  version: z.literal("payo-direct-privacy-secrets-v2"),
   sessionPrivateKey: commitmentSchema,
-  viewingKey: feltSchema,
   proofPrincipal: z.object({
     principalId: z.string().min(8).max(160),
     publicKey: z.string().min(16).max(256),
@@ -34,6 +44,18 @@ export const directPrivacySecretsSchema = z.object({
   }).strict(),
 }).strict();
 export type DirectPrivacySecrets = z.infer<typeof directPrivacySecretsSchema>;
+
+/**
+ * One durable viewing identity belongs to the private treasury address, not
+ * to an individual short-lived capability. Keeping it separate prevents two
+ * capabilities from discovering or spending the same note set with divergent
+ * keys or state.
+ */
+export const directPrivacyTreasurySecretsSchema = z.object({
+  version: z.literal("payo-direct-privacy-treasury-secrets-v1"),
+  viewingKey: feltSchema,
+}).strict();
+export type DirectPrivacyTreasurySecrets = z.infer<typeof directPrivacyTreasurySecretsSchema>;
 
 const serializedNoteSchema = z.object({
   id: feltSchema,
@@ -86,10 +108,62 @@ export const directPrivacyHistoryCursorSchema = z.object({
   historyComplete: z.boolean(),
 }).strict();
 
+const directPrivacyHistoryNoteSchema = z.object({
+  channelKind: z.enum(["incoming", "outgoing", "self_channel"]),
+  token: feltSchema,
+  noteIndex: z.number().int().nonnegative(),
+  noteId: feltSchema,
+  counterparty: feltSchema,
+  amount: uintStringSchema,
+  salt: feltSchema,
+}).strict();
+
+const directPrivacyHistoryDepositSchema = z.object({
+  fromAddress: feltSchema,
+  token: feltSchema,
+  amount: uintStringSchema,
+}).strict();
+
+const directPrivacyHistoryWithdrawalSchema = z.object({
+  toAddress: feltSchema,
+  token: feltSchema,
+  amount: uintStringSchema,
+}).strict();
+
+const directPrivacyHistoryOpenNoteDepositSchema = z.object({
+  depositor: feltSchema,
+  token: feltSchema,
+  noteId: feltSchema,
+  amount: uintStringSchema,
+}).strict();
+
+/**
+ * Private transaction history is stored only inside the treasury ciphertext.
+ * Its bounded shape prevents a compromised indexer from inflating encrypted
+ * state without limit while retaining enough data for deterministic recovery.
+ */
+export const directPrivacyHistoryTransactionSchema = z.object({
+  blockNumber: z.number().int().nonnegative(),
+  transactionHash: feltSchema,
+  notes: z.array(directPrivacyHistoryNoteSchema).max(256),
+  deposits: z.array(directPrivacyHistoryDepositSchema).max(256),
+  withdrawals: z.array(directPrivacyHistoryWithdrawalSchema).max(256),
+  openNoteDeposits: z.array(directPrivacyHistoryOpenNoteDepositSchema).max(256),
+  registeredPubkey: feltSchema.nullable(),
+}).strict();
+export type DirectPrivacyHistoryTransaction = z.infer<
+  typeof directPrivacyHistoryTransactionSchema
+>;
+
 export const directPrivacyStateSchema = z.object({
   version: z.literal("payo-direct-privacy-state-v1"),
   registry: serializedPrivateRegistrySchema,
   historyCursor: directPrivacyHistoryCursorSchema.nullable(),
+  historyPinnedBlock: z.object({
+    number: z.number().int().nonnegative(),
+    hash: feltSchema,
+  }).strict().nullable().default(null),
+  history: z.array(directPrivacyHistoryTransactionSchema).max(1_024).default([]),
   pinnedBlock: z.object({
     number: z.number().int().nonnegative(),
     hash: feltSchema,
@@ -185,6 +259,14 @@ export const directPrivacyPreparationSchema = z.object({
     entrypoint: z.literal("execute_policy_intent"),
     calldata: z.array(feltSchema).min(20).max(4_904),
   }).strict(),
+  outsideCall: z.object({
+    contractAddress: feltSchema,
+    entrypoint: z.literal("execute_from_outside_v2"),
+    // Starknet.js emits compiled Cairo calldata as decimal strings. Normalize
+    // it once before encryption so retries compare and submit one canonical
+    // outside authorization regardless of JSON/RPC number formatting.
+    calldata: z.array(wireFeltSchema).min(1).max(5_000),
+  }).strict(),
   sdkProof: directPrivacySdkProofSchema,
   settlement: directPrivacySettlementSchema,
   proofValidAfterUnix: uintStringSchema,
@@ -193,7 +275,15 @@ export const directPrivacyPreparationSchema = z.object({
   expectedStateVersion: z.number().int().positive(),
   pinnedBlock: directPrivacyPinnedBlockSchema,
   feeEstimateAtomic: uintStringSchema,
-}).strict();
+}).strict().superRefine((preparation, context) => {
+  if (BigInt(preparation.outsideCall.contractAddress) !== BigInt(preparation.policyCall.contractAddress)) {
+    context.addIssue({
+      code: "custom",
+      path: ["outsideCall", "contractAddress"],
+      message: "The outside authorization must target the configured policy account.",
+    });
+  }
+});
 export type DirectPrivacyPreparation = z.infer<typeof directPrivacyPreparationSchema>;
 
 export function commitDirectPrivacyPreparation(
@@ -554,6 +644,8 @@ export function emptyDirectPrivacyState(): DirectPrivacyState {
       channelTotal: null,
     },
     historyCursor: null,
+    historyPinnedBlock: null,
+    history: [],
     pinnedBlock: null,
   };
 }

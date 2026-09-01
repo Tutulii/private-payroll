@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { RpcProvider } from "starknet";
 import {
@@ -58,6 +59,15 @@ describe("direct privacy policy-account chain reader", () => {
       { entrypoint: "is_policy_active", block: "0xdef" },
       { entrypoint: "is_policy_account_paused", block: "0xdef" },
     ]);
+  });
+
+  it("keeps owner secrets and fee-relayer fallbacks outside the web activation boundary", () => {
+    const source = readFileSync(
+      new URL("../../app/api/v1/direct-privacy-accounts/[id]/activation/route.ts", import.meta.url),
+      "utf8",
+    );
+    expect(source).toContain("PolicyOwnerSignerClient.fromEnvironment()");
+    expect(source).not.toMatch(/OWNER_PRIVATE_KEY|PROOF_RELAYER_PRIVATE_KEY|new Account\s*\(/);
   });
 
   it("fails closed on a non-Cairo boolean", async () => {
