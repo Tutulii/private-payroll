@@ -1263,6 +1263,7 @@ export class PayoClient {
   }) {
     return this.request<{
       account: DirectPrivacyAccountClientPublic;
+      authorizedRuns: Array<{ runId: string; runVersion: number; proofBundleId: string }>;
       configurationCall: Call;
       replayed?: boolean;
     }>("/api/v1/direct-privacy-accounts", {

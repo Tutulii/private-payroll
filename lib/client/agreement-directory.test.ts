@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { decryptVaultRecord, generateVaultPrincipal } from "@/lib/crypto/vault";
 import { referenceClassificationAnswers } from "@/lib/domain/classification";
+import { generateUuidV7 } from "@/lib/domain/records";
 import { prepareEncryptedPayee } from "./payee-directory";
 import {
   advanceEncryptedRecurringAgreement,
@@ -176,6 +177,13 @@ describe("encrypted pay agreements", () => {
       `${agreement.agreement.id}:${scheduleCommitment}`,
     );
     expect(lockedPayrollScheduleCommitments([{ ...submitted[0], state: "failed" }])).toHaveLength(0);
+    expect(lockedPayrollScheduleCommitments([{
+      ...submitted[0],
+      state: "proven",
+      obligationSnapshotPlanId: generateUuidV7(),
+    }]))
+      .not.toContain(`${agreement.agreement.id}:${scheduleCommitment}`);
+    expect(lockedPayrollScheduleCommitments([{ ...submitted[0], state: "proven" }])).toHaveLength(1);
 
     const storeEncryptedRecord = vi.fn().mockResolvedValue({ record: {} });
     const [advanced] = await synchronizeConfirmedRecurringAgreements({

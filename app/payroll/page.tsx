@@ -102,6 +102,7 @@ type PayrollRunSummary = {
   dueAt: string;
   updatedAt: string;
   transactionHash: string | null;
+  obligationSnapshotPlanId: string | null;
   revision: number;
   recipientCount: number;
   totals: Record<PayrollTokenSymbol, bigint>;
@@ -333,6 +334,15 @@ export default function PayrollPage() {
     requiresSnapshot: selectedContainsAdvancedProfile,
     plans: snapshotPlans,
   }), [selectedContainsAdvancedProfile, selectedSnapshotCycleId, snapshotPlans]);
+  const recoverableAutonomousSnapshotRun = useMemo(() => {
+    const plan = selectedSnapshotStatus.plan;
+    if (!plan || plan.state !== "consumed") return null;
+    return payrollRuns.find((run) =>
+      run.id === plan.runId
+      && run.obligationSnapshotPlanId === plan.id
+      && ["draft", "calculated", "proven"].includes(run.state)
+      && !run.transactionHash) ?? null;
+  }, [payrollRuns, selectedSnapshotStatus.plan]);
   const selectedSnapshotDueLabel = selectedObligations.length > 0
     ? unambiguousLocalDateTime(
       Number(payrollAgreementDueAt(selectedObligations[0].agreement)) * 1_000,
@@ -349,6 +359,11 @@ export default function PayrollPage() {
       selectedSnapshotStatus.kind === "empty"
       || selectedSnapshotStatus.kind === "not_required"
       || selectedSnapshotStatus.kind === "registered"
+    ) return null;
+    if (
+      selectedSnapshotStatus.kind === "consumed"
+      && executionMode === "autonomous"
+      && recoverableAutonomousSnapshotRun
     ) return null;
     if (selectedSnapshotStatus.kind === "missing") {
       return "This exact batch was not protected before " + selectedSnapshotDueLabel
@@ -369,6 +384,8 @@ export default function PayrollPage() {
     return "Protection for the exact batch due " + selectedSnapshotDueLabel
       + " is " + selectedSnapshotStatus.kind + " and cannot authorize payroll.";
   }, [
+    executionMode,
+    recoverableAutonomousSnapshotRun,
     selectedContainsAdvancedProfile,
     selectedMixedProofProfiles,
     selectedSnapshotDueLabel,
@@ -377,7 +394,8 @@ export default function PayrollPage() {
   ]);
   const selectedSnapshotReady = !snapshotSyncError
     && !selectedMixedProofProfiles
-    && exactPayrollSnapshotReady(selectedSnapshotStatus);
+    && (exactPayrollSnapshotReady(selectedSnapshotStatus)
+      || (executionMode === "autonomous" && Boolean(recoverableAutonomousSnapshotRun)));
   const selectedObligationAuthorizationKey = useMemo(
     () => obligationAuthorizationSelectionKey(
       vault.session?.organizationId,
@@ -614,6 +632,7 @@ export default function PayrollPage() {
           dueAt?: unknown;
           updatedAt?: unknown;
           transactionHash?: unknown;
+          obligationSnapshotPlanId?: unknown;
           revision?: unknown;
         };
         if (
@@ -670,6 +689,9 @@ export default function PayrollPage() {
           dueAt: run.dueAt,
           updatedAt: run.updatedAt,
           transactionHash: typeof run.transactionHash === "string" ? run.transactionHash : null,
+          obligationSnapshotPlanId: typeof run.obligationSnapshotPlanId === "string"
+            ? run.obligationSnapshotPlanId
+            : null,
           revision: run.revision,
           recipientCount: lines.length,
           totals: { STRK: BigInt(strk), USDC: BigInt(usdc) },
@@ -1202,14 +1224,25 @@ export default function PayrollPage() {
         if (!selfHostedProverUrl) {
           throw new Error("The vNext payroll prover is not configured for this PAYO deployment.");
         }
-        dueSnapshotPlan = await loadRegisteredObligationSnapshotPlan({
-          client: vault.client,
-          principal: vault.session.principal,
-          organizationId: vault.session.organizationId,
-          ownerAddress: starknet.address,
-          agreementRoot: plannedObligations.root,
-          obligations: selectedObligations,
-        });
+        if (prepareForAgent && recoverableAutonomousSnapshotRun && selectedSnapshotStatus.plan) {
+          const { plan } = await vault.client.getObligationSnapshotPlan(selectedSnapshotStatus.plan.id);
+          dueSnapshotPlan = openObligationSnapshotPlan({
+            plan,
+            principal: vault.session.principal,
+            organizationId: vault.session.organizationId,
+            ownerAddress: starknet.address,
+            obligations: selectedObligations,
+          });
+        } else {
+          dueSnapshotPlan = await loadRegisteredObligationSnapshotPlan({
+            client: vault.client,
+            principal: vault.session.principal,
+            organizationId: vault.session.organizationId,
+            ownerAddress: starknet.address,
+            agreementRoot: plannedObligations.root,
+            obligations: selectedObligations,
+          });
+        }
         if (agentApprovalReview && dueSnapshotPlan.runId !== agentApprovalReview.runId) {
           throw new Error("The selected snapshot does not match the agent execution run.");
         }

@@ -224,22 +224,27 @@ function client(ready = true) {
       Promise.resolve({ authorization: authorization(runId) })),
     getSealedPayrollRecovery: vi.fn(),
     getEncryptedRecord: vi.fn(),
-    provisionDirectPrivacyAccount: vi.fn().mockResolvedValue({
+    provisionDirectPrivacyAccount: vi.fn().mockImplementation(({ runIds }: { runIds: string[] }) => Promise.resolve({
       account: {
         id: generateUuidV7(now.getTime() + 40),
         proofPrincipal: principal,
         activationState: "active" as const,
       },
+      authorizedRuns: [{
+        runId: runIds[0],
+        runVersion: 2,
+        proofBundleId: generateUuidV7(now.getTime() + 41),
+      }],
       configurationCall: {},
-    }),
-    stageDirectPrivacyRunWitness: vi.fn().mockResolvedValue({
+    })),
+    stageDirectPrivacyRunWitness: vi.fn().mockImplementation(({ encryptedWitness }) => Promise.resolve({
       witness: {
-        runId: generateUuidV7(now.getTime() + 41),
-        runVersion: 1,
+        runId: encryptedWitness.aad.recordId,
+        runVersion: encryptedWitness.aad.revision,
         witnessCommitment: `0x${"77".repeat(32)}`,
         replayed: false,
       },
-    }),
+    })),
   };
 }
 
@@ -982,6 +987,66 @@ describe("proof-bound payroll browser orchestration", () => {
     expect(mockClient.storeEncryptedProofBundle).toHaveBeenCalledTimes(2);
     expect(mockClient.provisionDirectPrivacyAccount).toHaveBeenCalledOnce();
     expect(mockClient.stageDirectPrivacyRunWitness).toHaveBeenCalledOnce();
+    expect(mockClient.stageDirectPrivacyRunWitness.mock.calls[0][0].encryptedWitness.aad.revision).toBe(2);
+  });
+
+  it("resumes an already-proven autonomous run after witness staging failed", async () => {
+    const mockClient = client();
+    const input = await snapshotExecutionInput(mockClient);
+    const capabilityId = generateUuidV7(now.getTime() + 50);
+    const autonomousAgent = { capabilityId, policyAccountAddress: "0x456" };
+    mockClient.stageDirectPrivacyRunWitness.mockRejectedValueOnce(
+      new PayoApiError(
+        "The autonomous witness is not encrypted to this exact executor run.",
+        "DIRECT_WITNESS_RECIPIENT_INVALID",
+        409,
+      ),
+    );
+
+    await expect(executeProofBoundPayroll({
+      ...input,
+      autonomousAgent,
+    })).rejects.toMatchObject({ code: "DIRECT_WITNESS_RECIPIENT_INVALID" });
+
+    const persisted = mockClient.createPayrollRun.mock.calls[0][0];
+    mockClient.getPayrollRun.mockResolvedValue({
+      run: {
+        id: persisted.id,
+        organizationId: persisted.organizationId,
+        state: "proven" as const,
+        agreementRoot: persisted.agreementRoot,
+        manifestRoot: persisted.manifestRoot,
+        policyRoot: persisted.policyRoot,
+        fxRoot: persisted.fxRoot,
+        runNullifier: persisted.runNullifier,
+        obligationSnapshotPlanId: persisted.obligationSnapshotPlanId ?? null,
+        transactionHash: null,
+        envelope: persisted.envelope,
+      },
+    });
+
+    await expect(executeProofBoundPayroll({
+      ...input,
+      autonomousAgent,
+    })).resolves.toMatchObject({
+      mode: "autonomous_bounded",
+      runId: input.snapshotPlan.runId,
+      runVersion: 2,
+      activationState: "active",
+    });
+
+    expect(input.prove).toHaveBeenCalledTimes(1);
+    expect(input.proveSnapshot).toHaveBeenCalledTimes(1);
+    expect(mockClient.createPayrollRun).toHaveBeenCalledTimes(1);
+    expect(mockClient.storeEncryptedProofBundle).toHaveBeenCalledTimes(1);
+    expect(mockClient.provisionDirectPrivacyAccount).toHaveBeenCalledTimes(2);
+    expect(mockClient.stageDirectPrivacyRunWitness).toHaveBeenCalledTimes(2);
+    expect(mockClient.stageDirectPrivacyRunWitness.mock.calls[1][0].encryptedWitness.aad).toMatchObject({
+      organizationId,
+      recordType: "agent_payroll_witness",
+      recordId: input.snapshotPlan.runId,
+      revision: 2,
+    });
   });
 
   it("links the exact MCP execution before opening Ready for human approval", async () => {

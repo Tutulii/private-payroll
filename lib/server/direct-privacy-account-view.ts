@@ -1,11 +1,12 @@
 import "server-only";
 
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { directPrivacyAccountConfigSchema } from "@/lib/domain/direct-privacy";
 import {
   directPrivacyAccounts,
   directPrivacyAuthorizedRuns,
   directPrivacyTreasuries,
+  proofBundles,
 } from "@/lib/persistence/schema";
 import type {
   DirectPrivacyAccountPublic,
@@ -105,6 +106,56 @@ export async function getDirectPrivacyAccountPublic(input: {
 
 function sameFelt(left: string, right: string): boolean {
   try { return BigInt(left) === BigInt(right); } catch { return false; }
+}
+
+export type DirectPrivacyAuthorizedRunPublic = {
+  runId: string;
+  runVersion: number;
+  proofBundleId: string;
+};
+
+/** Returns exact public version/proof bindings; no witness or executor secret leaves the server. */
+export async function getDirectPrivacyAuthorizedRunsPublic(input: {
+  accountId: string;
+  principal: AuthenticatedPrincipal;
+}): Promise<DirectPrivacyAuthorizedRunPublic[]> {
+  return getDatabase().transaction(async (transaction) => {
+    const [account] = await transaction.select({
+      organizationId: directPrivacyAccounts.organizationId,
+      revokedAt: directPrivacyAccounts.revokedAt,
+    }).from(directPrivacyAccounts)
+      .where(eq(directPrivacyAccounts.id, input.accountId))
+      .limit(1);
+    if (!account || account.revokedAt) {
+      throw new ApiError(404, "Direct private account not found.", "DIRECT_ACCOUNT_NOT_FOUND");
+    }
+    await requireOrganizationRoleWith(transaction, account.organizationId, input.principal, ["admin"]);
+    const authorizations = await transaction.select({
+      runId: directPrivacyAuthorizedRuns.runId,
+      runVersion: directPrivacyAuthorizedRuns.runVersion,
+    }).from(directPrivacyAuthorizedRuns).where(eq(
+      directPrivacyAuthorizedRuns.accountId,
+      input.accountId,
+    ));
+    if (authorizations.length === 0) return [];
+    const bundles = await transaction.select({
+      id: proofBundles.id,
+      runId: proofBundles.runId,
+      subjectRecordId: proofBundles.subjectRecordId,
+    }).from(proofBundles).where(and(
+      eq(proofBundles.organizationId, account.organizationId),
+      eq(proofBundles.proofType, "payroll_integrity"),
+      inArray(proofBundles.runId, authorizations.map(({ runId }) => runId)),
+    ));
+    const bundleByRunId = new Map(bundles
+      .filter(({ runId, subjectRecordId }) => runId === subjectRecordId)
+      .map((bundle) => [bundle.runId, bundle.id]));
+    return authorizations.map(({ runId, runVersion }) => {
+      const proofBundleId = bundleByRunId.get(runId);
+      if (!proofBundleId) throw new Error("DIRECT_ACCOUNT_PROOF_BINDING_MISSING");
+      return { runId, runVersion, proofBundleId };
+    });
+  });
 }
 
 /**

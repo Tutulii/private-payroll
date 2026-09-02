@@ -4,6 +4,7 @@ import { provisionDirectPrivacyAccountFromRuns } from "@/lib/persistence/direct-
 import { requirePrincipal } from "@/lib/server/auth";
 import { ApiError } from "@/lib/server/auth";
 import {
+  getDirectPrivacyAuthorizedRunsPublic,
   getDirectPrivacyAccountPublic,
   getDirectPrivacyProvisioningReplay,
   listDirectPrivacyAccountsPublic,
@@ -76,8 +77,10 @@ export async function POST(request: Request) {
     };
     const existing = await getDirectPrivacyProvisioningReplay(replayInput);
     if (existing) {
+      const authorizedRuns = await getDirectPrivacyAuthorizedRunsPublic({ accountId: existing.id, principal });
       return Response.json({
         account: existing,
+        authorizedRuns,
         configurationCall: buildConfigurePolicyCall(existing.config),
         replayed: true,
       }, { headers: noStore });
@@ -103,13 +106,16 @@ export async function POST(request: Request) {
       if (!(error instanceof ApiError) || error.code !== "DIRECT_ACCOUNT_EXISTS") throw error;
       const replay = await getDirectPrivacyProvisioningReplay(replayInput);
       if (!replay) throw error;
+      const authorizedRuns = await getDirectPrivacyAuthorizedRunsPublic({ accountId: replay.id, principal });
       return Response.json({
         account: replay,
+        authorizedRuns,
         configurationCall: buildConfigurePolicyCall(replay.config),
         replayed: true,
       }, { headers: noStore });
     }
-    return Response.json({ account, configurationCall: buildConfigurePolicyCall(account.config) }, {
+    const authorizedRuns = await getDirectPrivacyAuthorizedRunsPublic({ accountId: account.id, principal });
+    return Response.json({ account, authorizedRuns, configurationCall: buildConfigurePolicyCall(account.config) }, {
       status: 201,
       headers: noStore,
     });

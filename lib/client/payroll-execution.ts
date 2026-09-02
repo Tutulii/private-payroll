@@ -423,7 +423,7 @@ function autonomousPolicyId(capabilityId: string, runId: string): `0x${string}` 
 }
 
 type ResumableEncryptedPayrollRun = {
-  state: "draft" | "calculated";
+  state: "draft" | "calculated" | "proven";
   buildInput: SerializedPayrollIntegrityBuildRequest;
 };
 
@@ -445,11 +445,12 @@ function sameField(left: string | null, right: string): boolean {
 }
 
 /**
- * A browser can close after the FX root is authorized and the encrypted run is
- * persisted but before its proof bundle is stored. Snapshot runs have a fixed
- * run ID, so retrying with fresh salts would correctly fail replay checks. In
- * that narrow, pre-payment state, reuse the authenticated encrypted build input
- * instead. No server plaintext or caller-selected binding is trusted here.
+ * A browser can close after the encrypted run is persisted or autonomous
+ * witness staging can fail after proof storage. Snapshot runs have a fixed run
+ * ID, so retrying with fresh salts would correctly fail replay checks. Reuse
+ * the authenticated encrypted build input only while the run is unsubmitted;
+ * a proven run may resume only through the exact server-authorized agent
+ * binding. No server plaintext or caller-selected version is trusted here.
  */
 async function loadResumableEncryptedPayrollRun(input: {
   client: PayoClient;
@@ -473,7 +474,7 @@ async function loadResumableEncryptedPayrollRun(input: {
     throw error;
   }
   const { run } = response;
-  if (run.state !== "draft" && run.state !== "calculated") {
+  if (run.state !== "draft" && run.state !== "calculated" && run.state !== "proven") {
     throw new Error(
       `This protected payroll is already ${run.state}; refresh Activity instead of generating another proof.`,
     );
@@ -567,6 +568,69 @@ async function retryDurableWrite<T>(operation: () => Promise<T>): Promise<T> {
     }
   }
   throw lastError;
+}
+
+async function stageAutonomousPayrollRun(input: {
+  client: PayoClient;
+  organizationId: string;
+  runId: string;
+  proofWitnessPayload: unknown;
+  autonomousAgent: PrepareAutonomousPayrollInput["autonomousAgent"];
+  onStage?: (stage: PayrollExecutionStage) => void;
+}): Promise<AutonomousPayrollPreparationResult> {
+  input.onStage?.("agent_policy");
+  const policyId = autonomousPolicyId(input.autonomousAgent.capabilityId, input.runId);
+  const validForSeconds = Math.min(input.autonomousAgent.validForSeconds ?? 3_600, 3_600);
+  const provisioned = await input.client.provisionDirectPrivacyAccount({
+    organizationId: input.organizationId,
+    capabilityId: input.autonomousAgent.capabilityId,
+    runIds: [input.runId],
+    policyAccountAddress: input.autonomousAgent.policyAccountAddress,
+    policyId,
+    validForSeconds,
+    periodSeconds: validForSeconds,
+    maxCallsPerPeriod: 1,
+    maxCallCount: 1,
+  });
+  const binding = provisioned.authorizedRuns.find(({ runId }) => runId === input.runId);
+  if (
+    provisioned.authorizedRuns.length !== 1
+    || !binding
+    || !Number.isInteger(binding.runVersion)
+    || binding.runVersion < 1
+    || !binding.proofBundleId
+  ) {
+    throw new Error("PAYO did not return the exact authorized run binding for this policy account.");
+  }
+  const agentWitness = encryptVaultRecord(input.proofWitnessPayload, {
+    schemaVersion: 1,
+    organizationId: input.organizationId,
+    recordType: "agent_payroll_witness",
+    recordId: input.runId,
+    revision: binding.runVersion,
+  }, [provisioned.account.proofPrincipal]);
+  const staged = await input.client.stageDirectPrivacyRunWitness({
+    accountId: provisioned.account.id,
+    encryptedWitness: agentWitness,
+  });
+  if (
+    staged.witness.runId !== input.runId
+    || staged.witness.runVersion !== binding.runVersion
+  ) {
+    throw new Error("PAYO staged the autonomous witness against a different run version.");
+  }
+  return {
+    mode: "autonomous_bounded",
+    organizationId: input.organizationId,
+    capabilityId: input.autonomousAgent.capabilityId,
+    runId: input.runId,
+    runVersion: binding.runVersion,
+    proofBundleId: binding.proofBundleId,
+    accountId: provisioned.account.id,
+    policyId,
+    witnessCommitment: staged.witness.witnessCommitment,
+    activationState: provisioned.account.activationState,
+  };
 }
 
 export async function waitForPayrollAuthorization(input: {
@@ -1090,6 +1154,19 @@ export async function executeProofBoundPayroll(
         agreements: input.obligations.map(({ agreement }) => agreement.agreement),
       },
     } : { buildInput };
+  if (resumableRun?.state === "proven") {
+    if (!("autonomousAgent" in input)) {
+      throw new Error("This protected payroll is already proven; recover its payment from Activity.");
+    }
+    return stageAutonomousPayrollRun({
+      client: input.client,
+      organizationId: input.organizationId,
+      runId,
+      proofWitnessPayload,
+      autonomousAgent: input.autonomousAgent,
+      onStage: input.onStage,
+    });
+  }
   const encryptedWitness = encryptVaultRecord(
     proofWitnessPayload,
     {
@@ -1232,43 +1309,14 @@ export async function executeProofBoundPayroll(
   // request the same transition again: the repository deliberately rejects a
   // proven -> proven transition as an invalid state-machine replay.
   if ("autonomousAgent" in input) {
-    input.onStage?.("agent_policy");
-    const policyId = autonomousPolicyId(input.autonomousAgent.capabilityId, runId);
-    const validForSeconds = Math.min(input.autonomousAgent.validForSeconds ?? 3_600, 3_600);
-    const provisioned = await input.client.provisionDirectPrivacyAccount({
+    return stageAutonomousPayrollRun({
+      client: input.client,
       organizationId: input.organizationId,
-      capabilityId: input.autonomousAgent.capabilityId,
-      runIds: [runId],
-      policyAccountAddress: input.autonomousAgent.policyAccountAddress,
-      policyId,
-      validForSeconds,
-      periodSeconds: validForSeconds,
-      maxCallsPerPeriod: 1,
-      maxCallCount: 1,
-    });
-    const agentWitness = encryptVaultRecord(proofWitnessPayload, {
-      schemaVersion: 1,
-      organizationId: input.organizationId,
-      recordType: "agent_payroll_witness",
-      recordId: runId,
-      revision,
-    }, [provisioned.account.proofPrincipal]);
-    const staged = await input.client.stageDirectPrivacyRunWitness({
-      accountId: provisioned.account.id,
-      encryptedWitness: agentWitness,
-    });
-    return {
-      mode: "autonomous_bounded",
-      organizationId: input.organizationId,
-      capabilityId: input.autonomousAgent.capabilityId,
       runId,
-      runVersion: revision,
-      proofBundleId,
-      accountId: provisioned.account.id,
-      policyId,
-      witnessCommitment: staged.witness.witnessCommitment,
-      activationState: provisioned.account.activationState,
-    };
+      proofWitnessPayload,
+      autonomousAgent: input.autonomousAgent,
+      onStage: input.onStage,
+    });
   }
   let snapshotProofBundleId: string | undefined;
   let payoAction: STRK20_INVOKE_ACTION;

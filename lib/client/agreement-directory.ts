@@ -137,14 +137,17 @@ export type PayrollScheduleRun = {
   state: string;
   updatedAt: string;
   dueAt?: string;
+  obligationSnapshotPlanId?: string | null;
   lines: readonly PayrollScheduleReference[];
 };
 
 export function lockedPayrollScheduleCommitments(
   runs: readonly PayrollScheduleRun[],
 ): Set<string> {
-  const retryableStates = new Set(["cancelled", "failed", "disputed"]);
-  return new Set(runs.flatMap((run) => retryableStates.has(run.state)
+  const terminalRetryableStates = new Set(["cancelled", "failed", "disputed"]);
+  const resumableSnapshotStates = new Set(["draft", "calculated", "proven"]);
+  return new Set(runs.flatMap((run) => terminalRetryableStates.has(run.state)
+    || (Boolean(run.obligationSnapshotPlanId) && resumableSnapshotStates.has(run.state))
     ? []
     : run.lines.map((line) => `${line.agreementId}:${line.scheduleCommitment.toLowerCase()}`)));
 }
