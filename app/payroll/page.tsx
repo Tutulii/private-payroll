@@ -103,6 +103,7 @@ type PayrollRunSummary = {
   updatedAt: string;
   transactionHash: string | null;
   obligationSnapshotPlanId: string | null;
+  proofValidityExpiry: string | null;
   revision: number;
   recipientCount: number;
   totals: Record<PayrollTokenSymbol, bigint>;
@@ -334,7 +335,7 @@ export default function PayrollPage() {
     requiresSnapshot: selectedContainsAdvancedProfile,
     plans: snapshotPlans,
   }), [selectedContainsAdvancedProfile, selectedSnapshotCycleId, snapshotPlans]);
-  const recoverableAutonomousSnapshotRun = useMemo(() => {
+  const interruptedAutonomousSnapshotRun = useMemo(() => {
     const plan = selectedSnapshotStatus.plan;
     if (!plan || plan.state !== "consumed") return null;
     return payrollRuns.find((run) =>
@@ -343,6 +344,15 @@ export default function PayrollPage() {
       && ["draft", "calculated", "proven"].includes(run.state)
       && !run.transactionHash) ?? null;
   }, [payrollRuns, selectedSnapshotStatus.plan]);
+  const recoverableAutonomousSnapshotRun = useMemo(() => {
+    if (!interruptedAutonomousSnapshotRun?.proofValidityExpiry) return null;
+    try {
+      return BigInt(interruptedAutonomousSnapshotRun.proofValidityExpiry)
+        - BigInt(Math.floor(dashboardNow / 1_000)) >= 10n * 60n
+        ? interruptedAutonomousSnapshotRun
+        : null;
+    } catch { return null; }
+  }, [dashboardNow, interruptedAutonomousSnapshotRun]);
   const selectedSnapshotDueLabel = selectedObligations.length > 0
     ? unambiguousLocalDateTime(
       Number(payrollAgreementDueAt(selectedObligations[0].agreement)) * 1_000,
@@ -371,6 +381,11 @@ export default function PayrollPage() {
         + "Create a future agreement, protect that exact batch, then pay it after it becomes due.";
     }
     if (selectedSnapshotStatus.kind === "consumed") {
+      if (interruptedAutonomousSnapshotRun) {
+        return recoverableAutonomousSnapshotRun
+          ? "This protected run is waiting for its original one-run AI-agent preparation. Select AI agent to resume it without another proof."
+          : "This agent preparation's one-hour proof window expired before witness staging. No private payment was sent. Set a future payday, protect it, and issue a fresh one-run capability.";
+      }
       return "The exact protected batch due " + selectedSnapshotDueLabel
         + " was already consumed by a previous payroll and cannot be paid twice.";
     }
@@ -385,6 +400,7 @@ export default function PayrollPage() {
       + " is " + selectedSnapshotStatus.kind + " and cannot authorize payroll.";
   }, [
     executionMode,
+    interruptedAutonomousSnapshotRun,
     recoverableAutonomousSnapshotRun,
     selectedContainsAdvancedProfile,
     selectedMixedProofProfiles,
@@ -658,6 +674,7 @@ export default function PayrollPage() {
             }>;
             totals?: { STRK?: unknown; USDC?: unknown };
           };
+          claimProofSource?: { buildInput?: { validityExpiry?: unknown } };
         }>(response.record.envelope, vault.session!.principal);
         const strk = privateRun.manifest?.totals?.STRK;
         const usdc = privateRun.manifest?.totals?.USDC;
@@ -692,6 +709,9 @@ export default function PayrollPage() {
           obligationSnapshotPlanId: typeof run.obligationSnapshotPlanId === "string"
             ? run.obligationSnapshotPlanId
             : null,
+          proofValidityExpiry: typeof privateRun.claimProofSource?.buildInput?.validityExpiry === "string"
+            && /^\d+$/.test(privateRun.claimProofSource.buildInput.validityExpiry)
+              ? privateRun.claimProofSource.buildInput.validityExpiry : null,
           revision: run.revision,
           recipientCount: lines.length,
           totals: { STRK: BigInt(strk), USDC: BigInt(usdc) },
