@@ -34,9 +34,14 @@ import {
   agentExecutions,
   auditEvents,
   directPrivacyAccounts,
+  capabilityReservations,
   directPrivacyAuthorizedRuns,
   directPrivacyRunMaterials,
+  directPrivacyPayrollAuthorizations,
+  directPrivacyPreparations,
+  directPrivacyReconciliations,
   payrollRuns,
+  directPrivacySubmissions,
 } from "./schema";
 
 const PREPARABLE_RUN_STATES = new Set(["draft", "calculated", "proven", "failed"]);
@@ -226,7 +231,62 @@ export async function requestAgentExecution(input: {
           runVersion: run.version,
           materialCommitment,
         });
-        await transaction.insert(directPrivacyRunMaterials).values({
+        const [existingMaterial] = await transaction.select().from(directPrivacyRunMaterials).where(and(
+          eq(directPrivacyRunMaterials.accountId, directAccount.id),
+          eq(directPrivacyRunMaterials.runId, run.id),
+          eq(directPrivacyRunMaterials.runVersion, run.version),
+        )).limit(1).for("update");
+        if (existingMaterial) {
+          const [previousExecution] = await transaction.select().from(agentExecutions).where(and(
+            eq(agentExecutions.capabilityId, input.capabilityId),
+            eq(agentExecutions.runId, run.id),
+            eq(agentExecutions.runVersion, run.version),
+            eq(agentExecutions.requestCommitment, existingMaterial.requestCommitment),
+          )).limit(1).for("update");
+          const [previousReservation] = previousExecution
+            ? await transaction.select().from(capabilityReservations).where(
+                eq(capabilityReservations.id, previousExecution.reservationId),
+              ).limit(1).for("update")
+            : [];
+          const downstreamRows = previousExecution
+            ? await Promise.all([
+                transaction.select({ executionId: directPrivacyPayrollAuthorizations.executionId })
+                  .from(directPrivacyPayrollAuthorizations)
+                  .where(eq(directPrivacyPayrollAuthorizations.executionId, previousExecution.id)).limit(1),
+                transaction.select({ executionId: directPrivacyPreparations.executionId })
+                  .from(directPrivacyPreparations)
+                  .where(eq(directPrivacyPreparations.executionId, previousExecution.id)).limit(1),
+                transaction.select({ executionId: directPrivacySubmissions.executionId })
+                  .from(directPrivacySubmissions)
+                  .where(eq(directPrivacySubmissions.executionId, previousExecution.id)).limit(1),
+                transaction.select({ executionId: directPrivacyReconciliations.executionId })
+                  .from(directPrivacyReconciliations)
+                  .where(eq(directPrivacyReconciliations.executionId, previousExecution.id)).limit(1),
+              ])
+            : [];
+          const safePreSigningRetry = previousExecution
+            && ["failed", "released"].includes(previousExecution.state)
+            && previousExecution.submissionCommitment === null
+            && previousExecution.transactionHash === null
+            && previousReservation
+            && ["released", "expired"].includes(previousReservation.state)
+            && downstreamRows.length === 4
+            && downstreamRows.every((rows) => rows.length === 0);
+          if (!safePreSigningRetry) {
+            throw new ApiError(
+              409,
+              "This authorized run has an earlier execution that cannot be safely replaced.",
+              "DIRECT_MATERIAL_RETRY_UNSAFE",
+            );
+          }
+          await transaction.update(directPrivacyRunMaterials).set({
+            requestCommitment,
+            materialCommitment,
+            encryptedMaterial,
+            updatedAt: now,
+          }).where(eq(directPrivacyRunMaterials.id, existingMaterial.id));
+        }
+        if (!existingMaterial) await transaction.insert(directPrivacyRunMaterials).values({
           id: materialId,
           accountId: directAccount.id,
           organizationId,
@@ -243,8 +303,8 @@ export async function requestAgentExecution(input: {
           id: generateUuidV7(now.getTime() + 2),
           organizationId,
           actorId: input.principal.principalId,
-          action: "direct_privacy_run.bound",
-          subjectId: materialId,
+          action: existingMaterial ? "direct_privacy_run.rebound" : "direct_privacy_run.bound",
+          subjectId: existingMaterial?.id ?? materialId,
           metadata: {
             accountId: directAccount.id,
             capabilityId: input.capabilityId,

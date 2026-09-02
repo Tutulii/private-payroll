@@ -36,6 +36,8 @@ import {
 import { getDatabase } from "./db";
 import {
   agentCapabilities,
+  agentExecutions,
+  capabilityReservations,
   directPrivacyAccounts,
   directPrivacyAuthorizedRuns,
   directPrivacyRunMaterials,
@@ -521,6 +523,95 @@ export function registerDirectPrivacyRepositoryIntegrationTests(): void {
       state: nextState,
       now,
     })).rejects.toThrow("DIRECT_STATE_VERSION_CONFLICT");
+  });
+
+  it("rebinds one authorized run only after an earlier reservation fails before preparation", async () => {
+    const input = await fixture();
+    await stageDirectPrivacyRunWitness({
+      accountId: input.account.id,
+      encryptedWitness: input.material.encryptedWitness,
+      principal,
+      now,
+    });
+    const first = await requestAgentExecution({
+      capabilityId: input.capability.id,
+      idempotencyKey: `direct-expired:first:${input.runId}`,
+      request: input.request,
+      principal,
+      now,
+    });
+    const retryAt = new Date(now.getTime() + 10 * 60_000 + 1);
+    await expect(leaseAgentExecutions("direct-expired-worker", 1, retryAt)).resolves.toEqual([]);
+    expect((await getDatabase().select().from(agentExecutions))[0]).toMatchObject({
+      id: first.executionId,
+      state: "failed",
+      errorCode: "RESERVATION_INACTIVE",
+      submissionCommitment: null,
+      transactionHash: null,
+    });
+    expect((await getDatabase().select().from(capabilityReservations))[0].state).toBe("released");
+
+    const retryRequest: AgentExecutionRequest = {
+      ...input.request,
+      intents: input.request.intents.map((intent, index) => ({
+        ...intent,
+        intentId: `${intent.intentId}:retry:${index}`,
+        createdAt: retryAt.toISOString(),
+        validUntil: new Date(retryAt.getTime() + 5 * 60_000).toISOString(),
+      })),
+    };
+    const retry = await requestAgentExecution({
+      capabilityId: input.capability.id,
+      idempotencyKey: `direct-expired:retry:${input.runId}`,
+      request: retryRequest,
+      principal,
+      now: retryAt,
+    });
+    expect(retry).toMatchObject({ state: "reserved", replayed: false });
+    const materials = await getDatabase().select().from(directPrivacyRunMaterials);
+    expect(materials).toHaveLength(1);
+    expect(materials[0].requestCommitment).toBe(commitAgentExecutionRequest(retryRequest));
+    const [retryJob] = await leaseAgentExecutions("direct-retry-worker", 1, retryAt);
+    expect(retryJob.id).toBe(retry.executionId);
+    const context = await leaseDirectPrivacyExecutionContext(retryJob, retryAt);
+    expect(context.material.authoritativeRequest).toEqual(retryRequest);
+  });
+
+  it("refuses to replace material while an earlier execution may still progress", async () => {
+    const input = await fixture();
+    await stageDirectPrivacyRunWitness({
+      accountId: input.account.id,
+      encryptedWitness: input.material.encryptedWitness,
+      principal,
+      now,
+    });
+    await requestAgentExecution({
+      capabilityId: input.capability.id,
+      idempotencyKey: `direct-live:first:${input.runId}`,
+      request: input.request,
+      principal,
+      now,
+    });
+    const retryAt = new Date(now.getTime() + 60_000);
+    const retryRequest: AgentExecutionRequest = {
+      ...input.request,
+      intents: input.request.intents.map((intent, index) => ({
+        ...intent,
+        intentId: `${intent.intentId}:unsafe:${index}`,
+        createdAt: retryAt.toISOString(),
+        validUntil: new Date(retryAt.getTime() + 5 * 60_000).toISOString(),
+      })),
+    };
+    await expect(requestAgentExecution({
+      capabilityId: input.capability.id,
+      idempotencyKey: `direct-live:retry:${input.runId}`,
+      request: retryRequest,
+      principal,
+      now: retryAt,
+    })).rejects.toMatchObject({ code: "DIRECT_MATERIAL_RETRY_UNSAFE" });
+    expect(await getDatabase().select().from(agentExecutions)).toHaveLength(1);
+    expect((await getDatabase().select().from(directPrivacyRunMaterials))[0].requestCommitment)
+      .toBe(commitAgentExecutionRequest(input.request));
   });
 
   it("rejects a staged witness with substituted authoritative roots", async () => {
