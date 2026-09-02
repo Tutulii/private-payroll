@@ -18,6 +18,7 @@ describe("payrollRecoveryMode", () => {
     ["recording", null],
     ["wallet", "wallet"],
     ["wallet", "confirming"],
+    ["wallet_recovery", "wallet"],
   ] as const)("keeps recovery controls hidden during %s/%s", (executionStage, walletStage) => {
     expect(payrollRecoveryMode({
       hasPendingSubmission: true,

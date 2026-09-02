@@ -52,7 +52,9 @@ export function payrollRecoveryMode(input: {
   if (input.hasTransactionHash) return "recording_required";
 
   if (
-    (input.executionStage === "recording" || input.executionStage === "wallet")
+    (input.executionStage === "recording"
+      || input.executionStage === "wallet"
+      || input.executionStage === "wallet_recovery")
     && (input.walletStage === null
       || input.walletStage === "wallet"
       || input.walletStage === "confirming")

@@ -187,6 +187,7 @@ const exceptionStageLabel: Record<PayrollExecutionStage, string> = {
   persisting: "Encrypting the proof records",
   agent_policy: "Activating bounded agent policy",
   wallet: "Approve the claim in Ready",
+  wallet_recovery: "Waiting for Ready / Mainnet",
   recording: "Recording the submission",
   recorded: "Payment recorded; proof delivery pending",
   queued: "On-chain verification queued",

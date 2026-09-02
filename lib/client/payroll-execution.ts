@@ -101,6 +101,7 @@ export type PayrollExecutionStage =
   | "persisting"
   | "agent_policy"
   | "wallet"
+  | "wallet_recovery"
   | "recording"
   | "recorded"
   | "queued";
@@ -392,6 +393,10 @@ export type ExecuteProofBoundPayrollInput = {
     capabilityId: string;
     executionId: string;
   };
+  onRecoveredTransactionHash?: (transactionHash: string) => void | Promise<void>;
+  walletRecoveryPollIntervalMs?: number;
+  walletRecoveryTimeoutMs?: number;
+  walletRecoveryNoticeDelayMs?: number;
   now?: () => Date;
 };
 
@@ -1455,6 +1460,11 @@ export async function executeProofBoundPayroll(
   const transactionHash = await awaitWalletOrRecoveredTransaction({
     submit: () => input.submitPayroll(walletRecipients, payoAction),
     readRecoveredTransactionHash: () => readRecoveredSettlementTransactionHash(input.client, settlementId),
+    onRecoveryPolling: () => input.onStage?.("wallet_recovery"),
+    onRecoveredTransactionHash: input.onRecoveredTransactionHash,
+    pollIntervalMs: input.walletRecoveryPollIntervalMs,
+    timeoutMs: input.walletRecoveryTimeoutMs,
+    recoveryNoticeDelayMs: input.walletRecoveryNoticeDelayMs,
   });
   if (!/^0x[0-9a-fA-F]{1,64}$/.test(transactionHash)) {
     throw new PayrollSubmissionPersistenceError(

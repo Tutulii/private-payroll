@@ -228,6 +228,9 @@ export default function PayrollPage() {
   );
   const payrollBusy = payrollStage !== null && payrollStage !== "queued";
   const walletTransactionBusy = starknet.transaction?.stage === "wallet" || starknet.transaction?.stage === "confirming";
+  const privateWalletRecoveryPending = payrollStage === "wallet_recovery"
+    && starknet.transaction?.kind === "payroll"
+    && starknet.transaction.stage === "wallet";
   const registryTransactionBusy = starknet.transaction?.kind === "registry" && walletTransactionBusy;
   const busy = payrollBusy || obligationAuthorizationActionPending || snapshotActionStage !== null || walletTransactionBusy;
   const privacyChecking = starknet.privacyCapability === "checking";
@@ -1205,6 +1208,7 @@ export default function PayrollPage() {
           },
         } : {}),
         submitPayroll: starknet.runProofBoundPayroll,
+        onRecoveredTransactionHash: reconcilePayrollTransaction,
         persistPendingSubmission,
       });
       setPayrollReceipt(result);
@@ -1429,6 +1433,7 @@ export default function PayrollPage() {
     persisting: "Encrypting payroll records",
     agent_policy: "Activating bounded agent policy",
     wallet: "Approve in Ready",
+    wallet_recovery: "Waiting for Ready / Mainnet",
     recording: "Recording submission",
     recorded: "Payment recorded",
     queued: "Verification queued",
@@ -2045,14 +2050,14 @@ export default function PayrollPage() {
             {payrollStage && !formError && (
               <div className={`transaction-receipt transaction-receipt--${payrollStage === "queued" || payrollStage === "recorded" ? "confirmed" : "confirming"}`}>
                 <span className="transaction-receipt-icon">{payrollStage === "queued" || payrollStage === "recorded" ? <CheckCircle2 size={20} /> : <LoaderCircle className="spin" size={19} />}</span>
-                <span><small>PAYROLLINTEGRITY · TWO SHARDS{selfHostedProverUrl ? " · SELF-HOSTED PROVER" : ""}</small><strong>{payrollStageLabel[payrollStage]}</strong><p>{payrollStage === "queued" ? "The settlement is durable; the relayer will verify both proof shards after finality." : payrollStage === "recorded" ? "The wallet payment and settlement record are complete; proof delivery is handled separately and will never request the payment again." : selfHostedProverUrl ? "The encrypted request is opened only in your authenticated self-hosted prover's volatile memory; no wallet key is shared." : "Salary inputs stay encrypted while PAYO prepares the proof-bound settlement."}</p></span>
+                <span><small>PAYROLLINTEGRITY · TWO SHARDS{selfHostedProverUrl ? " · SELF-HOSTED PROVER" : ""}</small><strong>{payrollStageLabel[payrollStage]}</strong><p>{payrollStage === "queued" ? "The settlement is durable; the relayer will verify both proof shards after finality." : payrollStage === "recorded" ? "The wallet payment and settlement record are complete; proof delivery is handled separately and will never request the payment again." : payrollStage === "wallet_recovery" ? "Ready has not returned the submitted hash yet. PAYO is matching the canonical private-settlement event automatically; do not approve or pay again." : selfHostedProverUrl ? "The encrypted request is opened only in your authenticated self-hosted prover's volatile memory; no wallet key is shared." : "Salary inputs stay encrypted while PAYO prepares the proof-bound settlement."}</p></span>
                 {payrollReceipt && <a href={`${STARKNET_MAINNET_EXPLORER}/tx/${payrollReceipt.transactionHash}`} target="_blank" rel="noreferrer">View receipt <ExternalLink size={13} /></a>}
               </div>
             )}
             {starknet.transaction && (
               <div className={`transaction-receipt transaction-receipt--${starknet.transaction.stage}`}>
                 <span className="transaction-receipt-icon">{starknet.transaction.stage === "confirmed" ? <CheckCircle2 size={20} /> : starknet.transaction.stage === "failed" ? <X size={19} /> : <LoaderCircle className="spin" size={19} />}</span>
-                <span><small>{starknet.transaction.stage === "wallet" ? starknet.transaction.kind === "registry" ? "READY IS REQUESTING ADMIN APPROVAL" : "READY IS PREPARING THE PROOF" : starknet.transaction.stage === "confirming" ? "SUBMITTED TO MAINNET" : starknet.transaction.stage === "confirmed" ? "TRANSACTION CONFIRMED" : "TRANSACTION NEEDS ATTENTION"}</small><strong>{starknet.transaction.label}</strong>{starknet.transaction.kind === "shield" && starknet.transaction.grossAmount !== undefined && starknet.transaction.walletFee !== undefined && starknet.transaction.token && <p>{`${starknet.transaction.feeQuoteExact ? "" : "Pre-approval estimate · "}${formatTokenAmount(starknet.transaction.grossAmount, starknet.transaction.token)} ${starknet.transaction.token} total − ${formatTokenAmount(starknet.transaction.walletFee, starknet.transaction.feeToken ?? starknet.transaction.token)} ${starknet.transaction.feeToken ?? starknet.transaction.token} private fee = ${formatTokenAmount(starknet.transaction.netAmount ?? null, starknet.transaction.token)} ${starknet.transaction.token} shielded.`}</p>}{starknet.transaction.kind === "payroll" && starknet.transaction.totals && starknet.transaction.feeReserves && <p>{(["STRK", "USDC"] as PayrollTokenSymbol[]).filter((token) => (starknet.transaction?.totals?.[token] ?? 0n) > 0n).map((token) => `${formatTokenAmount(starknet.transaction?.totals?.[token] ?? null, token)} ${token} payroll + up to ${formatTokenAmount(starknet.transaction?.feeReserves?.[token] ?? null, token)} ${token} fee eligibility reserve`).join(" · ")}. Ready charges exactly one selected fee token for the whole atomic payroll, never both.</p>}{starknet.transaction.stage === "wallet" && <p>PAYO sent one request. Rejecting it leaves a durable approval that can be safely cancelled after Ready closes.</p>}{starknet.transaction.error && <p>{starknet.transaction.error}</p>}</span>
+                <span><small>{privateWalletRecoveryPending ? "WAITING FOR READY / MAINNET" : starknet.transaction.stage === "wallet" ? starknet.transaction.kind === "registry" ? "READY IS REQUESTING ADMIN APPROVAL" : "READY IS PREPARING THE PROOF" : starknet.transaction.stage === "confirming" ? "SUBMITTED TO MAINNET" : starknet.transaction.stage === "confirmed" ? "TRANSACTION CONFIRMED" : "TRANSACTION NEEDS ATTENTION"}</small><strong>{starknet.transaction.label}</strong>{starknet.transaction.kind === "shield" && starknet.transaction.grossAmount !== undefined && starknet.transaction.walletFee !== undefined && starknet.transaction.token && <p>{`${starknet.transaction.feeQuoteExact ? "" : "Pre-approval estimate · "}${formatTokenAmount(starknet.transaction.grossAmount, starknet.transaction.token)} ${starknet.transaction.token} total − ${formatTokenAmount(starknet.transaction.walletFee, starknet.transaction.feeToken ?? starknet.transaction.token)} ${starknet.transaction.feeToken ?? starknet.transaction.token} private fee = ${formatTokenAmount(starknet.transaction.netAmount ?? null, starknet.transaction.token)} ${starknet.transaction.token} shielded.`}</p>}{starknet.transaction.kind === "payroll" && starknet.transaction.totals && starknet.transaction.feeReserves && <p>{(["STRK", "USDC"] as PayrollTokenSymbol[]).filter((token) => (starknet.transaction?.totals?.[token] ?? 0n) > 0n).map((token) => `${formatTokenAmount(starknet.transaction?.totals?.[token] ?? null, token)} ${token} payroll + up to ${formatTokenAmount(starknet.transaction?.feeReserves?.[token] ?? null, token)} ${token} fee eligibility reserve`).join(" · ")}. Ready charges exactly one selected fee token for the whole atomic payroll, never both.</p>}{starknet.transaction.stage === "wallet" && <p>{privateWalletRecoveryPending ? "PAYO is checking the durable settlement and canonical Seal event. This cannot open a duplicate Ready request." : "PAYO sent one request. Rejecting it leaves a durable approval that can be safely cancelled after Ready closes."}</p>}{starknet.transaction.error && <p>{starknet.transaction.error}</p>}</span>
                 {starknet.transaction.hash && <a href={`${STARKNET_MAINNET_EXPLORER}/tx/${starknet.transaction.hash}`} target="_blank" rel="noreferrer">View receipt <ExternalLink size={13} /></a>}
               </div>
             )}

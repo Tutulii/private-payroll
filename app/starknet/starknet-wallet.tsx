@@ -863,6 +863,12 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
       setTransaction(pending);
       try {
         const result = await walletAccount.strk20InvokeTransaction(actions);
+        // Canonical settlement recovery can complete while Ready's Wallet API
+        // promise is still open. A late wallet response must not regress that
+        // confirmed state—or overwrite a newer private request.
+        if (privateActionLockRef.current !== requestToken) {
+          return result.transaction_hash;
+        }
         const confirming: PrivateTransaction = {
           ...pending,
           stage: "confirming",
@@ -872,6 +878,12 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
         void confirmTransaction(result.transaction_hash, confirming, requestToken);
         return result.transaction_hash;
       } catch (transactionError) {
+        if (privateActionLockRef.current !== requestToken) {
+          // The canonical indexer already reconciled this request (or a newer
+          // request owns the lock). Preserve its UI state and let the settled
+          // recovery race consume this late rejection.
+          throw transactionError;
+        }
         if (privateActionLockRef.current === requestToken) {
           privateActionLockRef.current = null;
           privateActionKindRef.current = null;

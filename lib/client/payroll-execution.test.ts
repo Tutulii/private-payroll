@@ -215,6 +215,7 @@ function client(ready = true) {
     } })),
     cancelAgentExecutionApproval: vi.fn().mockResolvedValue({ execution: {} }),
     cancelSettlementApproval: vi.fn().mockResolvedValue({ settlement: {} }),
+    getSettlement: vi.fn().mockResolvedValue({ settlement: { transactionHash: null } }),
     recordSettlementSubmission: vi.fn().mockResolvedValue({ settlement: {} }),
     enqueueProofVerification: vi.fn().mockResolvedValue({ proofVerification: {} }),
     enqueuePayrollAuthorization: vi.fn().mockImplementation(({ runId }: { runId: string }) =>
@@ -497,6 +498,37 @@ describe("proof-bound payroll browser orchestration", () => {
     expect(input.persistPendingSubmission).toHaveBeenNthCalledWith(2, expect.objectContaining({ transactionHash: "0xfeed" }));
     expect(input.persistPendingSubmission).toHaveBeenLastCalledWith(null);
     expect(result).toMatchObject({ settlementId: createdSettlementId, transactionHash: "0xfeed", verificationQueued: true });
+  });
+
+  it("finishes the browser flow from canonical settlement evidence when Ready never returns its hash", async () => {
+    const mockClient = client();
+    const input = await executionInput(mockClient);
+    const onStage = vi.fn();
+    const onRecoveredTransactionHash = vi.fn();
+    input.submitPayroll.mockImplementation(() => new Promise<string>(() => undefined));
+    mockClient.getSettlement
+      .mockResolvedValueOnce({ settlement: { transactionHash: null } })
+      .mockResolvedValue({ settlement: { transactionHash: "0xfeed" } });
+
+    const result = await executeProofBoundPayroll({
+      ...input,
+      onStage,
+      onRecoveredTransactionHash,
+      walletRecoveryPollIntervalMs: 1,
+      walletRecoveryTimeoutMs: 100,
+      walletRecoveryNoticeDelayMs: 0,
+    });
+
+    expect(input.submitPayroll).toHaveBeenCalledTimes(1);
+    expect(onStage).toHaveBeenCalledWith("wallet_recovery");
+    expect(onRecoveredTransactionHash).toHaveBeenCalledOnce();
+    expect(onRecoveredTransactionHash).toHaveBeenCalledWith("0xfeed");
+    expect(onRecoveredTransactionHash.mock.invocationCallOrder[0]).toBeLessThan(
+      mockClient.recordSettlementSubmission.mock.invocationCallOrder[0],
+    );
+    expect(mockClient.recordSettlementSubmission).toHaveBeenCalledWith(result.settlementId, "0xfeed");
+    expect(input.persistPendingSubmission).toHaveBeenLastCalledWith(null);
+    expect(result.transactionHash).toBe("0xfeed");
   });
 
   it("never opens the wallet when an on-chain binding is inactive", async () => {
