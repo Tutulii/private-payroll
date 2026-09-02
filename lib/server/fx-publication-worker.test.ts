@@ -78,12 +78,14 @@ function dependencies(input: {
 
 describe("durable FX publication worker", () => {
   it("verifies and submits an unpublished root without holding a browser request", async () => {
-    const { deps, recordSubmission } = dependencies({});
+    const { deps, verify, recordSubmission } = dependencies({});
     const submit = vi.fn().mockResolvedValue({ transactionHash: "0xabc" });
+    const additionalDeployments = [{ chainId: "0x1", sealAddress: "0x789" }];
     await expect(processFxPublicationBatch({
       rpc: rpc(),
       submitter: { submit },
       deployment,
+      additionalDeployments,
       policyRegistryAddress,
       workerId: "worker-1",
       now,
@@ -97,6 +99,7 @@ describe("durable FX publication worker", () => {
       call: expect.objectContaining({ entrypoint: "publish_fx_root" }),
     }));
     expect(recordSubmission).toHaveBeenCalledWith(expect.anything(), "0xabc", now);
+    expect(verify).toHaveBeenCalledWith(expect.objectContaining({ additionalDeployments }));
   });
 
   it("completes idempotently when the root is already active", async () => {

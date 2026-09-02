@@ -46,6 +46,32 @@ describe("FX root proof authorization", () => {
     expect(result).toMatchObject({ blockNumber: 10, blockTimestamp: 1_000, verifierAddress: verifier });
   });
 
+  it("accepts an agent-seal proof only when that deployment is server-allowlisted", async () => {
+    const agentSeal = "0x654";
+    const callContract = vi.fn(async (call: Call) => {
+      if (call.entrypoint === "is_verifier_valid") return ["0x1"];
+      if (call.entrypoint === "get_verifier") return [verifier];
+      if (call.entrypoint === "verify_payroll_integrity_shard") {
+        const shard = (call.calldata as string[] | undefined)?.at(-1) === "0xb" ? 1 : 0;
+        return verifierResult(shard, { 1: BigInt(agentSeal) });
+      }
+      throw new Error("unexpected call");
+    });
+    const request = {
+      rpc: { getBlockNumber: async () => 10, getBlockTimestamp: async () => 1_000, callContract },
+      deployment: { chainId, sealAddress: seal },
+      policyRegistryAddress: "0xabc",
+      catalogRoot: root,
+      proofVersion: 2 as const,
+      shards: [["0xa"], ["0xb"]] as const,
+    };
+    await expect(verifyFxPublicationProof(request)).rejects.toThrow("not bound");
+    await expect(verifyFxPublicationProof({
+      ...request,
+      additionalDeployments: [{ chainId, sealAddress: agentSeal }],
+    })).resolves.toMatchObject({ blockNumber: 10, verifierAddress: verifier });
+  });
+
   it("rejects a valid-looking proof response bound to another FX root", async () => {
     const callContract = vi.fn(async (call: Call) => {
       if (call.entrypoint === "is_verifier_valid") return ["0x1"];

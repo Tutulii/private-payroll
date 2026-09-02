@@ -108,6 +108,7 @@ export async function assertFxRootNotRevoked(input: {
 export async function verifyFxPublicationProof(input: {
   rpc: FxPublicationRpc;
   deployment: PayoDeploymentConfig;
+  additionalDeployments?: readonly PayoDeploymentConfig[];
   policyRegistryAddress: string;
   catalogRoot: string;
   proofVersion: 1 | 2;
@@ -153,9 +154,12 @@ export async function verifyFxPublicationProof(input: {
   if (results[0][16] !== 0n || results[1][16] !== 1n) {
     throw new Error("The payroll proof shards are missing or reordered.");
   }
+  const authorizedDeployment = [input.deployment, ...(input.additionalDeployments ?? [])]
+    .some((deployment) =>
+      results[0][0] === BigInt(deployment.chainId)
+      && results[0][1] === BigInt(deployment.sealAddress));
   if (
-    results[0][0] !== BigInt(input.deployment.chainId)
-    || results[0][1] !== BigInt(input.deployment.sealAddress)
+    !authorizedDeployment
     || results[0][2] !== BigInt(input.proofVersion)
     || results[0][3] !== 1n
     || BigInt(rootFromLimbs(results[0][10], results[0][11])) !== BigInt(input.catalogRoot)

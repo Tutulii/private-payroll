@@ -80,3 +80,47 @@ export function getPayoDeploymentConfig(): PayoDeploymentConfig {
   }
   return { chainId, sealAddress: canonicalPrivate };
 }
+
+/**
+ * Payroll FX roots are shared by the Ready-approved and bounded-agent paths,
+ * but each path is deliberately bound to its own Payroll Seal. Return only
+ * server/browser-attested deployments so the FX publisher can accept either
+ * proof without accepting a caller-selected seal.
+ */
+export function getPayoFxProofDeployments(): readonly PayoDeploymentConfig[] {
+  const primary = getPayoDeploymentConfig();
+  const privateAgentSeal = process.env.PAYO_AGENT_SEAL_ADDRESS?.trim();
+  const publicAgentSeal = process.env.NEXT_PUBLIC_PAYO_AGENT_SEAL_ADDRESS?.trim();
+  if (!privateAgentSeal && !publicAgentSeal) return [primary];
+  if (!privateAgentSeal || !publicAgentSeal) {
+    throw new ApiError(
+      503,
+      "The autonomous PAYO seal server and browser configuration is incomplete.",
+      "PAYO_AGENT_SEAL_CONFIG_INCOMPLETE",
+    );
+  }
+  let canonicalPrivateAgent: string;
+  let canonicalPublicAgent: string;
+  try {
+    canonicalPrivateAgent = validateAndParseAddress(privateAgentSeal);
+    canonicalPublicAgent = validateAndParseAddress(publicAgentSeal);
+  } catch {
+    throw new ApiError(
+      503,
+      "The configured autonomous PAYO seal address is invalid.",
+      "PAYO_AGENT_SEAL_CONFIG_INVALID",
+    );
+  }
+  if (BigInt(canonicalPrivateAgent) !== BigInt(canonicalPublicAgent)) {
+    throw new ApiError(
+      503,
+      "Server and browser autonomous PAYO seal addresses do not match.",
+      "PAYO_AGENT_SEAL_CONFIG_MISMATCH",
+    );
+  }
+  if (BigInt(canonicalPrivateAgent) === BigInt(primary.sealAddress)) return [primary];
+  return [
+    primary,
+    { chainId: primary.chainId, sealAddress: canonicalPrivateAgent },
+  ];
+}

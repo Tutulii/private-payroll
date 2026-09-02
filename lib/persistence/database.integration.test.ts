@@ -1,6 +1,6 @@
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { readFileSync } from "node:fs";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   decryptVaultRecord,
@@ -120,6 +120,7 @@ import {
   enqueueFxPublication,
   enqueueHistoricalFxRenewal,
   getHistoricalFxRenewalEvidence,
+  leaseFxPublicationJobs,
 } from "./fx-publication-repository";
 import {
   enqueueProofVerification,
@@ -3309,6 +3310,61 @@ databaseSuite("PostgreSQL durability integration", () => {
     expect((await getDatabase().select().from(payrollRuns))[0].state).toBe("reconciled");
     expect((await getDatabase().select().from(proofBundles)).map(({ verificationState }) => verificationState))
       .toEqual(["onchain_verified", "onchain_verified"]);
+  }, 30_000);
+
+  it("requeues a proof-invalid FX publication with fresh authenticated proof evidence", async () => {
+    const organizationId = await seedOrganization();
+    const fxRoot = `0x${"70".repeat(32)}`;
+    const originalShards = [
+      Array.from({ length: 35 }, (_, index) => `0x${(index + 1).toString(16)}`),
+      Array.from({ length: 35 }, (_, index) => `0x${(index + 36).toString(16)}`),
+    ] as const;
+    const original = await enqueueFxPublication({
+      organizationId,
+      catalogRoot: fxRoot,
+      proofVersion: 2,
+      shards: originalShards,
+      observedAt: 1_000,
+      maximumAgeSeconds: 3_600,
+      principal: admin,
+    });
+    await getDatabase().update(fxPublicationJobs).set({
+      state: "dead",
+      attempts: 1,
+      lastErrorCode: "FX_PUBLICATION_PROOF_INVALID",
+      lastErrorMessage: "The proof used the previously unsupported agent seal.",
+    }).where(eq(fxPublicationJobs.id, original.id));
+
+    const recovered = await enqueueFxPublication({
+      organizationId,
+      catalogRoot: fxRoot,
+      proofVersion: 2,
+      shards: [
+        Array.from({ length: 35 }, (_, index) => `0x${(index + 101).toString(16)}`),
+        Array.from({ length: 35 }, (_, index) => `0x${(index + 136).toString(16)}`),
+      ],
+      observedAt: 1_100,
+      maximumAgeSeconds: 3_600,
+      principal: admin,
+    });
+    expect(recovered).toMatchObject({
+      id: original.id,
+      state: "pending",
+      attempts: 1,
+      observedAt: 1_100,
+      replayed: false,
+      recovered: true,
+      lastErrorCode: null,
+      lastErrorMessage: null,
+    });
+    const [leased] = await leaseFxPublicationJobs("recovered-fx-worker", 1, new Date());
+    expect(leased).toMatchObject({
+      id: original.id,
+      shards: [
+        expect.arrayContaining(["0x65"]),
+        expect.arrayContaining(["0x88"]),
+      ],
+    });
   }, 30_000);
 
   it("serializes concurrent capability reservations so period limits cannot race", async () => {

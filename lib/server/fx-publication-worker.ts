@@ -76,6 +76,7 @@ async function processLeasedJob(input: {
   rpc: FxPublicationWorkerRpc;
   submitter: FxPublicationSubmitter;
   deployment: PayoDeploymentConfig;
+  additionalDeployments?: readonly PayoDeploymentConfig[];
   policyRegistryAddress: string;
   now: Date;
   dependencies: FxPublicationWorkerDependencies;
@@ -172,6 +173,7 @@ async function processLeasedJob(input: {
     verified = await dependencies.verify({
       rpc: input.rpc,
       deployment: input.deployment,
+      additionalDeployments: input.additionalDeployments,
       policyRegistryAddress: input.policyRegistryAddress,
       catalogRoot: job.catalogRoot,
       proofVersion: job.proofVersion,
@@ -221,6 +223,7 @@ export async function processFxPublicationBatch(input: {
   rpc: FxPublicationWorkerRpc;
   submitter: FxPublicationSubmitter;
   deployment: PayoDeploymentConfig;
+  additionalDeployments?: readonly PayoDeploymentConfig[];
   policyRegistryAddress: string;
   workerId: string;
   limit?: number;
@@ -237,6 +240,7 @@ export async function processFxPublicationBatch(input: {
       rpc: input.rpc,
       submitter: input.submitter,
       deployment: input.deployment,
+      additionalDeployments: input.additionalDeployments,
       policyRegistryAddress: input.policyRegistryAddress,
       now,
       dependencies,

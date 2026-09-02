@@ -96,6 +96,49 @@ export async function enqueueFxPublication(input: {
       .limit(1)
       .for("update");
     if (existing) {
+      const recoverableDeadJob = existing.state === "dead"
+        && existing.transactionHash === null
+        && ["FX_PUBLICATION_PROOF_INVALID", "FX_PUBLICATION_WINDOW_EXPIRED"]
+          .includes(existing.lastErrorCode ?? "");
+      if (recoverableDeadJob) {
+        const now = new Date();
+        const [requeued] = await transaction
+          .update(fxPublicationJobs)
+          .set({
+            principalId: input.principal.principalId,
+            proofVersion: input.proofVersion,
+            proofDigest,
+            shard0Calldata: shards[0],
+            shard1Calldata: shards[1],
+            observedAt: input.observedAt,
+            maximumAgeSeconds: input.maximumAgeSeconds,
+            historicalRenewal: false,
+            renewalRunId: null,
+            state: "pending",
+            availableAt: now,
+            leaseOwner: null,
+            leaseExpiresAt: null,
+            lastErrorCode: null,
+            lastErrorMessage: null,
+            updatedAt: now,
+          })
+          .where(eq(fxPublicationJobs.id, existing.id))
+          .returning();
+        await transaction.insert(auditEvents).values({
+          id: generateUuidV7(),
+          organizationId: input.organizationId,
+          actorId: input.principal.principalId,
+          action: "fx_publication.requeued",
+          subjectId: existing.id,
+          metadata: {
+            catalogRoot,
+            proofVersion: input.proofVersion,
+            proofDigest,
+            previousErrorCode: existing.lastErrorCode,
+          },
+        });
+        return { ...publicJob(requeued), replayed: false, recovered: true };
+      }
       if (existing.proofDigest !== proofDigest
         || existing.observedAt !== input.observedAt
         || existing.maximumAgeSeconds !== input.maximumAgeSeconds) {

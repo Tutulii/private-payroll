@@ -1,7 +1,7 @@
 import { Account, RpcProvider, validateAndParseAddress } from "starknet";
 import { withStarknetRelayerSubmissionLock } from "@/lib/persistence/relayer-lock";
 import { authorizeInternalWorker } from "@/lib/server/internal-auth";
-import { getPayoDeploymentConfig, getPayoRegistryConfig } from "@/lib/server/payo-deployment";
+import { getPayoFxProofDeployments, getPayoRegistryConfig } from "@/lib/server/payo-deployment";
 import { isFxRootActive } from "@/lib/server/fx-root-publisher";
 import { processFxPublicationBatch } from "@/lib/server/fx-publication-worker";
 
@@ -62,7 +62,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const deployment = getPayoDeploymentConfig();
+    const [deployment, ...additionalDeployments] = getPayoFxProofDeployments();
     const registries = getPayoRegistryConfig();
     const relayerAddress = validateAndParseAddress(relayerAddressRaw);
     const provider = new RpcProvider({ nodeUrl: rpcUrl });
@@ -90,6 +90,7 @@ export async function POST(request: Request) {
     const result = await processFxPublicationBatch({
       rpc,
       deployment,
+      additionalDeployments,
       policyRegistryAddress: registries.policyRegistryAddress,
       workerId: request.headers.get("x-payo-worker-id") || "payo-fx-publisher",
       limit: 1,
