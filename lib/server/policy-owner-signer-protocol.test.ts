@@ -103,6 +103,28 @@ describe("isolated policy-owner signer protocol", () => {
     });
   });
 
+  it("accepts bounded channel setup only when coupled to an encrypted payroll note", () => {
+    const request = proofRequest();
+    request.calls[0].calldata = [
+      constraints.policyAccountAddress,
+      viewingKey,
+      "0x3",
+      // OpenChannel(recipient, index, random, salt)
+      "0x1", "0x777", "0x0", "0x111", "0x222",
+      // OpenSubchannel(recipient, public key, channel key, index, token, salt)
+      "0x2", "0x777", "0x888", "0x999", "0x0", "0xabc", "0x333",
+      // CreateEncNote(recipient, public key, token, amount, note index, salt)
+      "0x3", "0x777", "0x888", "0xabc", "0x64", "0x0", "0x444",
+    ];
+    expect(() => assertRestrictedProofSigningRequest(request, constraints)).not.toThrow();
+
+    const setupOnly = structuredClone(request);
+    setupOnly.calls[0].calldata = setupOnly.calls[0].calldata.slice(0, -7);
+    setupOnly.calls[0].calldata[2] = "0x2";
+    expect(() => assertRestrictedProofSigningRequest(setupOnly, constraints))
+      .toThrow("encrypted-note count");
+  });
+
   it.each([
     ["pool target", (value: ReturnType<typeof proofRequest>) => { value.calls[0].contractAddress = "0x999"; }],
     ["entrypoint", (value: ReturnType<typeof proofRequest>) => { value.calls[0].entrypoint = "apply_actions"; }],

@@ -22,7 +22,8 @@ export type DirectPrivacyReadinessFailure = {
     | "DIRECT_TREASURY_REGISTRATION_REQUIRED"
     | "DIRECT_RECIPIENT_REGISTRATION_REQUIRED"
     | "DIRECT_CHANNEL_SETUP_REQUIRED"
-    | "DIRECT_TOKEN_CHANNEL_SETUP_REQUIRED";
+    | "DIRECT_TOKEN_CHANNEL_SETUP_REQUIRED"
+    | "DIRECT_DISCOVERY_RESPONSE_INVALID";
   message: string;
 };
 
@@ -59,13 +60,16 @@ function label(value: bigint): string {
 }
 
 /**
- * Checks the exact channel/subchannel state needed by `autoSetup: false`.
- * It operates on one hash-pinned full outgoing-channel snapshot.
+ * Checks the exact registration/channel state in one hash-pinned full
+ * outgoing-channel snapshot. Callers using the bounded SDK `autoSetup` path
+ * may accept absent channels/subchannels, but malformed discovered nonce state
+ * always fails closed.
  */
 export function findDirectPrivacyReadinessFailure(input: {
   channels: AddressMapLike<DirectPrivacyDiscoveredChannel> | undefined;
   treasuryAddress: bigint;
   requirements: readonly DirectPrivacyChannelRequirement[];
+  allowSetup?: boolean;
 }): DirectPrivacyReadinessFailure | null {
   const unique = new Map<string, DirectPrivacyChannelRequirement>();
   for (const requirement of input.requirements) {
@@ -85,22 +89,29 @@ export function findDirectPrivacyReadinessFailure(input: {
       };
     }
     if (!channel.key) {
+      if (input.allowSetup) continue;
       return {
         code: "DIRECT_CHANNEL_SETUP_REQUIRED",
         message: `The private channel for ${label(requirement.recipient)} is not open at the pinned block.`,
       };
     }
     const tokenChannel = channel.tokens?.get(requirement.token);
+    if (!tokenChannel) {
+      if (input.allowSetup) continue;
+      return {
+        code: "DIRECT_TOKEN_CHANNEL_SETUP_REQUIRED",
+        message: `The token channel for ${label(requirement.recipient)} is not ready at the pinned block.`,
+      };
+    }
     if (
-      !tokenChannel
-      || !Number.isSafeInteger(tokenChannel.tokenIndex)
+      !Number.isSafeInteger(tokenChannel.tokenIndex)
       || tokenChannel.tokenIndex < 0
       || !Number.isSafeInteger(tokenChannel.noteNonce)
       || tokenChannel.noteNonce < 0
     ) {
       return {
-        code: "DIRECT_TOKEN_CHANNEL_SETUP_REQUIRED",
-        message: `The token channel for ${label(requirement.recipient)} is not ready at the pinned block.`,
+        code: "DIRECT_DISCOVERY_RESPONSE_INVALID",
+        message: `The token channel for ${label(requirement.recipient)} contains invalid nonce state.`,
       };
     }
   }

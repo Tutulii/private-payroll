@@ -342,6 +342,7 @@ export async function discoverDirectPrivacySnapshot(input: {
     channels,
     treasuryAddress: needed.treasuryAddress,
     requirements: needed.requirements,
+    allowSetup: true,
   });
   if (readiness) {
     throw new AgentExecutionDriverError(readiness.code, readiness.message);
@@ -908,10 +909,16 @@ async function prepareSdkExecution(
       }) as PrivacyTransfers;
       const invocation = await transfers.createProofInvocation(plan.actions, {
         autoRegister: false,
-        autoSetup: false,
+        // Registration remains an explicit owner-reviewed prerequisite. Missing
+        // outgoing channels/subchannels are safe to open atomically inside this
+        // same bounded payroll proof; refresh at the exact proof pin so the SDK
+        // also obtains the authoritative next-channel index when setup is needed.
+        autoSetup: true,
+        autoDiscover: { channels: "refresh" },
         autoSelectNotes: "all",
         registry: snapshot.registry,
         registryConst: true,
+        provingBlockId: pinned.hash,
       });
       const sdkResult = await transfers.executeWithInvocation(
         invocation,

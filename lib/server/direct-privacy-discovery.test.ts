@@ -231,6 +231,28 @@ describe("direct private block pin and channel readiness", () => {
     })).toBeNull();
   });
 
+  it("allows registered missing channel state for bounded atomic setup", () => {
+    const channels = new Map<bigint, DirectPrivacyDiscoveredChannel>([
+      [1n, channel({ open: false })],
+      [2n, channel({ tokens: [8n] })],
+    ]);
+    expect(findDirectPrivacyReadinessFailure({
+      channels,
+      treasuryAddress: 1n,
+      requirements: [{ recipient: 1n, token: 7n }, { recipient: 2n, token: 7n }],
+      allowSetup: true,
+    })).toBeNull();
+  });
+
+  it("does not let atomic setup bypass recipient registration", () => {
+    expect(findDirectPrivacyReadinessFailure({
+      channels: new Map([[1n, channel()]]),
+      treasuryAddress: 1n,
+      requirements: [{ recipient: 2n, token: 7n }],
+      allowSetup: true,
+    })?.code).toBe("DIRECT_RECIPIENT_REGISTRATION_REQUIRED");
+  });
+
   it.each([
     {
       title: "unregistered treasury",
@@ -267,6 +289,6 @@ describe("direct private block pin and channel readiness", () => {
       channels: new Map([[1n, channel()], [2n, malformed]]),
       treasuryAddress: 1n,
       requirements: [{ recipient: 1n, token: 7n }, { recipient: 2n, token: 7n }],
-    })?.code).toBe("DIRECT_TOKEN_CHANNEL_SETUP_REQUIRED");
+    })?.code).toBe("DIRECT_DISCOVERY_RESPONSE_INVALID");
   });
 });
