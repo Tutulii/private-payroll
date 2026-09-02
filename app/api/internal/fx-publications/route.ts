@@ -1,7 +1,7 @@
 import { Account, RpcProvider, validateAndParseAddress } from "starknet";
 import { withStarknetRelayerSubmissionLock } from "@/lib/persistence/relayer-lock";
 import { authorizeInternalWorker } from "@/lib/server/internal-auth";
-import { getPayoFxProofDeployments, getPayoRegistryConfig } from "@/lib/server/payo-deployment";
+import { getPayoPayrollProofDeployments, getPayoRegistryConfig } from "@/lib/server/payo-deployment";
 import { isFxRootActive } from "@/lib/server/fx-root-publisher";
 import { processFxPublicationBatch } from "@/lib/server/fx-publication-worker";
 
@@ -62,7 +62,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const [deployment, ...additionalDeployments] = getPayoFxProofDeployments();
+    const [deployment, ...additionalDeployments] = getPayoPayrollProofDeployments();
     const registries = getPayoRegistryConfig();
     const relayerAddress = validateAndParseAddress(relayerAddressRaw);
     const provider = new RpcProvider({ nodeUrl: rpcUrl });

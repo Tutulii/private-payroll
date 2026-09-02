@@ -82,12 +82,12 @@ export function getPayoDeploymentConfig(): PayoDeploymentConfig {
 }
 
 /**
- * Payroll FX roots are shared by the Ready-approved and bounded-agent paths,
- * but each path is deliberately bound to its own Payroll Seal. Return only
- * server/browser-attested deployments so the FX publisher can accept either
- * proof without accepting a caller-selected seal.
+ * PayrollIntegrity proofs can enter through the Ready-approved or bounded-agent
+ * path, and each path is deliberately bound to its own Payroll Seal. Return
+ * only server/browser-attested deployments so shared payroll services can
+ * accept either proof without accepting a caller-selected seal.
  */
-export function getPayoFxProofDeployments(): readonly PayoDeploymentConfig[] {
+export function getPayoPayrollProofDeployments(): readonly PayoDeploymentConfig[] {
   const primary = getPayoDeploymentConfig();
   const privateAgentSeal = process.env.PAYO_AGENT_SEAL_ADDRESS?.trim();
   const publicAgentSeal = process.env.NEXT_PUBLIC_PAYO_AGENT_SEAL_ADDRESS?.trim();

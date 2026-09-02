@@ -51,12 +51,15 @@ function combinedCommitment(highValue: string, lowValue: string, label: string):
 
 function assertPayrollDeploymentBound(
   input: EncryptedPayrollIntegrityBundleCreate,
-  deployment: PayoDeploymentConfig,
+  deployments: readonly PayoDeploymentConfig[],
 ) {
-  if (BigInt(input.commonInputs.chainId) !== BigInt(deployment.chainId)) {
+  const matchingChain = deployments.filter((deployment) =>
+    BigInt(input.commonInputs.chainId) === BigInt(deployment.chainId));
+  if (matchingChain.length === 0) {
     throw new ApiError(400, "Proof is bound to a different Starknet chain.", "PROOF_CHAIN_MISMATCH");
   }
-  if (BigInt(input.commonInputs.sealAddress) !== BigInt(deployment.sealAddress)) {
+  if (!matchingChain.some((deployment) =>
+    BigInt(input.commonInputs.sealAddress) === BigInt(deployment.sealAddress))) {
     throw new ApiError(400, "Proof is bound to a different PAYO seal.", "PROOF_SEAL_MISMATCH");
   }
 }
@@ -608,6 +611,7 @@ export async function storeEncryptedPayrollIntegrityBundle(input: {
   bundle: EncryptedPayoProofBundleCreate;
   principal: AuthenticatedPrincipal;
   deployment: PayoDeploymentConfig;
+  additionalPayrollDeployments?: readonly PayoDeploymentConfig[];
 }) {
   if ("publicInputs" in input.bundle) return storeEncryptedExceptionProofBundle({
     bundle: input.bundle,
@@ -615,7 +619,7 @@ export async function storeEncryptedPayrollIntegrityBundle(input: {
     deployment: input.deployment,
   });
   const { bundle, principal, deployment } = input;
-  assertPayrollDeploymentBound(bundle, deployment);
+  assertPayrollDeploymentBound(bundle, [deployment, ...(input.additionalPayrollDeployments ?? [])]);
   const envelope = bundle.envelope;
   if (
     envelope.aad.organizationId !== bundle.organizationId

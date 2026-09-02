@@ -15,7 +15,7 @@ import {
   type EncryptedPayrollWitness,
   type ProofWorkerSuccess,
 } from "@/lib/proof/protocol";
-import type { PayoClient } from "./payo-client";
+import { PayoApiError, type PayoClient } from "./payo-client";
 import {
   storeEncryptedAdvancedAgreement,
   storeEncryptedRecurringAgreement,
@@ -195,6 +195,9 @@ function client(ready = true) {
         checks: ready ? [] : [{ code: "agreement_root", ready: false, message: "Agreement root is inactive." }],
       },
     }),
+    getPayrollRun: vi.fn().mockRejectedValue(
+      new PayoApiError("The encrypted run payload is missing.", "RUN_VAULT_MISSING", 500),
+    ),
     createPayrollRun: vi.fn().mockResolvedValue({ run: {} }),
     transitionPayrollRun: vi.fn().mockResolvedValue({ run: {} }),
     storeEncryptedProofBundle: vi.fn().mockResolvedValue({ proofBundle: {} }),
@@ -220,6 +223,22 @@ function client(ready = true) {
       Promise.resolve({ authorization: authorization(runId) })),
     getSealedPayrollRecovery: vi.fn(),
     getEncryptedRecord: vi.fn(),
+    provisionDirectPrivacyAccount: vi.fn().mockResolvedValue({
+      account: {
+        id: generateUuidV7(now.getTime() + 40),
+        proofPrincipal: principal,
+        activationState: "active" as const,
+      },
+      configurationCall: {},
+    }),
+    stageDirectPrivacyRunWitness: vi.fn().mockResolvedValue({
+      witness: {
+        runId: generateUuidV7(now.getTime() + 41),
+        runVersion: 1,
+        witnessCommitment: `0x${"77".repeat(32)}`,
+        replayed: false,
+      },
+    }),
   };
 }
 
@@ -872,6 +891,65 @@ describe("proof-bound payroll browser orchestration", () => {
       transactionHash: "0xfeed",
       verificationQueued: true,
     });
+  });
+
+  it("resumes the exact encrypted snapshot run after proof storage failed without creating another payroll", async () => {
+    const mockClient = client();
+    const input = await snapshotExecutionInput(mockClient);
+    const authorizeFxRoot = vi.fn().mockResolvedValue(undefined);
+    mockClient.storeEncryptedProofBundle.mockRejectedValueOnce(
+      new PayoApiError("Proof is bound to a different PAYO seal.", "PROOF_SEAL_MISMATCH", 400),
+    );
+
+    await expect(executeProofBoundPayroll({
+      ...input,
+      authorizeFxRoot,
+      autonomousAgent: {
+        capabilityId: generateUuidV7(now.getTime() + 50),
+        policyAccountAddress: "0x456",
+      },
+    })).rejects.toMatchObject({ code: "PROOF_SEAL_MISMATCH" });
+
+    const persisted = mockClient.createPayrollRun.mock.calls[0][0];
+    mockClient.getPayrollRun.mockResolvedValue({
+      run: {
+        id: persisted.id,
+        organizationId: persisted.organizationId,
+        state: "calculated" as const,
+        agreementRoot: persisted.agreementRoot,
+        manifestRoot: persisted.manifestRoot,
+        policyRoot: persisted.policyRoot,
+        fxRoot: persisted.fxRoot,
+        runNullifier: persisted.runNullifier,
+        obligationSnapshotPlanId: persisted.obligationSnapshotPlanId ?? null,
+        transactionHash: null,
+        envelope: persisted.envelope,
+      },
+    });
+    mockClient.getPayrollFxCatalog.mockClear();
+    mockClient.createPayrollRun.mockClear();
+    mockClient.transitionPayrollRun.mockClear();
+
+    await expect(executeProofBoundPayroll({
+      ...input,
+      authorizeFxRoot,
+      autonomousAgent: {
+        capabilityId: generateUuidV7(now.getTime() + 50),
+        policyAccountAddress: "0x456",
+      },
+    })).resolves.toMatchObject({
+      mode: "autonomous_bounded",
+      runId: input.snapshotPlan.runId,
+      activationState: "active",
+    });
+
+    expect(mockClient.getPayrollFxCatalog).not.toHaveBeenCalled();
+    expect(authorizeFxRoot).toHaveBeenCalledTimes(1);
+    expect(mockClient.createPayrollRun).not.toHaveBeenCalled();
+    expect(mockClient.transitionPayrollRun).not.toHaveBeenCalled();
+    expect(mockClient.storeEncryptedProofBundle).toHaveBeenCalledTimes(2);
+    expect(mockClient.provisionDirectPrivacyAccount).toHaveBeenCalledOnce();
+    expect(mockClient.stageDirectPrivacyRunWitness).toHaveBeenCalledOnce();
   });
 
   it("links the exact MCP execution before opening Ready for human approval", async () => {

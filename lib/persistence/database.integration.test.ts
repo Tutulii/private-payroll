@@ -2610,10 +2610,23 @@ databaseSuite("PostgreSQL durability integration", () => {
       shardCalldataHashes,
       envelope,
     };
-    const deployment = { chainId: "0x1", sealAddress: "0x12345" };
+    const deployment = { chainId: "0x1", sealAddress: "0x999" };
+    const agentDeployment = { chainId: "0x1", sealAddress: "0x12345" };
     await expect(storeEncryptedPayrollIntegrityBundle({ bundle, deployment, principal: admin }))
+      .rejects.toMatchObject({ code: "PROOF_SEAL_MISMATCH" });
+    await expect(storeEncryptedPayrollIntegrityBundle({
+      bundle,
+      deployment,
+      additionalPayrollDeployments: [agentDeployment],
+      principal: admin,
+    }))
       .resolves.toMatchObject({ id: proofBundleId, replayed: false });
-    await expect(storeEncryptedPayrollIntegrityBundle({ bundle, deployment, principal: admin }))
+    await expect(storeEncryptedPayrollIntegrityBundle({
+      bundle,
+      deployment,
+      additionalPayrollDeployments: [agentDeployment],
+      principal: admin,
+    }))
       .resolves.toMatchObject({ id: proofBundleId, replayed: true });
 
     const [storedProof] = await getDatabase().select().from(proofBundles);

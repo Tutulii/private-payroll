@@ -38,6 +38,7 @@ import {
   randomCommitmentSalt,
   serializePayrollIntegrityBuildRequest,
   type PayrollIntegrityLineInput,
+  type SerializedPayrollIntegrityBuildRequest,
 } from "@/lib/proof/input-builder";
 import { buildObligationSnapshotLinkInputs } from "@/lib/proof/exception-input-builder";
 import { advancedPlanProofCommitment } from "@/lib/proof/advanced-plan-commitment";
@@ -414,6 +415,121 @@ function autonomousPolicyId(capabilityId: string, runId: string): `0x${string}` 
     runId,
   })) % STARK_FIELD_PRIME;
   return `0x${(digest === 0n ? 1n : digest).toString(16)}`;
+}
+
+type ResumableEncryptedPayrollRun = {
+  state: "draft" | "calculated";
+  buildInput: SerializedPayrollIntegrityBuildRequest;
+};
+
+const resumablePayrollPayloadSchema = z.object({
+  schemaVersion: z.literal(1),
+  cycleId: z.string().min(1),
+  dueAt: z.string().datetime(),
+  agreementRoot: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+  manifestRoot: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+  policyRoot: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+  fxRoot: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+  runNullifier: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+  obligationSnapshotPlanId: z.string().uuid(),
+  claimProofSource: z.object({ buildInput: z.unknown() }).strict(),
+}).passthrough();
+
+function sameField(left: string | null, right: string): boolean {
+  return left !== null && BigInt(left) === BigInt(right);
+}
+
+/**
+ * A browser can close after the FX root is authorized and the encrypted run is
+ * persisted but before its proof bundle is stored. Snapshot runs have a fixed
+ * run ID, so retrying with fresh salts would correctly fail replay checks. In
+ * that narrow, pre-payment state, reuse the authenticated encrypted build input
+ * instead. No server plaintext or caller-selected binding is trusted here.
+ */
+async function loadResumableEncryptedPayrollRun(input: {
+  client: PayoClient;
+  organizationId: string;
+  organizationSecret: string;
+  principal: VaultPrincipalKeyPair;
+  chainId: string;
+  sealAddress: string;
+  snapshotPlan: ObligationSnapshotPlanPrivate;
+  obligations: readonly PayrollExecutionObligation[];
+  nowUnix: bigint;
+}): Promise<ResumableEncryptedPayrollRun | undefined> {
+  let response: Awaited<ReturnType<PayoClient["getPayrollRun"]>>;
+  try {
+    response = await input.client.getPayrollRun(input.snapshotPlan.runId);
+  } catch (error) {
+    if (
+      error instanceof PayoApiError
+      && (error.code === "RUN_NOT_FOUND" || error.code === "RUN_VAULT_MISSING")
+    ) return undefined;
+    throw error;
+  }
+  const { run } = response;
+  if (run.state !== "draft" && run.state !== "calculated") {
+    throw new Error(
+      `This protected payroll is already ${run.state}; refresh Activity instead of generating another proof.`,
+    );
+  }
+  if (
+    run.organizationId !== input.organizationId
+    || run.id !== input.snapshotPlan.runId
+    || run.obligationSnapshotPlanId !== input.snapshotPlan.planId
+    || run.transactionHash !== null
+  ) throw new Error("The interrupted payroll does not match this protected payday.");
+
+  const payload = resumablePayrollPayloadSchema.parse(
+    decryptVaultRecord(run.envelope, input.principal),
+  );
+  const buildInput = payload.claimProofSource.buildInput as SerializedPayrollIntegrityBuildRequest;
+  const rebuilt = await buildPayrollIntegrityInputsFromSerialized(buildInput);
+  const bindingsMatch = payload.cycleId === input.snapshotPlan.cycleId
+    && new Date(payload.dueAt).getTime() === Number(input.snapshotPlan.snapshot.dueAt) * 1_000
+    && payload.obligationSnapshotPlanId === input.snapshotPlan.planId
+    && buildInput.chainId === input.chainId
+    && BigInt(buildInput.sealAddress) === BigInt(input.sealAddress)
+    && buildInput.organizationSecret === input.organizationSecret
+    && buildInput.cycleId === input.snapshotPlan.cycleId
+    && buildInput.revision === input.snapshotPlan.payrollRevision
+    && sameField(run.agreementRoot, rebuilt.agreementRoot)
+    && sameField(run.manifestRoot, rebuilt.manifestRoot)
+    && sameField(run.policyRoot, rebuilt.policyRoot)
+    && sameField(run.fxRoot, rebuilt.fxRoot)
+    && sameField(run.runNullifier, rebuilt.runNullifier)
+    && BigInt(payload.agreementRoot) === BigInt(rebuilt.agreementRoot)
+    && BigInt(payload.manifestRoot) === BigInt(rebuilt.manifestRoot)
+    && BigInt(payload.policyRoot) === BigInt(rebuilt.policyRoot)
+    && BigInt(payload.fxRoot) === BigInt(rebuilt.fxRoot)
+    && BigInt(payload.runNullifier) === BigInt(rebuilt.runNullifier)
+    && BigInt(rebuilt.agreementRoot) === BigInt(input.snapshotPlan.snapshot.baseAgreementRoot)
+    && BigInt(rebuilt.policyRoot) === BigInt(input.snapshotPlan.snapshot.policyRoot)
+    && BigInt(rebuilt.runNullifier) === BigInt(input.snapshotPlan.snapshot.runNullifier);
+  if (!bindingsMatch) {
+    throw new Error("The interrupted payroll changed an immutable snapshot or proof binding.");
+  }
+  const currentObligations = new Map(input.obligations.map(({ agreement, payee }) => [
+    agreement.agreement.id,
+    { recipientAddress: payee.recipientAddress, token: agreement.agreement.settlementToken },
+  ]));
+  const linesMatch = buildInput.lines.length === currentObligations.size
+    && buildInput.lines.every((line) => {
+      const current = currentObligations.get(line.agreementId);
+      return current
+        && BigInt(current.recipientAddress) === BigInt(line.recipientAddress)
+        && current.token === line.token;
+    });
+  if (!linesMatch) {
+    throw new Error("The selected contributors differ from the interrupted encrypted payroll.");
+  }
+  if (BigInt(buildInput.validityExpiry) - input.nowUnix < 10n * 60n) {
+    throw new Error(
+      "The interrupted proof window is too close to expiry for a safe retry. Protect a fresh payday before proving again.",
+    );
+  }
+  rebuilt.witness.circuitInputs = [{}, {}];
+  return { state: run.state, buildInput };
 }
 
 function rootFromLimbs(high: string, low: string): `0x${string}` {
@@ -841,40 +957,71 @@ export async function executeProofBoundPayroll(
       "Advanced PayrollIntegrity v2 requires an exact registered pre-payday snapshot; protect this payday before it becomes due.",
     );
   }
+  const resumableRun = snapshotPlan
+    ? await loadResumableEncryptedPayrollRun({
+        client: input.client,
+        organizationId: input.organizationId,
+        organizationSecret: input.organizationSecret,
+        principal: input.principal,
+        chainId: input.chainId,
+        sealAddress: input.sealAddress,
+        snapshotPlan,
+        obligations: input.obligations,
+        nowUnix,
+      })
+    : undefined;
   const medianOnlyTokens = usedTokens.filter((token) => !protectedTokens.includes(token));
-  const fxCatalog = await input.client.getPayrollFxCatalog({
-    organizationId: input.organizationId,
-    protectedTokens,
-    medianTokens: medianOnlyTokens,
-  });
-  const snapshots = fxCatalog.snapshots;
+  let fxCatalog: Awaited<ReturnType<PayoClient["getPayrollFxCatalog"]>> | undefined;
+  let snapshots: FxSnapshot[];
+  let lines: PayrollIntegrityLineInput[];
+  let buildInput: SerializedPayrollIntegrityBuildRequest;
+  let proofValidityStart = validityStart;
+  let proofValidityExpiry = validityExpiry;
+  if (resumableRun) {
+    buildInput = resumableRun.buildInput;
+    proofValidityStart = BigInt(buildInput.validityStart);
+    proofValidityExpiry = BigInt(buildInput.validityExpiry);
+    snapshots = buildInput.fxSnapshots;
+    lines = buildInput.lines.map((line) => ({
+      ...line,
+      dueAt: BigInt(line.dueAt),
+      validUntil: BigInt(line.validUntil),
+    }));
+  } else {
+    fxCatalog = await input.client.getPayrollFxCatalog({
+      organizationId: input.organizationId,
+      protectedTokens,
+      medianTokens: medianOnlyTokens,
+    });
+    snapshots = fxCatalog.snapshots;
+    const advancedScheduleCommitments = new Map<string, `0x${string}`>(await Promise.all(
+      input.obligations.flatMap(({ agreement }) => agreement.agreement.agreementVersion === "payo-agreement-v2"
+        ? [advancedPlanProofCommitment(agreement.agreement).then((commitment) => [agreement.agreement.id, commitment] as const)]
+        : []),
+    ));
+    lines = buildPayrollExecutionLines({
+      organizationId: input.organizationId,
+      obligations: input.obligations,
+      validityStart,
+      advancedScheduleCommitments,
+    });
+    buildInput = serializePayrollIntegrityBuildRequest({
+      chainId: input.chainId,
+      sealAddress: input.sealAddress,
+      organizationSecret: input.organizationSecret,
+      cycleId,
+      revision,
+      validityStart,
+      validityExpiry,
+      policies,
+      fxSnapshots: snapshots,
+      lines,
+    });
+  }
   const precomputedFxRoot = await buildFxCatalogRoot(snapshots);
-  if (BigInt(precomputedFxRoot) !== BigInt(fxCatalog.catalogRoot)) {
+  if (fxCatalog && BigInt(precomputedFxRoot) !== BigInt(fxCatalog.catalogRoot)) {
     throw new Error("The authenticated PAYO FX catalog root does not match its snapshots.");
   }
-  const advancedScheduleCommitments = new Map<string, `0x${string}`>(await Promise.all(
-    input.obligations.flatMap(({ agreement }) => agreement.agreement.agreementVersion === "payo-agreement-v2"
-      ? [advancedPlanProofCommitment(agreement.agreement).then((commitment) => [agreement.agreement.id, commitment] as const)]
-      : []),
-  ));
-  const lines = buildPayrollExecutionLines({
-    organizationId: input.organizationId,
-    obligations: input.obligations,
-    validityStart,
-    advancedScheduleCommitments,
-  });
-  const buildInput = serializePayrollIntegrityBuildRequest({
-    chainId: input.chainId,
-    sealAddress: input.sealAddress,
-    organizationSecret: input.organizationSecret,
-    cycleId,
-    revision,
-    validityStart,
-    validityExpiry,
-    policies,
-    fxSnapshots: snapshots,
-    lines,
-  });
   let snapshotLink: Awaited<ReturnType<typeof buildObligationSnapshotLinkInputs>> | undefined;
   let encryptedSnapshotWitness: EncryptedVaultRecord | undefined;
   if (snapshotPlan) {
@@ -907,8 +1054,8 @@ export async function executeProofBoundPayroll(
       ])),
       graceEndsAt: BigInt(snapshotPlan.snapshot.graceEndsAt),
       claimEndsAt: BigInt(snapshotPlan.snapshot.claimEndsAt),
-      validityStart,
-      validityExpiry,
+      validityStart: proofValidityStart,
+      validityExpiry: proofValidityExpiry,
     });
     payrollBuild.witness.circuitInputs = [{}, {}];
     if (
@@ -976,7 +1123,7 @@ export async function executeProofBoundPayroll(
   // unavailable or reject this origin/session; no user should spend Mainnet
   // fees merely to discover that failure. The proved FX root is authorized
   // immediately afterward and still checked by the deployment preflight.
-  if (input.authorizeFxRoot) {
+  if (input.authorizeFxRoot && fxCatalog) {
     input.onStage?.("authorizing");
     await input.authorizeFxRoot({
       root: precomputedFxRoot,
@@ -1061,8 +1208,12 @@ export async function executeProofBoundPayroll(
     claimProofSource: { buildInput },
     now,
   });
-  await input.client.createPayrollRun(preparedRun);
-  await input.client.transitionPayrollRun({ runId, state: "calculated" });
+  if (!resumableRun) {
+    await input.client.createPayrollRun(preparedRun);
+    await input.client.transitionPayrollRun({ runId, state: "calculated" });
+  } else if (resumableRun.state === "draft") {
+    await input.client.transitionPayrollRun({ runId, state: "calculated" });
+  }
   const proofBundleId = generateUuidV7();
   await input.client.storeEncryptedProofBundle(prepareEncryptedPayrollIntegrityBundle({
     id: proofBundleId,
