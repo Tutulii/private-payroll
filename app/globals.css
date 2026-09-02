@@ -3326,6 +3326,10 @@ button:focus-visible {
 .snapshot-protection > * { position: relative; z-index: 1; }
 .snapshot-protection--active { border-color: #9ebc99; background: linear-gradient(135deg, #edf8eb 0%, #ddeedc 100%); }
 .snapshot-protection + .composer-top { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
+.selected-snapshot-status { margin-top: 12px; }
+.selected-snapshot-status--active { border-color: #9ebc99; background: linear-gradient(135deg, #edf8eb 0%, #ddeedc 100%); }
+.selected-snapshot-status--blocked { border-color: #dca69a; background: linear-gradient(135deg, #fff1ed 0%, #f8ddd6 100%); }
+.selected-snapshot-status--blocked strong { color: #7c3024; }
 .recipient-labels { margin: 18px 38px 6px 41px; display: grid; grid-template-columns: .75fr 1.45fr .6fr 24px; gap: 9px; color: var(--muted); font-size: 7px; font-weight: 850; text-transform: uppercase; letter-spacing: .06em; }
 .recipient-list { display: grid; gap: 8px; }
 .payroll-empty-guide { gap: 8px; padding: 24px 18px; border: 1px dashed #c9be95; border-radius: 12px; background: #fffaf0; }

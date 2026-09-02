@@ -61,6 +61,10 @@ import {
   payrollRecoveryMode,
   payrollSubmissionRecoveryHash,
 } from "@/lib/client/payroll-recovery-state";
+import {
+  exactPayrollSnapshotReady,
+  resolveExactPayrollSnapshotStatus,
+} from "@/lib/client/payroll-snapshot-status";
 import { materializedPayrollRuns } from "@/lib/client/payroll-run-listing";
 import {
   obligationAuthorizationSelectionKey,
@@ -128,6 +132,20 @@ function runDate(value: string, options?: Intl.DateTimeFormatOptions) {
     .format(new Date(value));
 }
 
+function unambiguousLocalDateTime(value: string | number | Date) {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  }).format(new Date(value))
+    .replace(",", " ·")
+    .replace(/\b(am|pm)\b/i, (period) => period.toUpperCase())
+    .concat(" local");
+}
+
 export default function PayrollPage() {
   const { openPayroll, notify } = useAppShell();
   const starknet = useStarknetWallet();
@@ -138,6 +156,8 @@ export default function PayrollPage() {
     publicBalances: shieldPublicBalances,
     quoteShieldToken: requestShieldQuote,
     isObligationRootActive: readObligationRootActive,
+    clearTransaction: clearWalletTransaction,
+    transaction: walletTransaction,
   } = starknet;
   const vault = usePayoVault();
   const [filter, setFilter] = useState<(typeof filters)[number]>("All");
@@ -294,6 +314,70 @@ export default function PayrollPage() {
   }, [agentApprovalSnapshotPlan, dueObligations, vault.session]);
   const selectedObligations = useMemo(() => dueObligations.filter(({ agreement }) =>
     selectedAgreementIds.includes(agreement.id)), [dueObligations, selectedAgreementIds]);
+  const selectedContainsAdvancedProfile = selectedObligations.some(
+    ({ agreement }) => agreement.agreement.agreementVersion === "payo-agreement-v2",
+  );
+  const selectedAdvancedProfile = selectedObligations.length > 0 && selectedObligations.every(
+    ({ agreement }) => agreement.agreement.agreementVersion === "payo-agreement-v2",
+  );
+  const selectedMixedProofProfiles = selectedContainsAdvancedProfile && !selectedAdvancedProfile;
+  const selectedSnapshotCycleId = useMemo(() => {
+    if (!vault.session || selectedObligations.length === 0) return null;
+    return deriveObligationSnapshotCycleId(
+      vault.session.organizationId,
+      selectedObligations,
+    );
+  }, [selectedObligations, vault.session]);
+  const selectedSnapshotStatus = useMemo(() => resolveExactPayrollSnapshotStatus({
+    cycleId: selectedSnapshotCycleId,
+    requiresSnapshot: selectedContainsAdvancedProfile,
+    plans: snapshotPlans,
+  }), [selectedContainsAdvancedProfile, selectedSnapshotCycleId, snapshotPlans]);
+  const selectedSnapshotDueLabel = selectedObligations.length > 0
+    ? unambiguousLocalDateTime(
+      Number(payrollAgreementDueAt(selectedObligations[0].agreement)) * 1_000,
+    )
+    : null;
+  const selectedSnapshotIssue = useMemo(() => {
+    if (selectedMixedProofProfiles) {
+      return "This batch mixes legacy and advanced proof profiles. Select agreements from one proof profile only.";
+    }
+    if (selectedContainsAdvancedProfile && snapshotSyncError) {
+      return "PAYO could not refresh the exact snapshot status. Retry records before authorizing or proving this batch.";
+    }
+    if (
+      selectedSnapshotStatus.kind === "empty"
+      || selectedSnapshotStatus.kind === "not_required"
+      || selectedSnapshotStatus.kind === "registered"
+    ) return null;
+    if (selectedSnapshotStatus.kind === "missing") {
+      return "This exact batch was not protected before " + selectedSnapshotDueLabel
+        + ". The protected card above belongs to a different future payday and cannot be reused. "
+        + "Create a future agreement, protect that exact batch, then pay it after it becomes due.";
+    }
+    if (selectedSnapshotStatus.kind === "consumed") {
+      return "The exact protected batch due " + selectedSnapshotDueLabel
+        + " was already consumed by a previous payroll and cannot be paid twice.";
+    }
+    if (
+      selectedSnapshotStatus.kind === "prepared"
+      || selectedSnapshotStatus.kind === "submitted"
+    ) {
+      return "Protection for the exact batch due " + selectedSnapshotDueLabel
+        + " did not reach canonical registration before payday. It cannot be completed retroactively.";
+    }
+    return "Protection for the exact batch due " + selectedSnapshotDueLabel
+      + " is " + selectedSnapshotStatus.kind + " and cannot authorize payroll.";
+  }, [
+    selectedContainsAdvancedProfile,
+    selectedMixedProofProfiles,
+    selectedSnapshotDueLabel,
+    selectedSnapshotStatus.kind,
+    snapshotSyncError,
+  ]);
+  const selectedSnapshotReady = !snapshotSyncError
+    && !selectedMixedProofProfiles
+    && exactPayrollSnapshotReady(selectedSnapshotStatus);
   const selectedObligationAuthorizationKey = useMemo(
     () => obligationAuthorizationSelectionKey(
       vault.session?.organizationId,
@@ -704,6 +788,11 @@ export default function PayrollPage() {
                 state: "active",
               }
             : null);
+          if (
+            active
+            && walletTransaction?.kind === "registry"
+            && walletTransaction.stage === "failed"
+          ) clearWalletTransaction();
         })
         .catch(() => {
           if (!stale) setObligationSchedule(null);
@@ -714,7 +803,16 @@ export default function PayrollPage() {
       stale = true;
       window.clearTimeout(timer);
     };
-  }, [readObligationRootActive, selectedObligationAuthorizationKey, shieldWalletConnected, shieldWalletMainnet, vault.session?.organizationId]);
+  }, [
+    clearWalletTransaction,
+    readObligationRootActive,
+    selectedObligationAuthorizationKey,
+    shieldWalletConnected,
+    shieldWalletMainnet,
+    vault.session?.organizationId,
+    walletTransaction?.kind,
+    walletTransaction?.stage,
+  ]);
 
   useEffect(() => {
     let stale = false;
@@ -857,6 +955,7 @@ export default function PayrollPage() {
   }, [shieldAmount, shieldFeeQuote, shieldToken, starknet.publicBalances]);
 
   const toggleAgreement = (id: string) => {
+    setFormError("");
     setObligationSchedule(null);
     setSelectedAgreementIds((current) => toggleProofProfileSelection({
       current,
@@ -967,6 +1066,7 @@ export default function PayrollPage() {
         throw new Error("Connect the obligation-registry administrator on Starknet Mainnet first.");
       }
       if (selectedObligations.length === 0) throw new Error("Select at least one due agreement.");
+      if (selectedSnapshotIssue) throw new Error(selectedSnapshotIssue);
       const planned = await preparePayrollObligationRoot({
         organizationId: vault.session.organizationId,
         obligations: selectedObligations,
@@ -1080,6 +1180,7 @@ export default function PayrollPage() {
         throw new Error("The reviewed PAYO agent policy account is not configured.");
       }
       if (selectedObligations.length === 0) throw new Error("Select at least one due encrypted agreement.");
+      if (selectedSnapshotIssue) throw new Error(selectedSnapshotIssue);
       const plannedObligations = await preparePayrollObligationRoot({
         organizationId: vault.session.organizationId,
         obligations: selectedObligations,
@@ -1739,11 +1840,11 @@ export default function PayrollPage() {
             <div className="composer-top">
               <div>
                 <span className="label">PRE-PAYDAY PROTECTION</span>
-                <h4>Freeze the next payday before it is due</h4>
+                <h4>Protect one future payday before it is due</h4>
               </div>
               {nextSnapshotDisplayDueAt !== null && (
                 <span className="snapshot-payday-date">
-                  {new Date(Number(nextSnapshotDisplayDueAt) * 1_000).toLocaleString()}
+                  {unambiguousLocalDateTime(Number(nextSnapshotDisplayDueAt) * 1_000)}
                 </span>
               )}
             </div>
@@ -1752,7 +1853,7 @@ export default function PayrollPage() {
                 <strong>{snapshotActionStage
                   ? snapshotStageLabel[snapshotActionStage]
                   : snapshotProtected
-                    ? "Payday snapshot protected"
+                    ? "Future payday snapshot protected"
                     : currentSnapshotPlan?.state === "submitted"
                       ? "Registration awaiting canonical confirmation"
                       : currentSnapshotPlan?.state === "prepared"
@@ -1767,7 +1868,7 @@ export default function PayrollPage() {
                   : snapshotOverflow
                     ? "This payday exceeds the 50-line proof limit. PAYO will not create an incomplete snapshot."
                     : snapshotProtected
-                      ? "Every claim-enabled obligation in this exact payday is encrypted, fixed-slot committed, and canonically registered for a later worker-owned claim."
+                      ? <>Only the exact future batch due {unambiguousLocalDateTime(Number(nextSnapshotDueAt) * 1_000)} is protected. Newly created agreements and other paydays are not included.</>
                       : currentSnapshotPlan?.state === "submitted"
                         ? "PAYO will reconcile the recorded transaction and will never open a duplicate Ready request."
                         : upcomingSnapshotObligations.length > 0
@@ -1900,7 +2001,7 @@ export default function PayrollPage() {
               <button
                 type="button"
                 className="button button--soft"
-                disabled={!vault.session || !starknet.isConnected || !starknet.isMainnet || selectedObligations.length === 0 || busy}
+                disabled={!vault.session || !starknet.isConnected || !starknet.isMainnet || selectedObligations.length === 0 || busy || Boolean(selectedSnapshotIssue)}
                 onClick={scheduleSelectedObligationRoot}
               >
                 {registryTransactionBusy
@@ -1913,6 +2014,22 @@ export default function PayrollPage() {
               </button>
             </div>
 
+            {selectedContainsAdvancedProfile && selectedObligations.length > 0 && (
+              <div className={"obligation-root-control selected-snapshot-status " + (selectedSnapshotReady ? "selected-snapshot-status--active" : "selected-snapshot-status--blocked")}>
+                <span>
+                  <strong>{selectedSnapshotReady
+                    ? "Selected due batch is protected"
+                    : "Selected due batch is not protected"}</strong>
+                  <small>{selectedSnapshotReady
+                    ? <>The immutable snapshot matches this exact agreement batch due {selectedSnapshotDueLabel}.</>
+                    : selectedSnapshotIssue}</small>
+                </span>
+                {selectedSnapshotReady
+                  ? <ShieldCheck size={20} />
+                  : <Link className="button button--soft" href="/team#team-directory">Create future agreement</Link>}
+              </div>
+            )}
+
             <div className="composer-summary">
               <div><small>{selectedProofProfile}</small><strong>{selectedObligations.length} selected</strong></div><div><small>Private total</small><strong>{`${formatTokenAmount(payrollTotals.STRK, "STRK")} STRK · ${formatTokenAmount(payrollTotals.USDC, "USDC")} USDC`}</strong></div><div><small>{executionMode === "autonomous" ? "Execution treasury" : "Shielded treasury"}</small><strong>{executionMode === "autonomous" ? "Encrypted policy account" : `${formatTokenAmount(starknet.shieldedBalances.STRK, "STRK")} STRK · ${formatTokenAmount(starknet.shieldedBalances.USDC, "USDC")} USDC`}</strong></div>
               {dueObligations.length === 0 ? (
@@ -1923,7 +2040,7 @@ export default function PayrollPage() {
                 <button
                   type="button"
                   className="button button--ink"
-                  disabled={!vault.session || !vault.recoveryReady || !starknet.isConnected || !starknet.isMainnet || busy || Boolean(recoverableSubmission) || selectedObligations.length === 0 || Boolean(agentApprovalReview && agentApprovalIssue) || (executionMode === "ready" && obligationSchedule?.state === "active" && !canRunPayroll) || (executionMode === "autonomous" && (!selectedAutonomousCapability || Boolean(autonomousPreparation)))}
+                  disabled={!vault.session || !vault.recoveryReady || !starknet.isConnected || !starknet.isMainnet || busy || Boolean(recoverableSubmission) || selectedObligations.length === 0 || Boolean(selectedSnapshotIssue) || Boolean(agentApprovalReview && agentApprovalIssue) || (executionMode === "ready" && obligationSchedule?.state === "active" && !canRunPayroll) || (executionMode === "autonomous" && (!selectedAutonomousCapability || Boolean(autonomousPreparation)))}
                   onClick={obligationSchedule?.state === "active" ? submitPayroll : scheduleSelectedObligationRoot}
                 >
                   {payrollStage && payrollStage !== "queued" && payrollStage !== "recorded"
@@ -1942,6 +2059,8 @@ export default function PayrollPage() {
                             ? <>Confirm recovery <KeyRound size={17} /></>
                             : selectedObligations.length === 0
                               ? <>Select a due agreement <CalendarDays size={17} /></>
+                              : selectedSnapshotIssue
+                                ? <>Future protection required <ShieldCheck size={17} /></>
                               : obligationSchedule?.state !== "active"
                                 ? <>Authorize batch in Ready <ShieldCheck size={17} /></>
                                 : <>{executionMode === "autonomous" ? "Prove & prepare agent run" : agentApprovalReview ? "Prove & approve agent payroll" : "Prove & approve payroll"} <ArrowRight size={17} /></>}
@@ -2054,7 +2173,11 @@ export default function PayrollPage() {
                 {payrollReceipt && <a href={`${STARKNET_MAINNET_EXPLORER}/tx/${payrollReceipt.transactionHash}`} target="_blank" rel="noreferrer">View receipt <ExternalLink size={13} /></a>}
               </div>
             )}
-            {starknet.transaction && (
+            {starknet.transaction && !(
+              starknet.transaction.kind === "registry"
+              && starknet.transaction.stage === "failed"
+              && obligationSchedule?.state === "active"
+            ) && (
               <div className={`transaction-receipt transaction-receipt--${starknet.transaction.stage}`}>
                 <span className="transaction-receipt-icon">{starknet.transaction.stage === "confirmed" ? <CheckCircle2 size={20} /> : starknet.transaction.stage === "failed" ? <X size={19} /> : <LoaderCircle className="spin" size={19} />}</span>
                 <span><small>{privateWalletRecoveryPending ? "WAITING FOR READY / MAINNET" : starknet.transaction.stage === "wallet" ? starknet.transaction.kind === "registry" ? "READY IS REQUESTING ADMIN APPROVAL" : "READY IS PREPARING THE PROOF" : starknet.transaction.stage === "confirming" ? "SUBMITTED TO MAINNET" : starknet.transaction.stage === "confirmed" ? "TRANSACTION CONFIRMED" : "TRANSACTION NEEDS ATTENTION"}</small><strong>{starknet.transaction.label}</strong>{starknet.transaction.kind === "shield" && starknet.transaction.grossAmount !== undefined && starknet.transaction.walletFee !== undefined && starknet.transaction.token && <p>{`${starknet.transaction.feeQuoteExact ? "" : "Pre-approval estimate · "}${formatTokenAmount(starknet.transaction.grossAmount, starknet.transaction.token)} ${starknet.transaction.token} total − ${formatTokenAmount(starknet.transaction.walletFee, starknet.transaction.feeToken ?? starknet.transaction.token)} ${starknet.transaction.feeToken ?? starknet.transaction.token} private fee = ${formatTokenAmount(starknet.transaction.netAmount ?? null, starknet.transaction.token)} ${starknet.transaction.token} shielded.`}</p>}{starknet.transaction.kind === "payroll" && starknet.transaction.totals && starknet.transaction.feeReserves && <p>{(["STRK", "USDC"] as PayrollTokenSymbol[]).filter((token) => (starknet.transaction?.totals?.[token] ?? 0n) > 0n).map((token) => `${formatTokenAmount(starknet.transaction?.totals?.[token] ?? null, token)} ${token} payroll + up to ${formatTokenAmount(starknet.transaction?.feeReserves?.[token] ?? null, token)} ${token} fee eligibility reserve`).join(" · ")}. Ready charges exactly one selected fee token for the whole atomic payroll, never both.</p>}{starknet.transaction.stage === "wallet" && <p>{privateWalletRecoveryPending ? "PAYO is checking the durable settlement and canonical Seal event. This cannot open a duplicate Ready request." : "PAYO sent one request. Rejecting it leaves a durable approval that can be safely cancelled after Ready closes."}</p>}{starknet.transaction.error && <p>{starknet.transaction.error}</p>}</span>
