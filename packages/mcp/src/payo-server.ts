@@ -253,6 +253,7 @@ export function createPayoMcpServer(config: PayoMcpServerConfig): McpServer {
       transactionHash: execution?.transactionHash ?? response.run.transactionHash,
       executionId: execution?.executionId,
       executionState: execution?.state,
+      executionErrorCode: execution?.errorCode,
       requestCommitment: execution?.requestCommitment,
       reconciled: execution?.state === "reconciled",
       updatedAt: execution?.updatedAt ?? response.run.updatedAt,

@@ -134,6 +134,8 @@ type AcceptedBlock = { number: number; hash: `0x${string}`; timestamp: number };
 type PrivacyAddressMap<T> = {
   entries(): IterableIterator<[bigint, T]>;
   get(key: bigint): T | undefined;
+  has(key: bigint): boolean;
+  set(key: bigint, value: T): unknown;
 };
 type PrivacyDiscoverySnapshot = {
   registry: {
@@ -229,7 +231,13 @@ async function pinIndexerBlock(runtime: DirectPrivacyDriverRuntime, discovery: P
 
 function privacyAddressMap<T>(value: unknown, label: string): PrivacyAddressMap<T> {
   const candidate = value as Partial<PrivacyAddressMap<T>> | null;
-  if (!candidate || typeof candidate.entries !== "function" || typeof candidate.get !== "function") {
+  if (
+    !candidate
+    || typeof candidate.entries !== "function"
+    || typeof candidate.get !== "function"
+    || typeof candidate.has !== "function"
+    || typeof candidate.set !== "function"
+  ) {
     throw new AgentExecutionDriverError(
       "DIRECT_DISCOVERY_RESPONSE_INVALID",
       `The private indexer returned invalid ${label}.`,
@@ -322,22 +330,42 @@ export async function discoverDirectPrivacySnapshot(input: {
 }): Promise<PrivacyDiscoverySnapshot> {
   const treasuryAddress = BigInt(input.context.config.policyAccountAddress);
   const viewingKey = BigInt(input.context.viewingKey);
-  const [notesResult, channelsResult] = await Promise.all([
+  const needed = channelRequirements({ request: input.job.request, config: input.context.config });
+  const requiredRecipients = [
+    treasuryAddress,
+    ...new Set(needed.requirements.map(({ recipient }) => recipient)),
+  ].filter((recipient, index, recipients) => recipients.indexOf(recipient) === index);
+  const [notesResult, channelsResult, registrationsResult] = await Promise.all([
     input.discovery.discoverNotes(treasuryAddress, viewingKey, {
       blockIdentifier: input.pinned.hash,
     }),
     input.discovery.discoverChannels(treasuryAddress, viewingKey, "all", {
       blockIdentifier: input.pinned.hash,
     }),
+    // An `all` scan contains created outgoing channels only. Ask for the exact
+    // payment participants as well so the indexer returns precomputed records
+    // for registered recipients whose channels will be opened atomically.
+    input.discovery.discoverChannels(treasuryAddress, viewingKey, requiredRecipients, {
+      blockIdentifier: input.pinned.hash,
+    }),
   ]);
   assertDiscoveryPin(notesResult.timestamp, input.pinned, "note discovery");
   assertDiscoveryPin(channelsResult.timestamp, input.pinned, "channel discovery");
+  assertDiscoveryPin(registrationsResult.timestamp, input.pinned, "recipient registration discovery");
   const notes = privacyAddressMap<unknown[]>(notesResult.notes, "private notes");
   const channels = privacyAddressMap<DirectPrivacyDiscoveredChannel>(
     channelsResult.channels,
     "private channels",
   );
-  const needed = channelRequirements({ request: input.job.request, config: input.context.config });
+  const registrations = privacyAddressMap<DirectPrivacyDiscoveredChannel>(
+    registrationsResult.channels,
+    "recipient registrations",
+  );
+  for (const recipient of requiredRecipients) {
+    if (channels.has(recipient)) continue;
+    const registration = registrations.get(recipient);
+    if (registration) channels.set(recipient, registration);
+  }
   const readiness = findDirectPrivacyReadinessFailure({
     channels,
     treasuryAddress: needed.treasuryAddress,

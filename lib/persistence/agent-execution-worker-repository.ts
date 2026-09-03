@@ -52,7 +52,15 @@ async function failInvalidLease(
   code: string,
   now: Date,
 ): Promise<void> {
-  if (["reserved", "preparing"].includes(execution.state)) {
+  const terminalErrorCode = errorCode(code);
+  const preSubmission = ["reserved", "preparing"].includes(execution.state);
+  // Preparation retries retain their last safe driver code. If the request
+  // later expires during lease reauthorization, surface the actionable root
+  // failure rather than replacing it with the secondary expiry symptom.
+  const effectiveErrorCode = preSubmission
+    ? execution.errorCode ?? terminalErrorCode
+    : terminalErrorCode;
+  if (preSubmission) {
     await transaction.update(capabilityReservations).set({ state: "released", updatedAt: now }).where(and(
       eq(capabilityReservations.id, execution.reservationId),
       eq(capabilityReservations.state, "reserved"),
@@ -60,7 +68,7 @@ async function failInvalidLease(
   }
   await transaction.update(agentExecutions).set({
     state: "failed",
-    errorCode: errorCode(code),
+    errorCode: effectiveErrorCode,
     lastErrorAt: now,
     leaseOwner: null,
     leaseExpiresAt: null,
@@ -72,7 +80,11 @@ async function failInvalidLease(
     actorId: "system:agent-execution-worker",
     action: "agent_execution.failed_closed",
     subjectId: execution.id,
-    metadata: { errorCode: errorCode(code), requestCommitment: execution.requestCommitment },
+    metadata: {
+      errorCode: effectiveErrorCode,
+      terminalErrorCode,
+      requestCommitment: execution.requestCommitment,
+    },
   });
 }
 
@@ -200,7 +212,6 @@ export async function markAgentExecutionPreparing(job: LeasedAgentExecution, now
     }
     const [updated] = await transaction.update(agentExecutions).set({
       state: "preparing",
-      errorCode: null,
       updatedAt: now,
     }).where(eq(agentExecutions.id, job.id)).returning();
     return updated;

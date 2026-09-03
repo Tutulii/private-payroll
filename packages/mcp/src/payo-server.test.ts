@@ -189,6 +189,7 @@ describe("PAYO MCP production transport", () => {
             runId,
             state: "reconciled",
             transactionHash: "0xdef",
+            errorCode: null,
             requestCommitment: "0x" + "33".repeat(32),
             updatedAt: new Date().toISOString(),
           } } as T;
@@ -263,6 +264,7 @@ describe("PAYO MCP production transport", () => {
     expect(data(receipt)).toMatchObject({ receipt: {
       executionId,
       executionState: "reconciled",
+      executionErrorCode: null,
       reconciled: true,
       transactionHash: "0xdef",
     } });
@@ -287,6 +289,60 @@ describe("PAYO MCP production transport", () => {
       arguments: disclosure,
     })).isError).not.toBe(true);
     expect(calls.some(({ path }) => path === "/api/v1/disclosures")).toBe(true);
+  });
+
+  it("surfaces a durable safe execution failure code in the MCP receipt", async () => {
+    const { capability, signed } = capabilityFixture();
+    const runId = id(20);
+    const executionId = id(21);
+    const updatedAt = new Date().toISOString();
+    const api: PayoApiTransport = {
+      async request<T>(path: string): Promise<T> {
+        if (path.startsWith("/api/v1/capabilities?")) return { capability: signed } as T;
+        if (path === "/api/v1/runs/" + runId) {
+          return { run: {
+            id: runId,
+            organizationId: capability.organizationId,
+            state: "proven",
+            manifestRoot: "0x" + "11".repeat(32),
+            runNullifier: "0x" + "22".repeat(32),
+            transactionHash: null,
+            updatedAt,
+          } } as T;
+        }
+        if (path.includes("/executions?executionId=")) {
+          return { execution: {
+            executionId,
+            capabilityId: capability.id,
+            runId,
+            state: "failed",
+            transactionHash: null,
+            errorCode: "DIRECT_RECIPIENT_REGISTRATION_REQUIRED",
+            requestCommitment: "0x" + "33".repeat(32),
+            updatedAt,
+          } } as T;
+        }
+        throw new Error("Unexpected API request: " + path);
+      },
+    };
+    const client = await connect({
+      api,
+      capabilityId: capability.id,
+      pinnedIssuerKey: signed.issuerPublicKey,
+    });
+
+    const receipt = await client.callTool({
+      name: "payo_get_receipt",
+      arguments: { organizationId: capability.organizationId, runId, executionId },
+    });
+
+    expect(data(receipt)).toMatchObject({ receipt: {
+      executionId,
+      executionState: "failed",
+      executionErrorCode: "DIRECT_RECIPIENT_REGISTRATION_REQUIRED",
+      reconciled: false,
+      transactionHash: null,
+    } });
   });
 
   it("rejects cross-tenant access and arbitrary-call injection before execution", async () => {

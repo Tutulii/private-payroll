@@ -76,6 +76,7 @@ describe("direct private block pin and channel readiness", () => {
       beginBlockNumber: 4,
       historyComplete: true,
     };
+    let channelDiscoveryCalls = 0;
     const discovery = {
       discoverNotes: async (_address: bigint, _viewingKey: bigint, params?: Record<string, unknown>) => {
         expect(params?.blockIdentifier).toBe(blockHash);
@@ -87,7 +88,10 @@ describe("direct private block pin and channel readiness", () => {
         recipients: bigint[] | "all" | "total-only",
         params?: Record<string, unknown>,
       ) => {
-        expect(recipients).toBe("all");
+        channelDiscoveryCalls += 1;
+        if (recipients !== "all") {
+          expect(recipients).toEqual([treasury, recipient]);
+        }
         expect(params?.blockIdentifier).toBe(blockHash);
         return { timestamp: blockHash, channels, total: 2 };
       },
@@ -126,6 +130,7 @@ describe("direct private block pin and channel readiness", () => {
       context: { config: snapshotConfig, viewingKey: "0x123", state: emptyDirectPrivacyState() },
       job: { request: snapshotRequest },
     });
+    expect(channelDiscoveryCalls).toBe(2);
     expect(snapshot.channelTotal).toBe(2);
     expect(snapshot.registry.notes).toBe(notes);
     expect(snapshot.history).toEqual([
@@ -133,6 +138,60 @@ describe("direct private block pin and channel readiness", () => {
     ]);
     expect(snapshot.historyCursor).toEqual(historyCursor);
     expect(snapshot.historyPinnedBlock).toEqual({ number: 4, hash: blockHash });
+  });
+
+  it("merges targeted registrations when a full scan has no opened channels", async () => {
+    const blockHash = "0xdef" as const;
+    const treasury = 0x777n;
+    const recipient = 0x456n;
+    const token = 0x111n;
+    const allChannels = new Map<bigint, DirectPrivacyDiscoveredChannel>();
+    const registrations = new Map<bigint, DirectPrivacyDiscoveredChannel>([
+      [treasury, channel({ open: false, tokens: [] })],
+      [recipient, channel({ open: false, tokens: [] })],
+    ]);
+    const notes = new Map<bigint, unknown[]>([[token, []]]);
+    const discovery = {
+      discoverNotes: async () => ({
+        timestamp: blockHash,
+        notes,
+        cursor: { blockId: blockHash, incomingChannels: new Map() },
+      }),
+      discoverChannels: async (
+        _address: bigint,
+        _viewingKey: bigint,
+        recipients: bigint[] | "all" | "total-only",
+      ) => recipients === "all"
+        ? { timestamp: blockHash, channels: allChannels, total: 0 }
+        : { timestamp: blockHash, channels: registrations, total: 0 },
+      fetchHistory: async (
+        _address: bigint,
+        _notesCursor: unknown,
+        channelCursor: unknown,
+      ) => {
+        const merged = (channelCursor as {
+          channels: Map<bigint, DirectPrivacyDiscoveredChannel>;
+        }).channels;
+        expect(merged.get(treasury)?.publicKey).toBe(11n);
+        expect(merged.get(recipient)?.publicKey).toBe(11n);
+        return {
+          blockRef: blockHash,
+          transactions: [],
+          cursor: { subchannels: [], beginBlockNumber: 4, historyComplete: true },
+        };
+      },
+    } as unknown as PrivacyDiscovery;
+
+    const snapshot = await discoverDirectPrivacySnapshot({
+      discovery,
+      pinned: { number: 4, hash: blockHash, timestamp: 10 },
+      context: { config: snapshotConfig, viewingKey: "0x123", state: emptyDirectPrivacyState() },
+      job: { request: snapshotRequest },
+    });
+
+    expect(snapshot.channelTotal).toBe(0);
+    expect(snapshot.registry.channels.get(treasury)?.key).toBeUndefined();
+    expect(snapshot.registry.channels.get(recipient)?.key).toBeUndefined();
   });
 
   it("restarts history backfill from the canonical pin after its old branch reorgs", async () => {
@@ -280,6 +339,27 @@ describe("direct private block pin and channel readiness", () => {
       treasuryAddress: 1n,
       requirements: [{ recipient: 1n, token: 7n }, { recipient: 2n, token: 7n }],
     })?.code).toBe(code);
+  });
+
+  it("checks token membership without mutating a default-creating map", () => {
+    let getCalls = 0;
+    const missingTokenChannel: DirectPrivacyDiscoveredChannel = {
+      publicKey: 11n,
+      key: 22n,
+      tokens: {
+        has: () => false,
+        get: () => {
+          getCalls += 1;
+          return { tokenIndex: 0, noteNonce: 0 };
+        },
+      },
+    };
+    expect(findDirectPrivacyReadinessFailure({
+      channels: new Map([[1n, missingTokenChannel]]),
+      treasuryAddress: 1n,
+      requirements: [{ recipient: 1n, token: 7n }],
+    })?.code).toBe("DIRECT_TOKEN_CHANNEL_SETUP_REQUIRED");
+    expect(getCalls).toBe(0);
   });
 
   it("rejects malformed token nonce state", () => {

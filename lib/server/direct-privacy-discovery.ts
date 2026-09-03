@@ -4,6 +4,7 @@ import { num } from "starknet";
 
 type AddressMapLike<T> = {
   get(key: bigint): T | undefined;
+  has(key: bigint): boolean;
 };
 
 export type DirectPrivacyDiscoveredChannel = {
@@ -95,12 +96,18 @@ export function findDirectPrivacyReadinessFailure(input: {
         message: `The private channel for ${label(requirement.recipient)} is not open at the pinned block.`,
       };
     }
-    const tokenChannel = channel.tokens?.get(requirement.token);
-    if (!tokenChannel) {
+    if (!channel.tokens?.has(requirement.token)) {
       if (input.allowSetup) continue;
       return {
         code: "DIRECT_TOKEN_CHANNEL_SETUP_REQUIRED",
         message: `The token channel for ${label(requirement.recipient)} is not ready at the pinned block.`,
+      };
+    }
+    const tokenChannel = channel.tokens.get(requirement.token);
+    if (!tokenChannel) {
+      return {
+        code: "DIRECT_DISCOVERY_RESPONSE_INVALID",
+        message: `The token channel for ${label(requirement.recipient)} disappeared during readiness validation.`,
       };
     }
     if (

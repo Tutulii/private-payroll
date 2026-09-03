@@ -147,6 +147,32 @@ export function registerAgentExecutionWorkerRepositoryIntegrationTests(): void {
     expect((await getDatabase().select().from(capabilityReservations))[0].state).toBe("released");
   });
 
+  it("preserves the actionable preparation error when lease reauthorization later fails", async () => {
+    const input = await fixture();
+    const [job] = await leaseAgentExecutions("agent-worker-transient", 1, start);
+    await markAgentExecutionPreparing(job, start);
+    await deferAgentExecution(job, {
+      errorCode: "DIRECT_RECIPIENT_REGISTRATION_REQUIRED",
+      preSubmission: true,
+    }, start);
+    await getDatabase().update(payrollRuns).set({
+      version: sql`${payrollRuns.version} + 1`,
+    }).where(eq(payrollRuns.id, input.runId));
+
+    const retryAt = new Date(start.getTime() + 6_000);
+    await expect(leaseAgentExecutions("agent-worker-expired", 1, retryAt)).resolves.toEqual([]);
+    expect((await getDatabase().select().from(agentExecutions))[0]).toMatchObject({
+      state: "failed",
+      errorCode: "DIRECT_RECIPIENT_REGISTRATION_REQUIRED",
+    });
+    const failedClosed = (await getDatabase().select().from(auditEvents))
+      .find(({ action }) => action === "agent_execution.failed_closed");
+    expect(failedClosed?.metadata).toMatchObject({
+      errorCode: "DIRECT_RECIPIENT_REGISTRATION_REQUIRED",
+      terminalErrorCode: "AGENT_RUN_VERSION_CHANGED",
+    });
+  });
+
   it("releases pre-submission capacity on a permanent preparation failure", async () => {
     await fixture();
     const [job] = await leaseAgentExecutions("agent-worker-proof-failure", 1, start);
