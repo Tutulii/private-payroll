@@ -50,6 +50,7 @@ import {
   type PrepareAutonomousPayrollInput,
 } from "@/lib/client/payroll-execution";
 import {
+  assertObligationSnapshotRegistrationReady,
   createDurableObligationSnapshotPlan,
   deriveObligationSnapshotCycleId,
   loadRegisteredObligationSnapshotPlan,
@@ -1109,6 +1110,11 @@ export default function PayrollPage() {
       }
 
       setSnapshotActionStage("reconciling");
+      assertObligationSnapshotRegistrationReady({
+        dueAt: registrationPlan.snapshot.dueAt,
+        nowSeconds: BigInt(Math.floor(Date.now() / 1_000)),
+        policyRootActive: await starknet.isPolicyRootActive(registrationPlan.snapshot.policyRoot),
+      });
       const registered = await registerDurableObligationSnapshotPlan({
         client: vault.client,
         plan: registrationPlan,

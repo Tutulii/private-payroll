@@ -8,6 +8,7 @@ import { storeEncryptedAdvancedAgreement } from "./agreement-directory";
 import { buildAdvancedPaymentPlanDraft } from "./advanced-agreement-draft";
 import { prepareEncryptedPayee } from "./payee-directory";
 import {
+  assertObligationSnapshotRegistrationReady,
   createDurableObligationSnapshotPlan,
   deriveObligationSnapshotCycleId,
   loadRegisteredObligationSnapshotPlan,
@@ -66,6 +67,27 @@ async function obligation(withClaimIdentity = true) {
 }
 
 describe("pre-payday obligation snapshot plan", () => {
+  it("blocks expired or inactive-policy snapshots before Ready opens", () => {
+    expect(() => assertObligationSnapshotRegistrationReady({
+      dueAt: "1000",
+      nowSeconds: 1000n,
+      policyRootActive: true,
+    })).toThrow(/passed its payday/i);
+    expect(() => assertObligationSnapshotRegistrationReady({
+      dueAt: "1001",
+      nowSeconds: 1000n,
+      policyRootActive: false,
+    })).toThrow(/policy.*not active/i);
+  });
+
+  it("accepts a future snapshot with an active policy root", () => {
+    expect(() => assertObligationSnapshotRegistrationReady({
+      dueAt: "1001",
+      nowSeconds: 1000n,
+      policyRootActive: true,
+    })).not.toThrow();
+  });
+
   it("uses one worker-identity eligibility rule for UI selection and snapshot creation", async () => {
     const selected = await obligation();
     expect(obligationWorkerClaimIdentityIssue(selected)).toBeNull();

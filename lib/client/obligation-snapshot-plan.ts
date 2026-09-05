@@ -62,6 +62,24 @@ export type WorkerClaimIdentityIssue =
   | "agreement_identity_missing"
   | "identity_binding_mismatch";
 
+export function assertObligationSnapshotRegistrationReady(input: {
+  dueAt: string;
+  nowSeconds: bigint;
+  policyRootActive: boolean;
+}) {
+  const dueAt = BigInt(input.dueAt);
+  if (dueAt <= input.nowSeconds) {
+    throw new Error(
+      "This saved protection request has passed its payday and can no longer be registered. Create a replacement agreement with a future due time.",
+    );
+  }
+  if (!input.policyRootActive) {
+    throw new Error(
+      "The statutory policy for this agreement is not active on Mainnet. PAYO stopped before opening Ready; activate the policy catalog, then resume protection.",
+    );
+  }
+}
+
 /**
  * Keeps the pre-payday UI and the durable snapshot builder on one eligibility
  * rule. Legacy agreements remain payable, but they must never be advertised as

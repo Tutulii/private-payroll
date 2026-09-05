@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "payo-policy-root-mainnet-activation-v1",
+  "network": "starknet-mainnet",
+  "chainId": "0x534e5f4d41494e",
+  "policy": {
+    "id": "us-irs-supplemental-flat-2026-v1",
+    "revision": 1,
+    "catalogRoot": "0x2268a0aded87d370810a4fa92f02dd24adf09af7b56c56d740df4ea601696b33",
+    "effectiveFrom": "2026-01-01",
+    "effectiveUntil": "2026-12-31"
+  },
+  "registry": {
+    "address": "0x34701f573096b7bab0e5678e1ed2f17a87c8d56eb5f4d70bcf2197bab8e4477",
+    "admin": "0x0126a7a572cf8935d069af937e9f7b27a24949e271e1fbccfe4de0c0d8dc8ea9"
+  },
+  "activation": {
+    "transactionHash": "0x7ffafb65f46345faaf3439951886e7af0ff7ab25221182e7b049b70ae08755a",
+    "blockNumber": 14406033,
+    "executionStatus": "SUCCEEDED",
+    "finalityStatus": "ACCEPTED_ON_L2",
+    "actualFeeFri": "60781215646626344",
+    "expiresAt": 1798761600
+  },
+  "verification": {
+    "entrypoint": "is_policy_root_valid",
+    "result": true,
+    "observedAt": "2026-09-05T14:19:09Z"
+  },
+  "sourceCommitBeforeRelease": "b47db2f1098c4009afe3915e7fada60b9941a115"
+}
