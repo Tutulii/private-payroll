@@ -34,21 +34,23 @@ Mainnet source/read-back evidence:
 - `evidence/phase4-mainnet-deployment.json`
 - `docs/phase5-evidence.md`
 
-## Planned vesting and compliance-book topology
+## Active vesting and compliance-book topology
 
-These deterministic addresses are deployment candidates, **not active Mainnet
-contracts**. `evidence/vesting-tax-mainnet-plan.json` records the reviewed artifacts,
-constructor wiring, current simulation, and `mutationSubmitted: false`.
+These reviewed deterministic addresses were declared, atomically deployed and activated
+on Mainnet on 2026-09-05. `evidence/vesting-tax-mainnet-plan.json` preserves the
+immutable pre-deployment plan; `evidence/vesting-tax-mainnet.json` records receipts and
+read-back, and `evidence/vesting-tax-hosted-rollout.json` records the web/prover wiring.
 
-| Candidate component           | Deterministic address                                               | Current state           |
-| ----------------------------- | ------------------------------------------------------------------- | ----------------------- |
-| VestingTransition verifier v3 | `0x4b35d2d366848169ea4fb32d4fffda498b5251160da2e60fc53030a37d5551c` | Undeclared / undeployed |
-| VestingTransition bundle v3   | `0x1bc7517191802bf82ccfb60fa4f27f9306d6cfee9160b545d7dea662e8870a8` | Undeclared / undeployed |
-| VestingBook state/book seal   | `0x5208cc07cb4153235ab5c6ecd1936ee77f9be7a2ea09f6cc69518a6362493f`  | Undeclared / undeployed |
+| Component                     | Deterministic address                                               | Current state                       |
+| ----------------------------- | ------------------------------------------------------------------- | ----------------------------------- |
+| VestingTransition verifier v3 | `0x4b35d2d366848169ea4fb32d4fffda498b5251160da2e60fc53030a37d5551c` | Declared and deployed               |
+| VestingTransition bundle v3   | `0x1bc7517191802bf82ccfb60fa4f27f9306d6cfee9160b545d7dea662e8870a8` | Deployed; active profile `0/3`      |
+| VestingBook state/book seal   | `0x5208cc07cb4153235ab5c6ecd1936ee77f9be7a2ea09f6cc69518a6362493f`  | Deployed and wired to web + prover  |
 
-The latest read-only 2026-09-05 simulation estimated
-600.472824438987809664 STRK total.
-No Mainnet mutation is authorized merely by documenting this plan.
+The conservative pre-deployment simulation estimated 600.472824438987809664 STRK;
+the recorded declaration/deployment/activation total was exactly
+227.876862512710972474 STRK. The tiny live vesting/book/tax-export canary remains
+pending and is not authorized merely by documenting this topology.
 
 ## Planned private-exit instance
 
