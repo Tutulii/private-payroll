@@ -177,6 +177,67 @@ jobs:
             npm run phase4:settlement:fixture
           (cd contracts/settlement_verifier_v8 && snforge test)
 
+      - name: Reproduce the VestingBook v3 circuit and verification key
+        run: |
+          (
+            cd circuits/vesting_transition
+            nargo test --deny-warnings
+            nargo build
+          )
+          node -e 'const fs=require("fs"); const built=JSON.parse(fs.readFileSync("circuits/vesting_transition/target/payo_vesting_transition.json")); const published=JSON.parse(fs.readFileSync("public/circuits/vesting_transition-v3.json")); for (const key of ["noir_version","abi","bytecode","expression_width"]) if (JSON.stringify(built[key]) !== JSON.stringify(published[key])) throw new Error("Published VestingBook v3 circuit "+key+" differs from the pinned build");'
+          bb gates --scheme ultra_honk --oracle_hash keccak \
+            -b circuits/vesting_transition/target/payo_vesting_transition.json \
+            > circuits/vesting_transition/target/ci-gates.json
+          node -e 'const fs=require("fs"); const gates=JSON.parse(fs.readFileSync("circuits/vesting_transition/target/ci-gates.json")); const fn=gates.functions[0]; if (fn.circuit_size > 2097152) throw new Error("VestingBook v3 "+fn.circuit_size+" exceeds the 2^21 production domain"); console.log("VestingBook v3 ACIR: "+fn.acir_opcodes+"; circuit size: "+fn.circuit_size);'
+          mkdir -p circuits/vesting_transition/target/ci-vk
+          bb write_vk --scheme ultra_honk --oracle_hash keccak \
+            -b circuits/vesting_transition/target/payo_vesting_transition.json \
+            -o circuits/vesting_transition/target/ci-vk
+          node -e 'const fs=require("fs"); const hex=fs.readFileSync("public/circuits/vesting_transition-v3.vk.hex","utf8").replace(/\s/g,""); if (!/^[0-9a-f]+$/i.test(hex) || hex.length % 2 !== 0) throw new Error("Committed VestingBook v3 VK is malformed"); fs.writeFileSync("circuits/vesting_transition/target/committed-vk",Buffer.from(hex,"hex"));'
+          cmp circuits/vesting_transition/target/ci-vk/vk circuits/vesting_transition/target/committed-vk
+
+      - name: Reproduce the VestingBook v3 Garaga verifier
+        run: |
+          mkdir -p /tmp/payo-vesting-v3-garaga
+          cd /tmp/payo-vesting-v3-garaga
+          garaga gen \
+            --system ultra_keccak_zk_honk \
+            --vk "$GITHUB_WORKSPACE/circuits/vesting_transition/target/ci-vk/vk" \
+            --project-name vesting_verifier_v3
+          sed -i \
+            's/mod UltraKeccakZKHonkVerifier {/mod PayoVestingBookV3Verifier {/' \
+            vesting_verifier_v3/src/honk_verifier.cairo
+          (cd vesting_verifier_v3 && scarb fmt)
+          for source in honk_verifier.cairo honk_verifier_circuits.cairo honk_verifier_constants.cairo; do
+            diff -u \
+              "$GITHUB_WORKSPACE/contracts/vesting_verifier_v3/src/$source" \
+              "vesting_verifier_v3/src/$source"
+          done
+          (cd "$GITHUB_WORKSPACE/contracts/vesting_verifier_v3" && scarb build)
+
+      - name: Prove both VestingBook v3 shards through the generated Cairo verifier
+        run: |
+          NODE_OPTIONS=--max-old-space-size=3072 npm run vesting:v3:witness
+          for shard in 0 1; do
+            mkdir -p "circuits/vesting_transition/target/real-proof-fixture/proof-$shard"
+            bb prove --scheme ultra_honk --oracle_hash keccak \
+              --slow_low_memory --storage_budget "$PAYO_BB_STORAGE_BUDGET" \
+              --vk_policy check \
+              -b circuits/vesting_transition/target/payo_vesting_transition.json \
+              -w "circuits/vesting_transition/target/real-proof-fixture/witness-$shard.gz" \
+              -k circuits/vesting_transition/target/ci-vk/vk \
+              -o "circuits/vesting_transition/target/real-proof-fixture/proof-$shard"
+            bb verify --scheme ultra_honk --oracle_hash keccak \
+              -k circuits/vesting_transition/target/ci-vk/vk \
+              -p "circuits/vesting_transition/target/real-proof-fixture/proof-$shard/proof" \
+              -i "circuits/vesting_transition/target/real-proof-fixture/proof-$shard/public_inputs"
+          done
+          PAYO_VESTING_VK_PATH=circuits/vesting_transition/target/ci-vk/vk \
+            npm run vesting:v3:fixture
+          (cd contracts/vesting_verifier_v3 && snforge test)
+          (cd contracts/vesting_integration && snforge test)
+          (cd contracts/vesting_devnet_harness && scarb build)
+
       - name: Reproduce the merged Phase 3 circuit and verification key
         working-directory: circuits/advanced_obligation
         run: |
@@ -415,6 +476,13 @@ jobs:
             circuits/payroll_integrity/target/native3-shard-1/public_inputs \
             circuits/payroll_integrity/target/proof_calldata-shard-0.txt \
             circuits/payroll_integrity/target/proof_calldata-shard-1.txt \
+            public/circuits/vesting_transition-v3.json \
+            public/circuits/vesting_transition-v3.vk.hex \
+            circuits/vesting_transition/target/ci-vk/vk \
+            circuits/vesting_transition/target/real-proof-fixture/proof-0/proof \
+            circuits/vesting_transition/target/real-proof-fixture/proof-0/public_inputs \
+            circuits/vesting_transition/target/real-proof-fixture/proof-1/proof \
+            circuits/vesting_transition/target/real-proof-fixture/proof-1/public_inputs \
             > circuits/payroll_integrity/target/SHA256SUMS
 
       - name: Install the pinned browser
@@ -461,5 +529,9 @@ jobs:
             circuits/payroll_integrity/target/SHA256SUMS
             circuits/settlement_match/target/payo_settlement_match.json
             circuits/settlement_match/target/gates.json
+            circuits/vesting_transition/target/payo_vesting_transition.json
+            circuits/vesting_transition/target/ci-gates.json
+            circuits/vesting_transition/target/ci-vk/
+            circuits/vesting_transition/target/real-proof-fixture/
             contracts/integrity_verifier/
           retention-days: 14

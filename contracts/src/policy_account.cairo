@@ -8,6 +8,7 @@ pub struct PolicyConfig {
     pub session_public_key: felt252,
     pub pool: ContractAddress,
     pub seal: ContractAddress,
+    pub book_seal: ContractAddress,
     pub seal_mode: u8,
     pub proof_version: u32,
     pub schema_version: u32,
@@ -32,6 +33,7 @@ pub struct PolicyState {
     pub session_public_key: felt252,
     pub pool: ContractAddress,
     pub seal: ContractAddress,
+    pub book_seal: ContractAddress,
     pub seal_mode: u8,
     pub proof_version: u32,
     pub schema_version: u32,
@@ -104,6 +106,13 @@ pub trait IPayoPolicyAccount<TContractState> {
 /// A native Starknet account for bounded AI-agent execution. The owner keeps
 /// normal SNIP-6 control. Session keys can only use SNIP-9 V2 to call the
 /// account's single policy gateway; they can never submit arbitrary calls.
+#[starknet::interface]
+trait IPayoAuthorizedBookSource<TContractState> {
+    fn get_authorized_source_seal(
+        self: @TContractState, run_high: u128, run_low: u128,
+    ) -> ContractAddress;
+}
+
 #[starknet::contract(account)]
 pub mod PayoPolicyAccount {
     use core::num::traits::Zero;
@@ -130,7 +139,10 @@ pub mod PayoPolicyAccount {
     use starknet::{
         get_block_info, get_caller_address, get_contract_address, get_execution_info,
     };
-    use super::{IPayoPolicyAccount, PolicyConfig, PolicyState, SettlementReceipt};
+    use super::{
+        IPayoAuthorizedBookSourceDispatcher, IPayoAuthorizedBookSourceDispatcherTrait,
+        IPayoPolicyAccount, PolicyConfig, PolicyState, SettlementReceipt,
+    };
 
     component!(path: AccountComponent, storage: account, event: AccountEvent);
     component!(path: SRC5Component, storage: src5, event: SRC5Event);
@@ -147,6 +159,7 @@ pub mod PayoPolicyAccount {
     const MAX_PERIOD_SECONDS: u64 = 366 * 24 * 60 * 60;
     const MODE_PRECOMMIT: u8 = 0;
     const MODE_FINALIZE: u8 = 1;
+    const MODE_UNIVERSAL_BOOK: u8 = 2;
     const RUN_LEAF_DOMAIN: felt252 = 'PAYO_AGENT_RUN_V1';
 
     mod errors {
@@ -340,6 +353,10 @@ pub mod PayoPolicyAccount {
     }
 
     fn assert_private_payroll_actions(
+        self: @ContractState,
+        policy: PolicyState,
+        run_nullifier_high: u128,
+        run_nullifier_low: u128,
         pool_calldata: Span<felt252>,
     ) -> (u256, u32) {
         let mut serialized = pool_calldata;
@@ -351,6 +368,7 @@ pub mod PayoPolicyAccount {
         assert(screening.is_none(), errors::BAD_POOL_ACTION);
 
         let mut emitted_notes: Array<SettlementNote> = ArrayTrait::new();
+        let mut book_invoke_count: u8 = 0;
         for action in actions {
             match action {
                 // Private-note storage and events are allowed. Public deposits,
@@ -366,15 +384,39 @@ pub mod PayoPolicyAccount {
                     );
                 },
                 ServerAction::EmitNoteUsed(_) => {},
-                // PayrollIntegrity is precommitted and proved before this
-                // payment. No external pool invocation is permitted in the
-                // fund-moving transaction; the account calls FINALIZE itself.
-                ServerAction::Invoke(_) => { assert(false, errors::BAD_POOL_ACTION); },
+                // Universal mode permits one exact, owner-pinned callback to
+                // append this run to the v3 book inside the STRK20 payment.
+                ServerAction::Invoke(input) => {
+                    assert(policy.seal_mode == MODE_UNIVERSAL_BOOK, errors::BAD_POOL_ACTION);
+                    assert(*input.contract_address == policy.book_seal, errors::BAD_POOL_ACTION);
+                    assert(input.calldata.len() == 6, errors::BAD_POOL_ACTION);
+                    assert(*input.calldata.at(0) == run_nullifier_high.into(), errors::BAD_POOL_ACTION);
+                    assert(*input.calldata.at(1) == run_nullifier_low.into(), errors::BAD_POOL_ACTION);
+                    assert(*input.calldata.at(2) == 0, errors::BAD_POOL_ACTION);
+                    assert(*input.calldata.at(3) == 0, errors::BAD_POOL_ACTION);
+                    assert(
+                        *input.calldata.at(4) != 0 || *input.calldata.at(5) != 0,
+                        errors::BAD_POOL_ACTION,
+                    );
+                    book_invoke_count += 1;
+                },
+                ServerAction::InvokeWithComputation(_) => {
+                    assert(false, errors::BAD_POOL_ACTION);
+                },
                 _ => { assert(false, errors::BAD_POOL_ACTION); },
             }
         };
         let emitted_note_count: u32 = emitted_notes.len().try_into().unwrap();
         assert(emitted_note_count > 0, errors::BAD_POOL_ACTION);
+        if policy.seal_mode == MODE_UNIVERSAL_BOOK {
+            assert(book_invoke_count == 1, errors::BAD_POOL_ACTION);
+            let source = IPayoAuthorizedBookSourceDispatcher {
+                contract_address: policy.book_seal,
+            }.get_authorized_source_seal(run_nullifier_high, run_nullifier_low);
+            assert(source == policy.seal, errors::BAD_POOL_ACTION);
+        } else {
+            assert(book_invoke_count == 0, errors::BAD_POOL_ACTION);
+        }
         (build_settlement_root_v1(emitted_notes.span()), emitted_note_count)
     }
 
@@ -389,9 +431,16 @@ pub mod PayoPolicyAccount {
             assert(config.session_public_key.is_non_zero(), errors::BAD_CONFIG);
             assert(!config.pool.is_zero() && !config.seal.is_zero(), errors::BAD_CONFIG);
             assert(
-                config.seal_mode == MODE_PRECOMMIT || config.seal_mode == MODE_FINALIZE,
+                config.seal_mode == MODE_PRECOMMIT
+                    || config.seal_mode == MODE_FINALIZE
+                    || config.seal_mode == MODE_UNIVERSAL_BOOK,
                 errors::BAD_CONFIG,
             );
+            if config.seal_mode == MODE_UNIVERSAL_BOOK {
+                assert(!config.book_seal.is_zero(), errors::BAD_CONFIG);
+            } else {
+                assert(config.book_seal.is_zero(), errors::BAD_CONFIG);
+            }
             assert(config.proof_version > 0 && config.schema_version > 0, errors::BAD_CONFIG);
             assert(
                 config.payroll_policy_root_high != 0 || config.payroll_policy_root_low != 0,
@@ -423,6 +472,7 @@ pub mod PayoPolicyAccount {
                 session_public_key: config.session_public_key,
                 pool: config.pool,
                 seal: config.seal,
+                book_seal: config.book_seal,
                 seal_mode: config.seal_mode,
                 proof_version: config.proof_version,
                 schema_version: config.schema_version,
@@ -544,7 +594,7 @@ pub mod PayoPolicyAccount {
             );
             assert_run_membership(policy.authorized_runs_root, leaf, run_path_bits, run_siblings);
             let (settlement_root, emitted_note_count) = assert_private_payroll_actions(
-                pool_calldata,
+                @self, policy, run_nullifier_high, run_nullifier_low, pool_calldata,
             );
             let chain_id = get_execution_info().unbox().tx_info.chain_id;
             let transaction_reference = settlement_transaction_reference_v1(

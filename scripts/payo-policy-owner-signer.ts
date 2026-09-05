@@ -68,6 +68,7 @@ const constraints: PolicySignerConstraints = {
   policyAccountAddress: required("PAYO_AGENT_POLICY_ACCOUNT_ADDRESS"),
   poolAddress: required("PAYO_STRK20_POOL_ADDRESS"),
   sealAddress: required("PAYO_AGENT_SEAL_ADDRESS"),
+  bookSealAddress: required("PAYO_VESTING_BOOK_SEAL_ADDRESS"),
   viewingPublicKey: required("PAYO_AGENT_POLICY_VIEWING_PUBLIC_KEY"),
   tokenAddresses: [
     required("PAYO_AGENT_STRK_TOKEN_ADDRESS"),

@@ -18,7 +18,12 @@ import { getDatabase } from "./db";
 import { requireOrganizationRoleWith } from "./repository";
 import { agentCapabilities, auditEvents, capabilityReservations } from "./schema";
 
-const RESERVATION_TTL_MS = 10 * 60 * 1000;
+// A payment intent is deliberately short-lived at admission, but production
+// payroll and settlement proofs can take several minutes each. Once admission
+// succeeds, the durable reservation (plus capability/policy expiry) is the
+// bounded authorization for preparation. Give that preparation enough room to
+// finish without weakening the five-minute intent replay window.
+const RESERVATION_TTL_MS = 30 * 60 * 1000;
 
 function assertIdempotencyKey(key: string): void {
   if (!/^[A-Za-z0-9._:-]{16,256}$/.test(key)) {
@@ -178,6 +183,8 @@ export async function reserveCapabilityPayment(input: {
         callCount: intents.length,
         requiresApproval: authorization.requiresApproval,
         expiresAt,
+        createdAt: now,
+        updatedAt: now,
       })
       .returning();
     await transaction.insert(auditEvents).values({

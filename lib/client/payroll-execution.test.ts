@@ -1,16 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildFxSnapshot } from "@/lib/domain/fx";
 import { referenceClassificationAnswers } from "@/lib/domain/classification";
+import type { EncryptedPayrollIntegrityBundleCreate } from "@/lib/domain/proof-bundle";
 import { claimCapabilityCommitmentV2, type ExceptionPublicInputsV2 } from "@/lib/domain/exception-protocol";
 import { generateUuidV7 } from "@/lib/domain/records";
 import { decryptVaultRecord, encryptVaultRecord, generateVaultPrincipal } from "@/lib/crypto/vault";
 import { hashProofCalldata } from "@/lib/proof/starknet-calldata";
 import { buildAdvancedObligationInputs } from "@/lib/proof/advanced-obligation-input";
 import { buildFxCatalogRoot, buildPayrollIntegrityInputsFromSerialized } from "@/lib/proof/input-builder";
+import { buildPayrollBookEntryInputs } from "@/lib/proof/vesting-transition-input";
 import {
   ADVANCED_OBLIGATION_CIRCUIT_SHA256,
   OBLIGATION_SNAPSHOT_LINK_CIRCUIT_SHA256,
   PAYROLL_INTEGRITY_CIRCUIT_SHA256,
+  VESTING_TRANSITION_CIRCUIT_SHA256,
+  VESTING_TRANSITION_VERIFICATION_KEY_SHA256,
   type ExceptionProofWorkerSuccess,
   type EncryptedPayrollWitness,
   type ProofWorkerSuccess,
@@ -30,6 +34,7 @@ import {
 } from "./payroll-execution";
 import { buildAdvancedPaymentPlanDraft } from "./advanced-agreement-draft";
 import { prepareObligationSnapshotPlan } from "./obligation-snapshot-plan";
+import { openStoredPayrollBookProof } from "./payroll-proof-recovery";
 
 const organizationId = "0198ddf0-9c00-7000-8000-000000000001";
 const chainId = "0x1";
@@ -68,7 +73,42 @@ async function prove(input: {
         agreements: encrypted.advancedBuildInput.agreements,
       })
     : undefined;
-  const proofCalldata = ["0x1", "0x2"];
+  const proofCalldata = Array.from({ length: 35 }, (_, index) => `0x${(index + 1).toString(16)}`);
+  let vestingBook: ProofWorkerSuccess["vestingBook"];
+  if ("advancedBuildInput" in encrypted && encrypted.advancedBuildInput.vestingBook) {
+    const stateInput = encrypted.advancedBuildInput.vestingBook;
+    const state = await buildPayrollBookEntryInputs({
+      payroll: built,
+      ownerAddress: stateInput.ownerAddress,
+      bookSealAddress: stateInput.bookSealAddress,
+      entryKind: stateInput.entryKind,
+      periodStart: BigInt(stateInput.periodStart),
+      periodEnd: BigInt(stateInput.periodEnd),
+      totalsSalt: `0x${"aa".repeat(32)}`,
+      ...(stateInput.attestation ? { attestation: stateInput.attestation } : {}),
+    });
+    const stateCalldata = Array.from({ length: 35 }, (_, index) => `0x${(index + 101).toString(16)}`);
+    vestingBook = {
+      proofVersion: 3,
+      entryKind: state.entryKind,
+      circuitSha256: VESTING_TRANSITION_CIRCUIT_SHA256,
+      verificationKeySha256: VESTING_TRANSITION_VERIFICATION_KEY_SHA256,
+      provingTimeMs: 10,
+      scheduleId: state.scheduleId,
+      previousStateCommitment: state.previousStateCommitment,
+      nextStateCommitment: state.nextStateCommitment,
+      releaseNullifier: state.releaseNullifier,
+      bookEntry: state.bookEntry,
+      bookEntryCommitment: state.bookEntryCommitment,
+      shards: [0, 1].map((shardIndex) => ({
+        shardIndex: shardIndex as 0 | 1,
+        proof: new Uint8Array([shardIndex + 3]),
+        proofCalldata: stateCalldata,
+        calldataHash: hashProofCalldata(stateCalldata),
+        publicInputs: state.publicInputs[shardIndex],
+      })) as NonNullable<ProofWorkerSuccess["vestingBook"]>["shards"],
+    };
+  }
   return {
     version: 1,
     type: "proof-complete",
@@ -85,6 +125,7 @@ async function prove(input: {
       calldataHash: hashProofCalldata(proofCalldata),
       publicInputs: advanced?.publicInputs[shardIndex] ?? built.publicInputs[shardIndex],
     })) as ProofWorkerSuccess["shards"],
+    ...(vestingBook ? { vestingBook } : {}),
   };
 }
 
@@ -168,6 +209,26 @@ function client(ready = true) {
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
   });
+  const vestingAuthorization = (runId: string) => ({
+    id: generateUuidV7(now.getTime() + 23),
+    organizationId,
+    runId,
+    payrollProofBundleId: generateUuidV7(now.getTime() + 24),
+    state: "complete" as const,
+    activeStep: "transition1" as const,
+    transactionHash: "0xb0c",
+    beginTransactionHash: "0xb1",
+    payrollShard0TransactionHash: "0xb2",
+    payrollShard1TransactionHash: "0xb3",
+    transitionShard0TransactionHash: "0xb4",
+    transitionShard1TransactionHash: "0xb0c",
+    attempts: 0,
+    lastErrorCode: null,
+    lastErrorMessage: null,
+    authorizedAt: now.toISOString(),
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+  });
   return {
     getFxSnapshots: vi.fn().mockImplementation((tokens: Array<"STRK" | "USDC">) =>
       Promise.resolve({ blockNumber: 1, snapshots: tokens.map((token) => snapshot(token)) })),
@@ -201,6 +262,7 @@ function client(ready = true) {
     createPayrollRun: vi.fn().mockResolvedValue({ run: {} }),
     transitionPayrollRun: vi.fn().mockResolvedValue({ run: {} }),
     storeEncryptedProofBundle: vi.fn().mockResolvedValue({ proofBundle: {} }),
+    getEncryptedProofBundle: vi.fn(),
     createSettlementIntent: vi.fn().mockImplementation(({ id }: { id: string }) =>
       Promise.resolve({ settlement: { id } })),
     linkAgentExecutionApproval: vi.fn().mockImplementation((input: {
@@ -222,6 +284,10 @@ function client(ready = true) {
       Promise.resolve({ authorization: authorization(runId) })),
     getPayrollAuthorization: vi.fn().mockImplementation((runId: string) =>
       Promise.resolve({ authorization: authorization(runId) })),
+    enqueueVestingAuthorization: vi.fn().mockImplementation(({ runId }: { runId: string }) =>
+      Promise.resolve({ authorization: vestingAuthorization(runId) })),
+    getVestingAuthorization: vi.fn().mockImplementation((runId: string) =>
+      Promise.resolve({ authorization: vestingAuthorization(runId) })),
     getSealedPayrollRecovery: vi.fn(),
     getEncryptedRecord: vi.fn(),
     provisionDirectPrivacyAccount: vi.fn().mockImplementation(({ runIds }: { runIds: string[] }) => Promise.resolve({
@@ -245,6 +311,37 @@ function client(ready = true) {
         replayed: false,
       },
     })),
+  };
+}
+
+function storedProofResponse(stored: EncryptedPayrollIntegrityBundleCreate) {
+  return {
+    proofBundle: {
+      id: stored.id,
+      organizationId: stored.organizationId,
+      runId: stored.runId,
+      proofType: stored.proofType,
+      proofVersion: stored.proofVersion,
+      subjectRecordId: stored.subjectRecordId,
+      proofPackage: {
+        schemaVersion: 1,
+        envelopeRecordId: stored.id,
+        envelopeRevision: stored.revision,
+        proofType: stored.proofType,
+        subjectRecordId: stored.subjectRecordId,
+        proofVersion: stored.proofVersion,
+        circuitSha256: stored.circuitSha256,
+        verificationKeySha256: stored.verificationKeySha256,
+        publicInputsHash: stored.publicInputsHash,
+        commonInputs: stored.commonInputs,
+        shardCalldataHashes: stored.shardCalldataHashes,
+      },
+      verificationState: "locally_verified",
+      verificationTransactionHash: null,
+      createdAt: now.toISOString(),
+      revision: stored.revision,
+      envelope: stored.envelope,
+    },
   };
 }
 
@@ -930,6 +1027,87 @@ describe("proof-bound payroll browser orchestration", () => {
     });
   });
 
+  it("authorizes both v2 shards and both v3 book shards before opening Ready", async () => {
+    const mockClient = client();
+    const input = await snapshotExecutionInput(mockClient);
+    const result = await executeProofBoundPayroll({
+      ...input,
+      vestingBook: { ownerAddress: input.snapshotPlan.snapshot.ownerAddress },
+    });
+
+    expect(input.prove).toHaveBeenCalledOnce();
+    expect(input.proveSnapshot).not.toHaveBeenCalled();
+    expect(mockClient.storeEncryptedProofBundle).toHaveBeenCalledTimes(1);
+    expect(mockClient.enqueuePayrollAuthorization).not.toHaveBeenCalled();
+    expect(mockClient.enqueueVestingAuthorization).toHaveBeenCalledOnce();
+    const request = mockClient.enqueueVestingAuthorization.mock.calls[0][0];
+    expect(request).toMatchObject({
+      runId: input.snapshotPlan.runId,
+      request: {
+        payrollProofBundleId: expect.any(String),
+        vestingBook: {
+          proofVersion: 3,
+          entryKind: "ordinary",
+          circuitSha256: VESTING_TRANSITION_CIRCUIT_SHA256,
+          verificationKeySha256: VESTING_TRANSITION_VERIFICATION_KEY_SHA256,
+          bookEntry: {
+            periodStart: "1767225600",
+            periodEnd: "1798761600",
+          },
+        },
+      },
+    });
+    expect(BigInt(request.request.vestingBook.bookEntry.ownerAddress)).toBe(
+      BigInt(input.snapshotPlan.snapshot.ownerAddress),
+    );
+    expect(request.request.payrollShards).toHaveLength(2);
+    expect(request.request.vestingBook.shards).toHaveLength(2);
+    expect(mockClient.enqueueVestingAuthorization.mock.invocationCallOrder[0]).toBeLessThan(
+      input.submitPayroll.mock.invocationCallOrder[0],
+    );
+    expect(mockClient.enqueueProofVerification).not.toHaveBeenCalled();
+    const action = input.submitPayroll.mock.calls[0][1];
+    expect(action.type).toBe("invoke");
+    expect(BigInt(action.contract)).toBe(BigInt(sealAddress));
+    expect(BigInt(action.calldata[4])).toBe(
+      BigInt(request.request.vestingBook.shards[0].publicInputs.bookEntryHigh),
+    );
+    expect(input.persistPendingSubmission).toHaveBeenCalledWith(expect.objectContaining({
+      version: 5,
+      authorizationMode: "vesting_book_v3",
+    }));
+    expect(result).toMatchObject({
+      runId: input.snapshotPlan.runId,
+      version: 5,
+      authorizationMode: "vesting_book_v3",
+      transactionHash: "0xfeed",
+      verificationQueued: true,
+    });
+  });
+
+  it("never opens Ready when the state/book authorization dies", async () => {
+    const mockClient = client();
+    const input = await snapshotExecutionInput(mockClient);
+    mockClient.enqueueVestingAuthorization.mockImplementationOnce(async ({ runId }: { runId: string }) => ({
+      authorization: {
+        ...(await mockClient.getVestingAuthorization(runId)).authorization,
+        state: "dead" as const,
+        transactionHash: null,
+        authorizedAt: null,
+        lastErrorCode: "STALE_VESTING_STATE",
+        lastErrorMessage: "The previous vesting state is stale.",
+      },
+    }));
+
+    await expect(executeProofBoundPayroll({
+      ...input,
+      vestingBook: { ownerAddress: input.snapshotPlan.snapshot.ownerAddress },
+    })).rejects.toThrow("State/book proof authorization failed: The previous vesting state is stale.");
+    expect(input.submitPayroll).not.toHaveBeenCalled();
+    expect(mockClient.createSettlementIntent).not.toHaveBeenCalled();
+    expect(input.persistPendingSubmission).not.toHaveBeenCalled();
+  });
+
   it("resumes the exact encrypted snapshot run after proof storage failed without creating another payroll", async () => {
     const mockClient = client();
     const input = await snapshotExecutionInput(mockClient);
@@ -937,10 +1115,16 @@ describe("proof-bound payroll browser orchestration", () => {
     mockClient.storeEncryptedProofBundle.mockRejectedValueOnce(
       new PayoApiError("Proof is bound to a different PAYO seal.", "PROOF_SEAL_MISMATCH", 400),
     );
+    const vestingBook = {
+      ownerAddress: input.snapshotPlan.snapshot.ownerAddress,
+      bookSealAddress: "0x789",
+      entryKind: "agent" as const,
+    };
 
     await expect(executeProofBoundPayroll({
       ...input,
       authorizeFxRoot,
+      vestingBook,
       autonomousAgent: {
         capabilityId: generateUuidV7(now.getTime() + 50),
         policyAccountAddress: "0x456",
@@ -970,6 +1154,7 @@ describe("proof-bound payroll browser orchestration", () => {
     await expect(executeProofBoundPayroll({
       ...input,
       authorizeFxRoot,
+      vestingBook,
       autonomousAgent: {
         capabilityId: generateUuidV7(now.getTime() + 50),
         policyAccountAddress: "0x456",
@@ -995,6 +1180,11 @@ describe("proof-bound payroll browser orchestration", () => {
     const input = await snapshotExecutionInput(mockClient);
     const capabilityId = generateUuidV7(now.getTime() + 50);
     const autonomousAgent = { capabilityId, policyAccountAddress: "0x456" };
+    const vestingBook = {
+      ownerAddress: input.snapshotPlan.snapshot.ownerAddress,
+      bookSealAddress: "0x789",
+      entryKind: "agent" as const,
+    };
     mockClient.stageDirectPrivacyRunWitness.mockRejectedValueOnce(
       new PayoApiError(
         "The autonomous witness is not encrypted to this exact executor run.",
@@ -1005,10 +1195,26 @@ describe("proof-bound payroll browser orchestration", () => {
 
     await expect(executeProofBoundPayroll({
       ...input,
+      vestingBook,
       autonomousAgent,
     })).rejects.toMatchObject({ code: "DIRECT_WITNESS_RECIPIENT_INVALID" });
 
     const persisted = mockClient.createPayrollRun.mock.calls[0][0];
+    const stored = mockClient.storeEncryptedProofBundle.mock.calls[0][0];
+    mockClient.getEncryptedProofBundle.mockResolvedValue(storedProofResponse(stored));
+    mockClient.provisionDirectPrivacyAccount.mockImplementation(({ runIds }: { runIds: string[] }) => Promise.resolve({
+      account: {
+        id: generateUuidV7(now.getTime() + 40),
+        proofPrincipal: principal,
+        activationState: "active" as const,
+      },
+      authorizedRuns: [{
+        runId: runIds[0],
+        runVersion: 2,
+        proofBundleId: stored.id,
+      }],
+      configurationCall: {},
+    }));
     mockClient.getPayrollRun.mockResolvedValue({
       run: {
         id: persisted.id,
@@ -1027,6 +1233,7 @@ describe("proof-bound payroll browser orchestration", () => {
 
     await expect(executeProofBoundPayroll({
       ...input,
+      vestingBook,
       autonomousAgent,
     })).resolves.toMatchObject({
       mode: "autonomous_bounded",
@@ -1036,9 +1243,11 @@ describe("proof-bound payroll browser orchestration", () => {
     });
 
     expect(input.prove).toHaveBeenCalledTimes(1);
-    expect(input.proveSnapshot).toHaveBeenCalledTimes(1);
+    expect(input.proveSnapshot).not.toHaveBeenCalled();
     expect(mockClient.createPayrollRun).toHaveBeenCalledTimes(1);
     expect(mockClient.storeEncryptedProofBundle).toHaveBeenCalledTimes(1);
+    expect(mockClient.getEncryptedProofBundle).toHaveBeenCalledWith(stored.id);
+    expect(mockClient.enqueueVestingAuthorization).toHaveBeenCalledTimes(2);
     expect(mockClient.provisionDirectPrivacyAccount).toHaveBeenCalledTimes(2);
     expect(mockClient.stageDirectPrivacyRunWitness).toHaveBeenCalledTimes(2);
     expect(mockClient.stageDirectPrivacyRunWitness.mock.calls[1][0].encryptedWitness.aad).toMatchObject({
@@ -1047,6 +1256,17 @@ describe("proof-bound payroll browser orchestration", () => {
       recordId: input.snapshotPlan.runId,
       revision: 2,
     });
+
+    const tampered = storedProofResponse(stored);
+    tampered.proofBundle.proofPackage.publicInputsHash = `0x${"99".repeat(32)}`;
+    mockClient.getEncryptedProofBundle.mockResolvedValueOnce(tampered);
+    await expect(openStoredPayrollBookProof({
+      client: mockClient as unknown as PayoClient,
+      proofBundleId: stored.id,
+      organizationId,
+      runId: input.snapshotPlan.runId,
+      principal,
+    })).rejects.toThrow("decrypted payroll public inputs differ");
   });
 
   it("links the exact MCP execution before opening Ready for human approval", async () => {

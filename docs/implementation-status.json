@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-09-01",
+  "updatedAt": "2026-09-05",
   "scoring": {
     "complete": 1,
     "partial": 0.5,
@@ -8,29 +8,497 @@
     "blocked": 0
   },
   "roadmap": [
-    { "id": "P0-01", "phase": 0, "requirement": "Canonical encrypted schemas and cross-language commitment encoding", "status": "complete", "evidence": ["lib/domain/records.ts", "lib/crypto/vault.ts", "lib/crypto/commitments.ts", "circuits/payroll_integrity/src/main.nr", "contracts/src/commitments.cairo", "vectors/commitments-v1.json"], "tests": ["lib/domain/records.test.ts", "lib/crypto/vault.test.ts", "lib/crypto/commitments.test.ts", "nargo test", "snforge test"] },
-    { "id": "P0-02", "phase": 0, "requirement": "Roadmap and full architecture specification", "status": "complete", "evidence": ["README.md", "architecture.md", "MASTER_PLAN.md"], "tests": ["manual documentation audit"] },
-    { "id": "P0-03", "phase": 0, "requirement": "Pinned Starknet, Scarb, Noir, Barretenberg, and Garaga toolchains", "status": "complete", "evidence": ["toolchains.lock.json", "package.json", "package-lock.json", "contracts/Scarb.toml", ".github/workflows/proof-artifacts.yml"], "tests": ["npm ci", "scarb build", "nargo build"] },
-    { "id": "P0-04", "phase": 0, "requirement": "Explicit visible-versus-hidden privacy model", "status": "complete", "evidence": ["README.md", "architecture.md", "lib/domain/privacy.ts", "lib/persistence/repository.ts"], "tests": ["lib/domain/privacy.test.ts", "manual documentation audit"] },
-    { "id": "P0-05", "phase": 0, "requirement": "Native Circle USDC verified against Ready and live STRK20 pool before enablement", "status": "complete", "evidence": ["app/starknet/tokens.ts", "evidence/usdc-mainnet.json", "docs/usdc-mainnet-evidence.md", "scripts/verify-usdc-mainnet.mjs"], "tests": ["scripts/lib/usdc-evidence.test.mjs", "npm run verify:usdc"] },
-
-    { "id": "P1-01", "phase": 1, "requirement": "Fixed 64-leaf Noir circuit with at most 50 real recipients", "status": "complete", "evidence": ["circuits/payroll_integrity/src/main.nr"], "tests": ["nargo test", "nargo build"] },
-    { "id": "P1-02", "phase": 1, "requirement": "Completeness, uniqueness, arithmetic, policy, FX, schedule, and final-pay proofs", "status": "complete", "evidence": ["circuits/payroll_integrity/src/main.nr", "lib/proof/commitments.ts", "scripts/generate-payroll-proof-input.ts"], "tests": ["45 nargo tests"] },
-    { "id": "P1-03", "phase": 1, "requirement": "Version-pinned Garaga verifier", "status": "complete", "evidence": ["contracts/integrity_verifier/src", "contracts/integrity_verifier/tests", "contracts/src/integrity_bundle_verifier.cairo", "contracts/src/payroll_seal.cairo", ".github/workflows/proof-artifacts.yml", "docs/phase1-evidence.md"], "tests": ["two native bb self-verifications", "committed and freshly generated real Garaga proof tests", "real proof bundle and Payroll Seal integration", "https://github.com/Tutulii/private-payroll/actions/runs/32695106358"] },
-    { "id": "P1-04", "phase": 1, "requirement": "Browser-worker proof generation with minimal public outputs", "status": "complete", "evidence": ["lib/proof/payroll-proof.worker.ts", "lib/proof/protocol.ts", "app/proof-benchmark/page.tsx", "public/circuits/payroll_integrity-v1.json", ".github/workflows/proof-artifacts.yml", "docs/phase1-evidence.md"], "tests": ["npm run typecheck", "npm run build", "two browser Web Worker proofs self-verified in Chromium 151", "https://github.com/Tutulii/private-payroll/actions/runs/32695106358"] },
-    { "id": "P1-05", "phase": 1, "requirement": "US and UK reference policy packs", "status": "complete", "evidence": ["lib/policy/engine.ts", "lib/policy/reference-packs.ts"], "tests": ["lib/policy/reference-packs.test.ts", "nargo test"] },
-
-    { "id": "P2-01", "phase": 2, "requirement": "STRK and native USDC descriptors with exact decimals", "status": "complete", "evidence": ["app/starknet/tokens.ts"], "tests": ["npm run typecheck"] },
-    { "id": "P2-02", "phase": 2, "requirement": "Single-token and mixed-token payroll batches", "status": "complete", "evidence": ["app/payroll/page.tsx", "app/starknet/starknet-wallet.tsx", "lib/client/payroll-execution.ts", "evidence/payo-strk-mainnet.json", "evidence/payo-usdc-mainnet.json", "evidence/payo-mixed-mainnet.json", "scripts/verify-payo-strk-mainnet.mjs", "scripts/verify-payo-payroll-mainnet.mjs", "docs/phase2-evidence.md"], "tests": ["lib/client/payroll-execution.test.ts", "lib/client/payroll-recovery-state.test.ts", "lib/starknet/private-payroll.test.ts", "scripts/lib/payo-strk-evidence.test.mjs", "scripts/lib/payo-payroll-evidence.test.mjs", "live Ready STRK-only, native-USDC-only, and mixed STRK/USDC payrolls durably finalized with both proof shards verified onchain", "npm run verify:payo-strk", "npm run verify:payo-usdc", "npm run verify:payo-mixed"] },
-    { "id": "P2-03", "phase": 2, "requirement": "Encrypted organizations, agreements, runs, proof bundles, and receipts", "status": "complete", "evidence": ["app/payroll/page.tsx", "app/team/page.tsx", "app/activity/page.tsx", "app/vault/payo-vault.tsx", "app/api/v1", "lib/client", "lib/persistence/schema.ts", "lib/persistence/repository.ts", "docs/phase2-evidence.md"], "tests": ["lib/client/encrypted-records.test.ts", "lib/client/vault-workspace.test.ts", "lib/client/vault-admin.test.ts", "lib/client/vault-rotation.test.ts", "lib/client/agent-capabilities.test.ts", "lib/client/claim-workflows.test.ts", "lib/persistence/database.integration.test.ts"] },
-    { "id": "P2-04", "phase": 2, "requirement": "Durable idempotency, confirmation recovery, reorg handling, and indexing", "status": "complete", "evidence": ["lib/persistence/settlement-repository.ts", "lib/persistence/proof-verification-repository.ts", "lib/persistence/capability-reservations.ts", "lib/persistence/chain-indexer-repository.ts", "lib/server/confirmation-worker.ts", "lib/server/chain-indexer.ts", "app/api/internal", "docs/phase2-evidence.md"], "tests": ["lib/persistence/database.integration.test.ts", "lib/server/confirmation-worker.test.ts", "lib/server/chain-indexer.test.ts", "lib/server/proof-relayer.test.ts"] },
-    { "id": "P2-05", "phase": 2, "requirement": "Deployed seal, verifier, and policy-registry contracts", "status": "complete", "evidence": ["contracts/integrity_verifier", "contracts/src/integrity_bundle_verifier.cairo", "contracts/src/payroll_seal.cairo", "contracts/src/policy_registry.cairo", "contracts/src/obligation_registry.cairo", "contracts/src/tenant_obligation_registry.cairo", "app/deployment/page.tsx", "app/api/v1/deployment-artifacts/route.ts", "lib/server/payo-deployment-artifacts.ts", "lib/starknet/payo-deployment-plan.ts", "lib/starknet/payo-registry.ts", "scripts/lib/payo-contract-artifacts.mjs", "scripts/test-phase2-devnet.mjs", "scripts/payo-mainnet-deployment.mjs", "scripts/payo-multitenant-mainnet.mjs", ".github/workflows/proof-artifacts.yml", "docs/phase2-evidence.md", "docs/phase2-mainnet-deployment.md", "docs/multitenant-mainnet-evidence.md"], "tests": ["30 PAYO Cairo tests including tenant-root ownership, immediate registry activation, FX-publisher freshness/authorization, and fuzzing", "3 real-proof generated-verifier/full-topology tests", "current five-contract Starknet RPC Devnet deployment, confirming-block activation, two newly generated deployment-bound proofs, final proven status, and replay rejection", "deterministic Mainnet topology planner tests", "local Ready deployment page and current artifact-package route smoke test", "Mainnet tenant registry declaration, deterministic deployment and activation receipts", "19/19 multi-tenant Mainnet topology checks passed at block 13935809"] },
-
-    { "id": "P3-01", "phase": 3, "requirement": "StatutoryCorrect proof", "status": "partial", "evidence": ["app/team/page.tsx", "lib/client/agreement-form-workflow.ts", "lib/policy/engine.ts", "lib/policy/execution-catalog.ts", "lib/client/payroll-execution.ts", "circuits/payroll_integrity/src/main.nr", "scripts/generate-phase3-matrix-fixture.ts", "scripts/verify-phase3-ui-workflow-evidence.ts", "evidence/phase3-devnet-fixtures/advanced-matrix-ui-origin.json", "evidence/phase3-matrix-devnet.json", "evidence/phase3-private-settlement-devnet.json", "docs/phase3-evidence.md"], "tests": ["lib/client/agreement-form-workflow.test.ts", "lib/policy/execution-catalog.test.ts", "lib/client/payroll-execution.test.ts", "nargo test", "production-command UI-origin statutory record-to-proof validator", "standalone employee statutory advanced-v2 Devnet verification", "official-pool statutory workflow output plus atomic PAYO seal and real Garaga verification"] },
-    { "id": "P3-02", "phase": 3, "requirement": "FXFloor proof", "status": "partial", "evidence": ["app/team/page.tsx", "app/api/v1/fx-snapshots/route.ts", "lib/client/agreement-form-workflow.ts", "lib/domain/fx.ts", "lib/server/pragma-fx.ts", "lib/client/payroll-execution.ts", "circuits/payroll_integrity/src/main.nr", "scripts/generate-phase3-matrix-fixture.ts", "scripts/verify-phase3-ui-workflow-evidence.ts", "scripts/verify-phase3-pragma-mainnet.ts", "evidence/pragma-phase3-mainnet.json", "evidence/phase3-devnet-fixtures/advanced-matrix-ui-origin.json", "evidence/phase3-matrix-devnet.json", "evidence/phase3-private-settlement-devnet.json", "docs/phase3-evidence.md"], "tests": ["lib/client/agreement-form-workflow.test.ts", "lib/client/payroll-execution.test.ts", "lib/domain/fx.test.ts", "lib/server/pragma-fx.test.ts", "live pinned-block Mainnet STRK/USD median plus 24-hour TWAP and explicit USDC/USD TWAP unsupported probe", "nargo test", "production-command UI-origin FX-floor record-to-proof validator", "standalone positive FX-floor advanced-v2 Devnet verification", "official-pool FX-floor workflow output plus atomic PAYO seal and real Garaga verification"] },
-    { "id": "P3-03", "phase": 3, "requirement": "ClassificationConsistency proof", "status": "partial", "evidence": ["app/team/page.tsx", "lib/client/agreement-form-workflow.ts", "lib/domain/classification.ts", "lib/domain/obligations.ts", "lib/domain/records.ts", "lib/client/agreement-directory.ts", "lib/client/payroll-execution.ts", "circuits/payroll_integrity/src/main.nr", "scripts/verify-phase3-ui-workflow-evidence.ts", "evidence/phase3-devnet-fixtures/advanced-matrix-ui-origin.json", "evidence/phase3-devnet.json", "evidence/phase3-matrix-devnet.json", "evidence/phase3-private-settlement-devnet.json", "docs/phase3-evidence.md"], "tests": ["lib/client/agreement-form-workflow.test.ts", "lib/domain/classification.test.ts", "lib/client/agreement-directory.test.ts", "lib/client/payroll-execution.test.ts", "nargo test", "production-command UI-origin classification record-to-proof validator", "standalone employee classification advanced-v2 Devnet verification", "standalone Devnet tamper and replay rejection", "official-pool classification workflow output plus atomic PAYO seal and real Garaga verification"] },
-    { "id": "P3-04", "phase": 3, "requirement": "Batch, recurring, checkpoint stream, milestone, and private vesting plans", "status": "partial", "evidence": ["app/team/page.tsx", "app/payroll/page.tsx", "app/api/v1/obligation-schedules/route.ts", "app/api/internal/recurring-scheduler/route.ts", "lib/domain/obligations.ts", "lib/domain/obligation-schedule.ts", "lib/persistence/obligation-schedule-repository.ts", "lib/persistence/schema.ts", "drizzle/0008_busy_marauders.sql", "lib/client/advanced-agreement-draft.ts", "lib/client/agreement-form-workflow.ts", "circuits/advanced_obligation/src/main.nr", "contracts/advanced_verifier", "scripts/generate-phase3-ui-workflow-fixture.ts", "scripts/generate-phase3-matrix-fixture.ts", "scripts/verify-phase3-ui-workflow-evidence.ts", "scripts/generate-phase3-matrix-disclosure.ts", "scripts/test-phase3-devnet.mjs", "scripts/test-phase3-strk20-devnet.mjs", "tests/browser/phase3-production-controls.spec.ts", "evidence/phase3-devnet-fixtures/advanced-matrix-ui-origin.json", "evidence/phase3-devnet.json", "evidence/phase3-matrix-devnet.json", "evidence/phase3-private-settlement-devnet.json", "evidence/phase3-matrix-disclosure.json", "docs/phase3-evidence.md"], "tests": ["lib/domain/obligation-schedule.test.ts", "lib/persistence/database.integration.test.ts", "lib/domain/obligations.test.ts", "lib/client/advanced-agreement-draft.test.ts", "lib/client/agreement-form-workflow.test.ts", "scripts/lib/phase3-ui-workflow-fixture.test.ts", "20/20 isolated PostgreSQL integration tests including concurrent schedule registration, idempotency, revision supersession, and materialization", "contracts/phase3_integration/tests/phase3_real_proofs.cairo", "seven production-command encrypted record-to-proof links", "Linux Chromium exercised all seven rendered production agreement forms", "https://github.com/Tutulii/private-payroll/actions/runs/32973338048", "standalone seven-workflow advanced-v2 Devnet verification", "official-pool seven-output private STRK settlement atomically tied to PAYO seal", "real Garaga shard verification, tamper rejection, pool-originated replay rejection, and private balance rediscovery", "workflow-specific recipient-encrypted worker line openings with wrong-recipient, expiry, and revocation rejection"] },
-    { "id": "P3-05", "phase": 3, "requirement": "OffboardingCorrect proof", "status": "partial", "evidence": ["app/team/page.tsx", "lib/domain/obligations.ts", "lib/client/agreement-directory.ts", "lib/client/agreement-form-workflow.ts", "circuits/advanced_obligation/src/main.nr", "contracts/advanced_verifier", "scripts/generate-phase3-matrix-fixture.ts", "scripts/verify-phase3-ui-workflow-evidence.ts", "scripts/generate-phase3-matrix-disclosure.ts", "evidence/phase3-devnet-fixtures/advanced-matrix-ui-origin.json", "evidence/phase3-matrix-devnet.json", "evidence/phase3-private-settlement-devnet.json", "evidence/phase3-matrix-disclosure.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-final-pay-package.json", "docs/phase3-evidence.md"], "tests": ["lib/domain/obligations.test.ts", "lib/client/agreement-directory.test.ts", "lib/client/agreement-form-workflow.test.ts", "nargo test", "production-command zero-safe final-pay record-to-proof validator", "standalone complete final-pay advanced-v2 Devnet verification", "official-pool final-pay workflow output plus atomic PAYO seal and real Garaga verification", "final-pay recipient-encrypted line opening with wrong-recipient, expiry, and revocation rejection"] },
+    {
+      "id": "P0-01",
+      "phase": 0,
+      "requirement": "Canonical encrypted schemas and cross-language commitment encoding",
+      "status": "complete",
+      "evidence": [
+        "lib/domain/records.ts",
+        "lib/crypto/vault.ts",
+        "lib/crypto/commitments.ts",
+        "circuits/payroll_integrity/src/main.nr",
+        "contracts/src/commitments.cairo",
+        "vectors/commitments-v1.json"
+      ],
+      "tests": [
+        "lib/domain/records.test.ts",
+        "lib/crypto/vault.test.ts",
+        "lib/crypto/commitments.test.ts",
+        "nargo test",
+        "snforge test"
+      ]
+    },
+    {
+      "id": "P0-02",
+      "phase": 0,
+      "requirement": "Roadmap and full architecture specification",
+      "status": "complete",
+      "evidence": [
+        "README.md",
+        "architecture.md",
+        "MASTER_PLAN.md"
+      ],
+      "tests": [
+        "manual documentation audit"
+      ]
+    },
+    {
+      "id": "P0-03",
+      "phase": 0,
+      "requirement": "Pinned Starknet, Scarb, Noir, Barretenberg, and Garaga toolchains",
+      "status": "complete",
+      "evidence": [
+        "toolchains.lock.json",
+        "package.json",
+        "package-lock.json",
+        "contracts/Scarb.toml",
+        ".github/workflows/proof-artifacts.yml"
+      ],
+      "tests": [
+        "npm ci",
+        "scarb build",
+        "nargo build"
+      ]
+    },
+    {
+      "id": "P0-04",
+      "phase": 0,
+      "requirement": "Explicit visible-versus-hidden privacy model",
+      "status": "complete",
+      "evidence": [
+        "README.md",
+        "architecture.md",
+        "lib/domain/privacy.ts",
+        "lib/persistence/repository.ts"
+      ],
+      "tests": [
+        "lib/domain/privacy.test.ts",
+        "manual documentation audit"
+      ]
+    },
+    {
+      "id": "P0-05",
+      "phase": 0,
+      "requirement": "Native Circle USDC verified against Ready and live STRK20 pool before enablement",
+      "status": "complete",
+      "evidence": [
+        "app/starknet/tokens.ts",
+        "evidence/usdc-mainnet.json",
+        "docs/usdc-mainnet-evidence.md",
+        "scripts/verify-usdc-mainnet.mjs"
+      ],
+      "tests": [
+        "scripts/lib/usdc-evidence.test.mjs",
+        "npm run verify:usdc"
+      ]
+    },
+    {
+      "id": "P1-01",
+      "phase": 1,
+      "requirement": "Fixed 64-leaf Noir circuit with at most 50 real recipients",
+      "status": "complete",
+      "evidence": [
+        "circuits/payroll_integrity/src/main.nr"
+      ],
+      "tests": [
+        "nargo test",
+        "nargo build"
+      ]
+    },
+    {
+      "id": "P1-02",
+      "phase": 1,
+      "requirement": "Completeness, uniqueness, arithmetic, policy, FX, schedule, and final-pay proofs",
+      "status": "complete",
+      "evidence": [
+        "circuits/payroll_integrity/src/main.nr",
+        "lib/proof/commitments.ts",
+        "scripts/generate-payroll-proof-input.ts"
+      ],
+      "tests": [
+        "45 nargo tests"
+      ]
+    },
+    {
+      "id": "P1-03",
+      "phase": 1,
+      "requirement": "Version-pinned Garaga verifier",
+      "status": "complete",
+      "evidence": [
+        "contracts/integrity_verifier/src",
+        "contracts/integrity_verifier/tests",
+        "contracts/src/integrity_bundle_verifier.cairo",
+        "contracts/src/payroll_seal.cairo",
+        ".github/workflows/proof-artifacts.yml",
+        "docs/phase1-evidence.md"
+      ],
+      "tests": [
+        "two native bb self-verifications",
+        "committed and freshly generated real Garaga proof tests",
+        "real proof bundle and Payroll Seal integration",
+        "https://github.com/Tutulii/private-payroll/actions/runs/32695106358"
+      ]
+    },
+    {
+      "id": "P1-04",
+      "phase": 1,
+      "requirement": "Browser-worker proof generation with minimal public outputs",
+      "status": "complete",
+      "evidence": [
+        "lib/proof/payroll-proof.worker.ts",
+        "lib/proof/protocol.ts",
+        "app/proof-benchmark/page.tsx",
+        "public/circuits/payroll_integrity-v1.json",
+        ".github/workflows/proof-artifacts.yml",
+        "docs/phase1-evidence.md"
+      ],
+      "tests": [
+        "npm run typecheck",
+        "npm run build",
+        "two browser Web Worker proofs self-verified in Chromium 151",
+        "https://github.com/Tutulii/private-payroll/actions/runs/32695106358"
+      ]
+    },
+    {
+      "id": "P1-05",
+      "phase": 1,
+      "requirement": "US, UK, and Canadian reference policy packs",
+      "status": "complete",
+      "evidence": [
+        "lib/policy/engine.ts",
+        "lib/policy/reference-packs.ts",
+        "docs/reference-policy-packs.md"
+      ],
+      "tests": [
+        "lib/policy/reference-packs.test.ts",
+        "nargo test"
+      ]
+    },
+    {
+      "id": "P2-01",
+      "phase": 2,
+      "requirement": "STRK and native USDC descriptors with exact decimals",
+      "status": "complete",
+      "evidence": [
+        "app/starknet/tokens.ts"
+      ],
+      "tests": [
+        "npm run typecheck"
+      ]
+    },
+    {
+      "id": "P2-02",
+      "phase": 2,
+      "requirement": "Single-token and mixed-token payroll batches",
+      "status": "complete",
+      "evidence": [
+        "app/payroll/page.tsx",
+        "app/starknet/starknet-wallet.tsx",
+        "lib/client/payroll-execution.ts",
+        "evidence/payo-strk-mainnet.json",
+        "evidence/payo-usdc-mainnet.json",
+        "evidence/payo-mixed-mainnet.json",
+        "scripts/verify-payo-strk-mainnet.mjs",
+        "scripts/verify-payo-payroll-mainnet.mjs",
+        "docs/phase2-evidence.md"
+      ],
+      "tests": [
+        "lib/client/payroll-execution.test.ts",
+        "lib/client/payroll-recovery-state.test.ts",
+        "lib/starknet/private-payroll.test.ts",
+        "scripts/lib/payo-strk-evidence.test.mjs",
+        "scripts/lib/payo-payroll-evidence.test.mjs",
+        "live Ready STRK-only, native-USDC-only, and mixed STRK/USDC payrolls durably finalized with both proof shards verified onchain",
+        "npm run verify:payo-strk",
+        "npm run verify:payo-usdc",
+        "npm run verify:payo-mixed"
+      ]
+    },
+    {
+      "id": "P2-03",
+      "phase": 2,
+      "requirement": "Encrypted organizations, agreements, runs, proof bundles, and receipts",
+      "status": "complete",
+      "evidence": [
+        "app/payroll/page.tsx",
+        "app/team/page.tsx",
+        "app/activity/page.tsx",
+        "app/vault/payo-vault.tsx",
+        "app/api/v1",
+        "lib/client",
+        "lib/persistence/schema.ts",
+        "lib/persistence/repository.ts",
+        "docs/phase2-evidence.md"
+      ],
+      "tests": [
+        "lib/client/encrypted-records.test.ts",
+        "lib/client/vault-workspace.test.ts",
+        "lib/client/vault-admin.test.ts",
+        "lib/client/vault-rotation.test.ts",
+        "lib/client/agent-capabilities.test.ts",
+        "lib/client/claim-workflows.test.ts",
+        "lib/persistence/database.integration.test.ts"
+      ]
+    },
+    {
+      "id": "P2-04",
+      "phase": 2,
+      "requirement": "Durable idempotency, confirmation recovery, reorg handling, and indexing",
+      "status": "complete",
+      "evidence": [
+        "lib/persistence/settlement-repository.ts",
+        "lib/persistence/proof-verification-repository.ts",
+        "lib/persistence/capability-reservations.ts",
+        "lib/persistence/chain-indexer-repository.ts",
+        "lib/server/confirmation-worker.ts",
+        "lib/server/chain-indexer.ts",
+        "app/api/internal",
+        "docs/phase2-evidence.md"
+      ],
+      "tests": [
+        "lib/persistence/database.integration.test.ts",
+        "lib/server/confirmation-worker.test.ts",
+        "lib/server/chain-indexer.test.ts",
+        "lib/server/proof-relayer.test.ts"
+      ]
+    },
+    {
+      "id": "P2-05",
+      "phase": 2,
+      "requirement": "Deployed seal, verifier, and policy-registry contracts",
+      "status": "complete",
+      "evidence": [
+        "contracts/integrity_verifier",
+        "contracts/src/integrity_bundle_verifier.cairo",
+        "contracts/src/payroll_seal.cairo",
+        "contracts/src/policy_registry.cairo",
+        "contracts/src/obligation_registry.cairo",
+        "contracts/src/tenant_obligation_registry.cairo",
+        "app/deployment/page.tsx",
+        "app/api/v1/deployment-artifacts/route.ts",
+        "lib/server/payo-deployment-artifacts.ts",
+        "lib/starknet/payo-deployment-plan.ts",
+        "lib/starknet/payo-registry.ts",
+        "scripts/lib/payo-contract-artifacts.mjs",
+        "scripts/test-phase2-devnet.mjs",
+        "scripts/payo-mainnet-deployment.mjs",
+        "scripts/payo-multitenant-mainnet.mjs",
+        ".github/workflows/proof-artifacts.yml",
+        "docs/phase2-evidence.md",
+        "docs/phase2-mainnet-deployment.md",
+        "docs/multitenant-mainnet-evidence.md"
+      ],
+      "tests": [
+        "30 PAYO Cairo tests including tenant-root ownership, immediate registry activation, FX-publisher freshness/authorization, and fuzzing",
+        "3 real-proof generated-verifier/full-topology tests",
+        "current five-contract Starknet RPC Devnet deployment, confirming-block activation, two newly generated deployment-bound proofs, final proven status, and replay rejection",
+        "deterministic Mainnet topology planner tests",
+        "local Ready deployment page and current artifact-package route smoke test",
+        "Mainnet tenant registry declaration, deterministic deployment and activation receipts",
+        "19/19 multi-tenant Mainnet topology checks passed at block 13935809"
+      ]
+    },
+    {
+      "id": "P3-01",
+      "phase": 3,
+      "requirement": "StatutoryCorrect proof",
+      "status": "partial",
+      "evidence": [
+        "app/team/page.tsx",
+        "lib/client/agreement-form-workflow.ts",
+        "lib/policy/engine.ts",
+        "lib/policy/execution-catalog.ts",
+        "lib/client/payroll-execution.ts",
+        "circuits/payroll_integrity/src/main.nr",
+        "scripts/generate-phase3-matrix-fixture.ts",
+        "scripts/verify-phase3-ui-workflow-evidence.ts",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-ui-origin.json",
+        "evidence/phase3-matrix-devnet.json",
+        "evidence/phase3-private-settlement-devnet.json",
+        "docs/phase3-evidence.md"
+      ],
+      "tests": [
+        "lib/client/agreement-form-workflow.test.ts",
+        "lib/policy/execution-catalog.test.ts",
+        "lib/client/payroll-execution.test.ts",
+        "nargo test",
+        "production-command UI-origin statutory record-to-proof validator",
+        "standalone employee statutory advanced-v2 Devnet verification",
+        "official-pool statutory workflow output plus atomic PAYO seal and real Garaga verification"
+      ]
+    },
+    {
+      "id": "P3-02",
+      "phase": 3,
+      "requirement": "FXFloor proof",
+      "status": "partial",
+      "evidence": [
+        "app/team/page.tsx",
+        "app/api/v1/fx-snapshots/route.ts",
+        "lib/client/agreement-form-workflow.ts",
+        "lib/domain/fx.ts",
+        "lib/server/pragma-fx.ts",
+        "lib/client/payroll-execution.ts",
+        "circuits/payroll_integrity/src/main.nr",
+        "scripts/generate-phase3-matrix-fixture.ts",
+        "scripts/verify-phase3-ui-workflow-evidence.ts",
+        "scripts/verify-phase3-pragma-mainnet.ts",
+        "evidence/pragma-phase3-mainnet.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-ui-origin.json",
+        "evidence/phase3-matrix-devnet.json",
+        "evidence/phase3-private-settlement-devnet.json",
+        "docs/phase3-evidence.md"
+      ],
+      "tests": [
+        "lib/client/agreement-form-workflow.test.ts",
+        "lib/client/payroll-execution.test.ts",
+        "lib/domain/fx.test.ts",
+        "lib/server/pragma-fx.test.ts",
+        "live pinned-block Mainnet STRK/USD median plus 24-hour TWAP and explicit USDC/USD TWAP unsupported probe",
+        "nargo test",
+        "production-command UI-origin FX-floor record-to-proof validator",
+        "standalone positive FX-floor advanced-v2 Devnet verification",
+        "official-pool FX-floor workflow output plus atomic PAYO seal and real Garaga verification"
+      ]
+    },
+    {
+      "id": "P3-03",
+      "phase": 3,
+      "requirement": "ClassificationConsistency proof",
+      "status": "partial",
+      "evidence": [
+        "app/team/page.tsx",
+        "lib/client/agreement-form-workflow.ts",
+        "lib/domain/classification.ts",
+        "lib/domain/obligations.ts",
+        "lib/domain/records.ts",
+        "lib/client/agreement-directory.ts",
+        "lib/client/payroll-execution.ts",
+        "circuits/payroll_integrity/src/main.nr",
+        "scripts/verify-phase3-ui-workflow-evidence.ts",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-ui-origin.json",
+        "evidence/phase3-devnet.json",
+        "evidence/phase3-matrix-devnet.json",
+        "evidence/phase3-private-settlement-devnet.json",
+        "docs/phase3-evidence.md"
+      ],
+      "tests": [
+        "lib/client/agreement-form-workflow.test.ts",
+        "lib/domain/classification.test.ts",
+        "lib/client/agreement-directory.test.ts",
+        "lib/client/payroll-execution.test.ts",
+        "nargo test",
+        "production-command UI-origin classification record-to-proof validator",
+        "standalone employee classification advanced-v2 Devnet verification",
+        "standalone Devnet tamper and replay rejection",
+        "official-pool classification workflow output plus atomic PAYO seal and real Garaga verification"
+      ]
+    },
+    {
+      "id": "P3-04",
+      "phase": 3,
+      "requirement": "Batch, recurring, checkpoint stream, milestone, and private vesting plans",
+      "status": "partial",
+      "evidence": [
+        "app/team/page.tsx",
+        "app/payroll/page.tsx",
+        "app/api/v1/obligation-schedules/route.ts",
+        "app/api/internal/recurring-scheduler/route.ts",
+        "lib/domain/obligations.ts",
+        "lib/domain/obligation-schedule.ts",
+        "lib/persistence/obligation-schedule-repository.ts",
+        "lib/persistence/schema.ts",
+        "drizzle/0008_busy_marauders.sql",
+        "lib/client/advanced-agreement-draft.ts",
+        "lib/client/agreement-form-workflow.ts",
+        "circuits/advanced_obligation/src/main.nr",
+        "contracts/advanced_verifier",
+        "scripts/generate-phase3-ui-workflow-fixture.ts",
+        "scripts/generate-phase3-matrix-fixture.ts",
+        "scripts/verify-phase3-ui-workflow-evidence.ts",
+        "scripts/generate-phase3-matrix-disclosure.ts",
+        "scripts/test-phase3-devnet.mjs",
+        "scripts/test-phase3-strk20-devnet.mjs",
+        "tests/browser/phase3-production-controls.spec.ts",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-ui-origin.json",
+        "evidence/phase3-devnet.json",
+        "evidence/phase3-matrix-devnet.json",
+        "evidence/phase3-private-settlement-devnet.json",
+        "evidence/phase3-matrix-disclosure.json",
+        "docs/phase3-evidence.md",
+        "circuits/vesting_transition",
+        "contracts/vesting_verifier_v3",
+        "contracts/src/vesting_book_seal.cairo",
+        "contracts/vesting_integration",
+        "lib/domain/vesting-tax.ts",
+        "lib/persistence/vesting-authorization-repository.ts",
+        "lib/server/vesting-authorization-relayer.ts",
+        "app/api/v1/runs/[id]/vesting-authorization",
+        "evidence/vesting-tax-devnet.json",
+        "evidence/universal-payroll-book-private-devnet.json",
+        "docs/VESTING_TAX_REPORTING_PLAN.md",
+        "scripts/lib/payo-vesting-book-mainnet.mjs",
+        "scripts/payo-vesting-book-mainnet.mjs",
+        "evidence/vesting-tax-mainnet-plan.json"
+      ],
+      "tests": [
+        "lib/domain/obligation-schedule.test.ts",
+        "lib/persistence/database.integration.test.ts",
+        "lib/domain/obligations.test.ts",
+        "lib/client/advanced-agreement-draft.test.ts",
+        "lib/client/agreement-form-workflow.test.ts",
+        "scripts/lib/phase3-ui-workflow-fixture.test.ts",
+        "20/20 isolated PostgreSQL integration tests including concurrent schedule registration, idempotency, revision supersession, and materialization",
+        "contracts/phase3_integration/tests/phase3_real_proofs.cairo",
+        "seven production-command encrypted record-to-proof links",
+        "Linux Chromium exercised all seven rendered production agreement forms",
+        "https://github.com/Tutulii/private-payroll/actions/runs/32973338048",
+        "standalone seven-workflow advanced-v2 Devnet verification",
+        "official-pool seven-output private STRK settlement atomically tied to PAYO seal",
+        "real Garaga shard verification, tamper rejection, pool-originated replay rejection, and private balance rediscovery",
+        "workflow-specific recipient-encrypted worker line openings with wrong-recipient, expiry, and revocation rejection",
+        "circuits/vesting_transition: 4/4 Noir tests",
+        "contracts/tests/test_vesting_book_seal.cairo: state, replay, stale-state and ordered-book tests",
+        "contracts/vesting_integration: real v3 Garaga proofs composed with the production VestingBook seal",
+        "standalone Devnet real-proof verification plus state advance, exact accumulator, changed-proof, replay and stale-genesis rejection",
+        "combined official STRK20 SDK private payment plus atomic universal-book append, exact balance delta and replay rejection",
+        "read-only Mainnet dependency checks, deterministic topology, undeployed-state read-back, and fee simulation without mutation"
+      ]
+    },
+    {
+      "id": "P3-05",
+      "phase": 3,
+      "requirement": "OffboardingCorrect proof",
+      "status": "partial",
+      "evidence": [
+        "app/team/page.tsx",
+        "lib/domain/obligations.ts",
+        "lib/client/agreement-directory.ts",
+        "lib/client/agreement-form-workflow.ts",
+        "circuits/advanced_obligation/src/main.nr",
+        "contracts/advanced_verifier",
+        "scripts/generate-phase3-matrix-fixture.ts",
+        "scripts/verify-phase3-ui-workflow-evidence.ts",
+        "scripts/generate-phase3-matrix-disclosure.ts",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-ui-origin.json",
+        "evidence/phase3-matrix-devnet.json",
+        "evidence/phase3-private-settlement-devnet.json",
+        "evidence/phase3-matrix-disclosure.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-worker-final-pay-package.json",
+        "docs/phase3-evidence.md"
+      ],
+      "tests": [
+        "lib/domain/obligations.test.ts",
+        "lib/client/agreement-directory.test.ts",
+        "lib/client/agreement-form-workflow.test.ts",
+        "nargo test",
+        "production-command zero-safe final-pay record-to-proof validator",
+        "standalone complete final-pay advanced-v2 Devnet verification",
+        "official-pool final-pay workflow output plus atomic PAYO seal and real Garaga verification",
+        "final-pay recipient-encrypted line opening with wrong-recipient, expiry, and revocation rejection"
+      ]
+    },
     {
       "id": "P3-06",
       "phase": 3,
@@ -102,35 +570,596 @@
         "Fly prover release 10 and web release 44 health, protected-prover, served-bundle and caught-up-indexer checks"
       ]
     },
-    { "id": "P3-07", "phase": 3, "requirement": "Encrypted accounting and auditor proof packages", "status": "complete", "evidence": ["app/activity/page.tsx", "app/api/v1/disclosures/route.ts", "lib/client/proof-package-workflow.ts", "lib/disclosure/proof-package.ts", "lib/persistence/receipt-repository.ts", "scripts/generate-phase3-matrix-disclosure.ts", "scripts/lib/phase3-disclosure-evidence.mjs", "evidence/phase3-matrix-disclosure.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-recurring-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-checkpoint-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-milestone-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-vesting-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-final-pay-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-approved-adjustment-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-employer-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-auditor-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-tax-package.json", "docs/phase3-evidence.md"], "tests": ["lib/client/proof-package-workflow.test.ts", "lib/disclosure/proof-package.test.ts", "scripts/lib/phase3-disclosure-evidence.test.mjs", "lib/persistence/database.integration.test.ts", "seven workflow-specific worker line openings plus recipient-encrypted employer, auditor, and tax scopes", "recipient-encrypted payroll, wage-claim, and remediation package reconstruction", "balanced journals plus wrong-recipient, expiry, and revocation rejection for all ten matrix packages"] },
-
-    { "id": "P4-01", "phase": 4, "requirement": "Structured MCP payroll tools", "status": "complete", "evidence": ["packages/mcp/src/payo-server.ts", "packages/mcp/src/server.ts", "packages/mcp/src/client.ts", "app/api/v1/capabilities", "app/api/v1/agent-executions", "app/api/v1/disclosures", "docs/phase4-evidence.md"], "tests": ["packages/mcp/src/payo-server.test.ts", "5/5 MCP transport and adversarial tests exercise all eight production tools"] },
-    { "id": "P4-02", "phase": 4, "requirement": "Encrypted expiring scoped agent capabilities", "status": "complete", "evidence": ["lib/domain/capability.ts", "lib/server/capability-policy-crypto.ts", "lib/persistence/capability-reservations.ts", "lib/persistence/schema.ts", "app/team/page.tsx", "docs/phase4-evidence.md"], "tests": ["lib/domain/capability.test.ts", "lib/server/capability-policy-crypto.test.ts", "lib/server/agent-execution-crypto.test.ts", "lib/persistence/database.integration.test.ts", "tests/browser/phase4-agent-controls.spec.ts", "65/65 PostgreSQL expiry, revocation, replay, tenant, threshold and concurrent-limit tests"] },
-    { "id": "P4-03", "phase": 4, "requirement": "Human approval as default", "status": "complete", "evidence": ["app/team/page.tsx", "app/payroll/page.tsx", "app/api/v1/agent-approvals", "lib/server/agent-execution-worker.ts", "evidence/phase4-rendered-browser-ui-origin.json", "docs/phase4-evidence.md"], "tests": ["lib/server/agent-execution-worker.test.ts", "lib/persistence/database.integration.test.ts", "tests/browser/phase4-agent-controls.spec.ts", "rendered Ready-approval and bounded-autonomy controls passed without private metadata leakage"] },
-    { "id": "P4-04", "phase": 4, "requirement": "Bounded structured-intent signing gateway", "status": "complete", "evidence": ["lib/domain/agent-execution.ts", "lib/server/agent-execution-worker.ts", "lib/server/direct-privacy-agent-driver.ts", "lib/server/policy-owner-signer-service.ts", "lib/server/policy-owner-signer-protocol.ts", "lib/starknet/direct-privacy-plan.ts", "lib/starknet/direct-privacy-outside-call.ts", "contracts/src/policy_account.cairo", "Dockerfile.policy-signer", "evidence/phase4-policy-account-devnet.json", "evidence/phase4-mainnet-deployment.json", "docs/POLICY_ACCOUNT_RUNBOOK.md", "docs/phase4-evidence.md"], "tests": ["lib/server/agent-execution-worker.test.ts", "lib/server/policy-owner-signer-client.test.ts", "lib/server/policy-owner-signer-protocol.test.ts", "lib/starknet/direct-privacy-plan.test.ts", "lib/starknet/direct-privacy-outside-call.test.ts", "contracts/tests/test_policy_account.cairo", "contracts/tests/test_policy_account_limits.cairo", "65/65 Cairo tests including adversarial target, calldata, substitution, replay, revocation and fuzz cases"] },
-    { "id": "P4-05", "phase": 4, "requirement": "Direct Privacy SDK accounts with local viewing-key control", "status": "complete", "evidence": ["lib/server/direct-privacy-crypto.ts", "lib/server/direct-privacy-discovery.ts", "lib/server/direct-privacy-agent-driver.ts", "lib/persistence/direct-privacy-repository.ts", "lib/proof/settlement-match.ts", "lib/proof/server-prover.ts", "circuits/settlement_match", "contracts/settlement_verifier_v8", "evidence/phase4-private-payroll-devnet.json", "scripts/verify-phase4-evidence.mjs", "docs/phase4-evidence.md"], "tests": ["lib/server/direct-privacy-crypto.test.ts", "lib/server/direct-privacy-discovery.test.ts", "lib/server/privacy-sdk-registry.test.ts", "lib/proof/settlement-match.test.ts", "lib/proof/settlement-request.test.ts", "contracts/settlement_verifier_v8/tests/test_contract.cairo", "4/4 Noir tests", "real self-hosted proof, on-chain SettlementMatch, atomic private balance delta, FINALIZE and replay rejection"] },
-
-    { "id": "P5-01", "phase": 5, "requirement": "Three successful Mainnet transactions touching STRK20 and PAYO contracts", "status": "complete", "evidence": ["strk20.json", "evidence/payo-strk-mainnet.json", "evidence/payo-usdc-mainnet.json", "evidence/payo-mixed-mainnet.json", "scripts/verify-payo-strk-mainnet.mjs", "scripts/verify-payo-payroll-mainnet.mjs", "evidence/phase5-cutover-mainnet.json", "scripts/verify-phase5-cutover-mainnet.mjs", "docs/phase5-evidence.md"], "tests": ["npm run verify:payo-strk", "npm run verify:payo-usdc", "npm run verify:payo-mixed", "npm run verify:phase5-cutover", "2026-09-01 Mainnet RPC receipt, live STRK20 pool event, PAYO seal status and ordered two-shard proof read-back"] },
-    { "id": "P5-02", "phase": 5, "requirement": "STRK, USDC, and advanced obligation or agent demonstrations", "status": "partial", "evidence": ["evidence/payo-strk-mainnet.json", "evidence/payo-usdc-mainnet.json", "evidence/payo-mixed-mainnet.json", "evidence/phase5-cutover-mainnet.json", "docs/phase5-evidence.md"], "tests": ["human STRK, native-USDC and mixed-token Mainnet payroll validators pass; policy treasury and isolated signer cutover pass; advanced/autonomous-agent canary remains missing"] },
-    { "id": "P5-03", "phase": 5, "requirement": "Addresses, class hashes, benchmarks, demo URL, and three-minute video", "status": "partial", "evidence": ["strk20.json", "evidence/mainnet-contract-inventory.json", "evidence/phase5-cutover-mainnet.json", "docs/MAINNET_CONTRACTS.md", "docs/MAINNET_BENCHMARKS.md", "docs/phase5-evidence.md"], "tests": ["npm run verify:mainnet-contracts matched 12/12 deployed class hashes at Mainnet block 14195790", "proof/calldata timings and accepted Phase 5 cutover gas recorded", "hosted demo URL and baseline transaction identifiers recorded; three-minute video and autonomous-canary row remain missing"] },
-    { "id": "P5-04", "phase": 5, "requirement": "Complete strk20.json and deployment, recovery, security, and limitations runbooks", "status": "partial", "evidence": ["strk20.json", "evidence/phase5-cutover-mainnet.json", "docs/PHASE5_RELEASE_PLAN.md", "docs/MAINNET_RELEASE_RUNBOOK.md", "docs/POLICY_ACCOUNT_RUNBOOK.md", "docs/verification-report.md", "docs/phase5-evidence.md"], "tests": ["npm run audit:production", "private signer attestation and live HMAC/replay/restricted-route rejection passed", "consolidated deployment, secret-placement, rollback, incident, privacy, legal and limitations procedure reviewed; final canary and release fields remain incomplete"] }
+    {
+      "id": "P3-07",
+      "phase": 3,
+      "requirement": "Encrypted accounting and auditor proof packages",
+      "status": "complete",
+      "evidence": [
+        "app/activity/page.tsx",
+        "app/api/v1/disclosures/route.ts",
+        "lib/client/proof-package-workflow.ts",
+        "lib/disclosure/proof-package.ts",
+        "lib/persistence/receipt-repository.ts",
+        "scripts/generate-phase3-matrix-disclosure.ts",
+        "scripts/lib/phase3-disclosure-evidence.mjs",
+        "evidence/phase3-matrix-disclosure.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-worker-package.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-worker-recurring-package.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-worker-checkpoint-package.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-worker-milestone-package.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-worker-vesting-package.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-worker-final-pay-package.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-worker-approved-adjustment-package.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-employer-package.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-auditor-package.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-tax-package.json",
+        "docs/phase3-evidence.md",
+        "app/api/v1/payroll-books",
+        "lib/persistence/payroll-book-report-repository.ts",
+        "lib/disclosure/payroll-book-report.ts",
+        "lib/client/payroll-report-workflow.ts",
+        "lib/crypto/reporting-identity.ts",
+        "lib/disclosure/worker-statement-source.ts",
+        "lib/disclosure/tax-evidence.ts",
+        "lib/policy/reference-packs.ts",
+        "docs/reference-policy-packs.md",
+        "contracts/src/vesting_book_seal.cairo",
+        "evidence/vesting-tax-devnet.json",
+        "evidence/phase3-devnet-fixtures/rendered-browser-ui-origin.json",
+        "docs/VESTING_TAX_REPORTING_PLAN.md"
+      ],
+      "tests": [
+        "lib/client/proof-package-workflow.test.ts",
+        "lib/disclosure/proof-package.test.ts",
+        "scripts/lib/phase3-disclosure-evidence.test.mjs",
+        "lib/persistence/database.integration.test.ts",
+        "seven workflow-specific worker line openings plus recipient-encrypted employer, auditor, and tax scopes",
+        "recipient-encrypted payroll, wage-claim, and remediation package reconstruction",
+        "balanced journals plus wrong-recipient, expiry, and revocation rejection for all ten matrix packages",
+        "lib/disclosure/payroll-book-report.test.ts",
+        "lib/client/payroll-report-workflow.test.ts",
+        "lib/crypto/reporting-identity.test.ts",
+        "lib/disclosure/tax-evidence.test.ts",
+        "lib/policy/reference-packs.test.ts",
+        "tests/browser/phase3-production-controls.spec.ts",
+        "complete employer/tax book and worker statement reject omission, duplication, mutation, wrong key and cross-tenant evidence",
+        "canonical W-2/P60/T4-style views reject exact-policy substitution and mutated evidence"
+      ]
+    },
+    {
+      "id": "P4-01",
+      "phase": 4,
+      "requirement": "Structured MCP payroll tools",
+      "status": "complete",
+      "evidence": [
+        "packages/mcp/src/payo-server.ts",
+        "packages/mcp/src/server.ts",
+        "packages/mcp/src/client.ts",
+        "app/api/v1/capabilities",
+        "app/api/v1/agent-executions",
+        "app/api/v1/disclosures",
+        "docs/phase4-evidence.md"
+      ],
+      "tests": [
+        "packages/mcp/src/payo-server.test.ts",
+        "5/5 MCP transport and adversarial tests exercise all eight production tools"
+      ]
+    },
+    {
+      "id": "P4-02",
+      "phase": 4,
+      "requirement": "Encrypted expiring scoped agent capabilities",
+      "status": "complete",
+      "evidence": [
+        "lib/domain/capability.ts",
+        "lib/server/capability-policy-crypto.ts",
+        "lib/persistence/capability-reservations.ts",
+        "lib/persistence/schema.ts",
+        "app/team/page.tsx",
+        "docs/phase4-evidence.md"
+      ],
+      "tests": [
+        "lib/domain/capability.test.ts",
+        "lib/server/capability-policy-crypto.test.ts",
+        "lib/server/agent-execution-crypto.test.ts",
+        "lib/persistence/database.integration.test.ts",
+        "tests/browser/phase4-agent-controls.spec.ts",
+        "65/65 PostgreSQL expiry, revocation, replay, tenant, threshold and concurrent-limit tests"
+      ]
+    },
+    {
+      "id": "P4-03",
+      "phase": 4,
+      "requirement": "Human approval as default",
+      "status": "complete",
+      "evidence": [
+        "app/team/page.tsx",
+        "app/payroll/page.tsx",
+        "app/api/v1/agent-approvals",
+        "lib/server/agent-execution-worker.ts",
+        "evidence/phase4-rendered-browser-ui-origin.json",
+        "docs/phase4-evidence.md"
+      ],
+      "tests": [
+        "lib/server/agent-execution-worker.test.ts",
+        "lib/persistence/database.integration.test.ts",
+        "tests/browser/phase4-agent-controls.spec.ts",
+        "rendered Ready-approval and bounded-autonomy controls passed without private metadata leakage"
+      ]
+    },
+    {
+      "id": "P4-04",
+      "phase": 4,
+      "requirement": "Bounded structured-intent signing gateway",
+      "status": "complete",
+      "evidence": [
+        "lib/domain/agent-execution.ts",
+        "lib/server/agent-execution-worker.ts",
+        "lib/server/direct-privacy-agent-driver.ts",
+        "lib/server/policy-owner-signer-service.ts",
+        "lib/server/policy-owner-signer-protocol.ts",
+        "lib/starknet/direct-privacy-plan.ts",
+        "lib/starknet/direct-privacy-outside-call.ts",
+        "contracts/src/policy_account.cairo",
+        "Dockerfile.policy-signer",
+        "evidence/phase4-policy-account-devnet.json",
+        "evidence/phase4-mainnet-deployment.json",
+        "docs/POLICY_ACCOUNT_RUNBOOK.md",
+        "docs/phase4-evidence.md"
+      ],
+      "tests": [
+        "lib/server/agent-execution-worker.test.ts",
+        "lib/server/policy-owner-signer-client.test.ts",
+        "lib/server/policy-owner-signer-protocol.test.ts",
+        "lib/starknet/direct-privacy-plan.test.ts",
+        "lib/starknet/direct-privacy-outside-call.test.ts",
+        "contracts/tests/test_policy_account.cairo",
+        "contracts/tests/test_policy_account_limits.cairo",
+        "65/65 Cairo tests including adversarial target, calldata, substitution, replay, revocation and fuzz cases"
+      ]
+    },
+    {
+      "id": "P4-05",
+      "phase": 4,
+      "requirement": "Direct Privacy SDK accounts with local viewing-key control",
+      "status": "complete",
+      "evidence": [
+        "lib/server/direct-privacy-crypto.ts",
+        "lib/server/direct-privacy-discovery.ts",
+        "lib/server/direct-privacy-agent-driver.ts",
+        "lib/persistence/direct-privacy-repository.ts",
+        "lib/proof/settlement-match.ts",
+        "lib/proof/server-prover.ts",
+        "circuits/settlement_match",
+        "contracts/settlement_verifier_v8",
+        "evidence/phase4-private-payroll-devnet.json",
+        "scripts/verify-phase4-evidence.mjs",
+        "docs/phase4-evidence.md"
+      ],
+      "tests": [
+        "lib/server/direct-privacy-crypto.test.ts",
+        "lib/server/direct-privacy-discovery.test.ts",
+        "lib/server/privacy-sdk-registry.test.ts",
+        "lib/proof/settlement-match.test.ts",
+        "lib/proof/settlement-request.test.ts",
+        "contracts/settlement_verifier_v8/tests/test_contract.cairo",
+        "4/4 Noir tests",
+        "real self-hosted proof, on-chain SettlementMatch, atomic private balance delta, FINALIZE and replay rejection"
+      ]
+    },
+    {
+      "id": "P5-01",
+      "phase": 5,
+      "requirement": "Three successful Mainnet transactions touching STRK20 and PAYO contracts",
+      "status": "complete",
+      "evidence": [
+        "strk20.json",
+        "evidence/payo-strk-mainnet.json",
+        "evidence/payo-usdc-mainnet.json",
+        "evidence/payo-mixed-mainnet.json",
+        "scripts/verify-payo-strk-mainnet.mjs",
+        "scripts/verify-payo-payroll-mainnet.mjs",
+        "evidence/phase5-cutover-mainnet.json",
+        "scripts/verify-phase5-cutover-mainnet.mjs",
+        "docs/phase5-evidence.md"
+      ],
+      "tests": [
+        "npm run verify:payo-strk",
+        "npm run verify:payo-usdc",
+        "npm run verify:payo-mixed",
+        "npm run verify:phase5-cutover",
+        "2026-09-01 Mainnet RPC receipt, live STRK20 pool event, PAYO seal status and ordered two-shard proof read-back"
+      ]
+    },
+    {
+      "id": "P5-02",
+      "phase": 5,
+      "requirement": "STRK, USDC, and advanced obligation or agent demonstrations",
+      "status": "partial",
+      "evidence": [
+        "evidence/payo-strk-mainnet.json",
+        "evidence/payo-usdc-mainnet.json",
+        "evidence/payo-mixed-mainnet.json",
+        "evidence/phase5-cutover-mainnet.json",
+        "docs/phase5-evidence.md"
+      ],
+      "tests": [
+        "human STRK, native-USDC and mixed-token Mainnet payroll validators pass; policy treasury and isolated signer cutover pass; advanced/autonomous-agent canary remains missing"
+      ]
+    },
+    {
+      "id": "P5-03",
+      "phase": 5,
+      "requirement": "Addresses, class hashes, benchmarks, demo URL, and three-minute video",
+      "status": "partial",
+      "evidence": [
+        "strk20.json",
+        "evidence/mainnet-contract-inventory.json",
+        "evidence/phase5-cutover-mainnet.json",
+        "docs/MAINNET_CONTRACTS.md",
+        "docs/MAINNET_BENCHMARKS.md",
+        "docs/phase5-evidence.md"
+      ],
+      "tests": [
+        "npm run verify:mainnet-contracts matched 12/12 deployed class hashes at Mainnet block 14195790",
+        "proof/calldata timings and accepted Phase 5 cutover gas recorded",
+        "hosted demo URL and baseline transaction identifiers recorded; three-minute video and autonomous-canary row remain missing"
+      ]
+    },
+    {
+      "id": "P5-04",
+      "phase": 5,
+      "requirement": "Complete strk20.json and deployment, recovery, security, and limitations runbooks",
+      "status": "partial",
+      "evidence": [
+        "strk20.json",
+        "evidence/phase5-cutover-mainnet.json",
+        "docs/PHASE5_RELEASE_PLAN.md",
+        "docs/MAINNET_RELEASE_RUNBOOK.md",
+        "docs/POLICY_ACCOUNT_RUNBOOK.md",
+        "docs/verification-report.md",
+        "docs/phase5-evidence.md"
+      ],
+      "tests": [
+        "npm run audit:production",
+        "private signer attestation and live HMAC/replay/restricted-route rejection passed",
+        "consolidated deployment, secret-placement, rollback, incident, privacy, legal and limitations procedure reviewed; final canary and release fields remain incomplete"
+      ]
+    }
   ],
   "architecture": [
-    { "id": "A01", "section": 1, "requirement": "Design principles enforced", "status": "partial", "evidence": ["architecture.md", "lib/crypto/vault.ts"] },
-    { "id": "A02", "section": 2, "requirement": "All system components integrated", "status": "partial", "evidence": ["app", "packages/mcp", "contracts", "circuits"] },
-    { "id": "A03", "section": 3, "requirement": "Trust and leakage boundaries enforced", "status": "partial", "evidence": ["README.md", "architecture.md"] },
-    { "id": "A04", "section": 4, "requirement": "Client-encrypted vault and recovery", "status": "complete", "evidence": ["app/vault/payo-vault.tsx", "lib/crypto/vault.ts", "lib/client/vault-workspace.ts", "lib/client/vault-admin.ts", "lib/client/vault-rotation.ts", "lib/persistence/vault-repository.ts", "lib/persistence/database.integration.test.ts"] },
-    { "id": "A05", "section": 5, "requirement": "Complete domain model and workflow", "status": "partial", "evidence": ["lib/domain", "lib/persistence/schema.ts"] },
-    { "id": "A06", "section": 6, "requirement": "Live dual-token model", "status": "complete", "evidence": ["app/starknet/tokens.ts", "app/starknet/starknet-wallet.tsx", "lib/client/payroll-execution.ts", "evidence/usdc-mainnet.json", "evidence/payo-usdc-mainnet.json", "evidence/payo-mixed-mainnet.json", "scripts/verify-payo-payroll-mainnet.mjs", "docs/phase2-evidence.md"] },
-    { "id": "A07", "section": 7, "requirement": "Canonical commitments and three-language vectors", "status": "complete", "evidence": ["lib/crypto/commitments.ts", "circuits/payroll_integrity/src/main.nr", "contracts/src/commitments.cairo", "vectors/commitments-v1.json"] },
-    { "id": "A08", "section": 8, "requirement": "Deployment-bound PayrollIntegrity proof", "status": "complete", "evidence": ["circuits/payroll_integrity/src/main.nr", "contracts/integrity_verifier", "contracts/src/integrity_bundle_verifier.cairo", "contracts/src/payroll_seal.cairo", "lib/proof/payroll-proof.worker.ts", "docs/phase1-evidence.md", "https://github.com/Tutulii/private-payroll/actions/runs/32695106358"] },
-    { "id": "A09", "section": 9, "requirement": "SettlementMatch proof", "status": "complete", "evidence": ["circuits/settlement_match", "public/circuits/settlement_match-v8.json", "public/circuits/settlement_match-v8.vk.hex", "contracts/settlement_verifier_v8", "lib/proof/settlement-match.ts", "lib/proof/server-prover.ts", "evidence/phase4-private-payroll-devnet.json", "docs/phase4-evidence.md"] },
-    { "id": "A10", "section": 10, "requirement": "Final Starknet contracts and real verifier", "status": "complete", "evidence": ["contracts/integrity_verifier", "contracts/src", "scripts/test-phase2-devnet.mjs", "scripts/verify-payo-strk-mainnet.mjs", "scripts/payo-multitenant-mainnet.mjs", "evidence/payo-strk-mainnet.json", "docs/phase2-evidence.md", "docs/multitenant-mainnet-evidence.md"] },
-    { "id": "A11", "section": 11, "requirement": "FX and policy snapshots", "status": "partial", "evidence": ["lib/domain/fx.ts", "lib/server/pragma-fx.ts", "lib/policy/engine.ts", "lib/policy/execution-catalog.ts", "scripts/verify-phase3-pragma-mainnet.ts", "evidence/pragma-phase3-mainnet.json", "docs/phase3-evidence.md"] },
-    {"id":"A12","section":12,"requirement":"Payment plans, claims, and remediation","status":"partial","evidence":["app/team/page.tsx","app/payroll/page.tsx","app/activity/page.tsx","app/api/v1/obligation-schedules/route.ts","app/api/internal/recurring-scheduler/route.ts","lib/domain/obligations.ts","lib/domain/obligation-schedule.ts","lib/persistence/obligation-schedule-repository.ts","lib/client/agreement-form-workflow.ts","lib/client/claim-workflows.ts","lib/client/exception-execution.ts","circuits/advanced_obligation","circuits/wage_claim","circuits/wage_remediation","tests/browser/phase3-production-controls.spec.ts","scripts/generate-phase3-ui-workflow-fixture.ts","scripts/generate-phase3-exception-ui-fixture.ts","scripts/verify-phase3-ui-workflow-evidence.ts","scripts/test-phase3-strk20-devnet.mjs","evidence/phase3-devnet-fixtures/advanced-matrix-ui-origin.json","evidence/phase3-devnet-fixtures/claim-remediation-ui-origin.json","evidence/phase3-devnet.json","evidence/phase3-matrix-devnet.json","evidence/phase3-private-settlement-devnet.json","evidence/phase3-private-exceptions-devnet.json","evidence/phase3-matrix-disclosure.json","docs/phase3-evidence.md","docs/WAGE_CLAIM_BINDING_PLAN.md","app/activity/wage-claims-vnext.tsx","app/api/v1/claim-access","app/api/v1/employer-statements","app/api/v1/obligation-snapshots","app/api/v1/runs/[id]/payroll-authorization","app/api/v1/statement-evidence","app/api/v1/wage-remediations","app/api/v1/worker-claims","lib/client/worker-claim.ts","lib/client/wage-remediation.ts","lib/client/employer-statement.ts","lib/client/remediation-payment.ts","lib/crypto/claim-capability.ts","lib/domain/exception-protocol.ts","lib/persistence/exception-authorization-repository.ts","lib/persistence/payroll-authorization-repository.ts","lib/server/exception-authorization-relayer.ts","lib/server/payroll-authorization-relayer.ts","lib/server/payroll-run-anchor.ts","lib/proof/exception-input-builder.ts","circuits/obligation_snapshot_link","circuits/wage_claim_v2","circuits/wage_remediation_v2","contracts/src/payroll_exception_seal.cairo","contracts/src/exception_commitments.cairo","contracts/snapshot_v5_verifier","contracts/claim_v6_verifier","contracts/remediation_v7_verifier","contracts/exception_vnext_integration","scripts/verify-exception-prover.ts","lib/domain/worker-claim.ts","lib/domain/wage-remediation.ts"]},
-    { "id": "A13", "section": 13, "requirement": "Encrypted selective disclosure", "status": "complete", "evidence": ["lib/client/proof-package-workflow.ts", "lib/disclosure/proof-package.ts", "app/activity/page.tsx", "scripts/generate-phase3-matrix-disclosure.ts", "evidence/phase3-matrix-disclosure.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-recurring-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-checkpoint-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-milestone-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-vesting-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-final-pay-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-worker-approved-adjustment-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-employer-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-auditor-package.json", "evidence/phase3-devnet-fixtures/advanced-matrix-tax-package.json", "docs/phase3-evidence.md"] },
-    { "id": "A14", "section": 14, "requirement": "MCP and bounded execution", "status": "complete", "evidence": ["packages/mcp/src/payo-server.ts", "lib/domain/capability.ts", "lib/server/agent-execution-worker.ts", "lib/server/direct-privacy-agent-driver.ts", "lib/server/policy-owner-signer-service.ts", "contracts/src/policy_account.cairo", "evidence/phase4-private-payroll-devnet.json", "docs/phase4-evidence.md"] },
-    { "id": "A15", "section": 15, "requirement": "All failure behavior implemented", "status": "complete", "evidence": ["app/starknet/starknet-wallet.tsx", "lib/server/agent-execution-worker.ts", "lib/server/direct-privacy-account-activation.ts", "lib/server/direct-privacy-agent-driver.ts", "lib/server/policy-owner-signer-client.ts", "lib/persistence/database.integration.test.ts", "contracts/tests/test_policy_account.cairo", "docs/phase4-evidence.md"] },
-    { "id": "A16", "section": 16, "requirement": "Full verification strategy", "status": "complete", "evidence": [".github/workflows/ci.yml", ".github/workflows/proof-artifacts.yml", "lib", "circuits", "contracts/tests", "contracts/integrity_verifier/tests", "contracts/settlement_verifier_v8/tests", "tests/browser/phase3-production-controls.spec.ts", "tests/browser/phase4-agent-controls.spec.ts", "scripts/verify-phase4-evidence.mjs", "evidence/phase4-private-payroll-devnet.json", "docs/phase1-evidence.md", "docs/phase2-evidence.md", "docs/phase3-evidence.md", "docs/phase4-evidence.md"] }
+    {
+      "id": "A01",
+      "section": 1,
+      "requirement": "Design principles enforced",
+      "status": "partial",
+      "evidence": [
+        "architecture.md",
+        "lib/crypto/vault.ts"
+      ]
+    },
+    {
+      "id": "A02",
+      "section": 2,
+      "requirement": "All system components integrated",
+      "status": "partial",
+      "evidence": [
+        "app",
+        "packages/mcp",
+        "contracts",
+        "circuits"
+      ]
+    },
+    {
+      "id": "A03",
+      "section": 3,
+      "requirement": "Trust and leakage boundaries enforced",
+      "status": "partial",
+      "evidence": [
+        "README.md",
+        "architecture.md",
+        "lib/domain/private-exit.ts",
+        "lib/starknet/private-exit.ts",
+        "lib/server/private-exit-quote.ts",
+        "evidence/block5-private-exit-browser.json",
+        "evidence/block5-private-exit-upstream.json"
+      ]
+    },
+    {
+      "id": "A04",
+      "section": 4,
+      "requirement": "Client-encrypted vault and recovery",
+      "status": "complete",
+      "evidence": [
+        "app/vault/payo-vault.tsx",
+        "lib/crypto/vault.ts",
+        "lib/client/vault-workspace.ts",
+        "lib/client/vault-admin.ts",
+        "lib/client/vault-rotation.ts",
+        "lib/persistence/vault-repository.ts",
+        "lib/persistence/database.integration.test.ts"
+      ]
+    },
+    {
+      "id": "A05",
+      "section": 5,
+      "requirement": "Complete domain model and workflow",
+      "status": "partial",
+      "evidence": [
+        "lib/domain",
+        "lib/persistence/schema.ts"
+      ]
+    },
+    {
+      "id": "A06",
+      "section": 6,
+      "requirement": "Live dual-token model",
+      "status": "complete",
+      "evidence": [
+        "app/starknet/tokens.ts",
+        "app/starknet/starknet-wallet.tsx",
+        "lib/client/payroll-execution.ts",
+        "evidence/usdc-mainnet.json",
+        "evidence/payo-usdc-mainnet.json",
+        "evidence/payo-mixed-mainnet.json",
+        "scripts/verify-payo-payroll-mainnet.mjs",
+        "docs/phase2-evidence.md",
+        "app/wallet/private-exit-card.tsx",
+        "lib/starknet/private-exit.ts",
+        "lib/server/private-exit-quote.ts",
+        "evidence/block5-private-exit-browser.json",
+        "evidence/block5-private-exit-upstream.json"
+      ]
+    },
+    {
+      "id": "A07",
+      "section": 7,
+      "requirement": "Canonical commitments and three-language vectors",
+      "status": "complete",
+      "evidence": [
+        "lib/crypto/commitments.ts",
+        "circuits/payroll_integrity/src/main.nr",
+        "contracts/src/commitments.cairo",
+        "vectors/commitments-v1.json"
+      ]
+    },
+    {
+      "id": "A08",
+      "section": 8,
+      "requirement": "Deployment-bound PayrollIntegrity proof",
+      "status": "complete",
+      "evidence": [
+        "circuits/payroll_integrity/src/main.nr",
+        "contracts/integrity_verifier",
+        "contracts/src/integrity_bundle_verifier.cairo",
+        "contracts/src/payroll_seal.cairo",
+        "lib/proof/payroll-proof.worker.ts",
+        "docs/phase1-evidence.md",
+        "https://github.com/Tutulii/private-payroll/actions/runs/32695106358"
+      ]
+    },
+    {
+      "id": "A09",
+      "section": 9,
+      "requirement": "SettlementMatch proof",
+      "status": "complete",
+      "evidence": [
+        "circuits/settlement_match",
+        "public/circuits/settlement_match-v8.json",
+        "public/circuits/settlement_match-v8.vk.hex",
+        "contracts/settlement_verifier_v8",
+        "lib/proof/settlement-match.ts",
+        "lib/proof/server-prover.ts",
+        "evidence/phase4-private-payroll-devnet.json",
+        "docs/phase4-evidence.md"
+      ]
+    },
+    {
+      "id": "A10",
+      "section": 10,
+      "requirement": "Final Starknet contracts and real verifier",
+      "status": "complete",
+      "evidence": [
+        "contracts/integrity_verifier",
+        "contracts/src",
+        "scripts/test-phase2-devnet.mjs",
+        "scripts/verify-payo-strk-mainnet.mjs",
+        "scripts/payo-multitenant-mainnet.mjs",
+        "evidence/payo-strk-mainnet.json",
+        "docs/phase2-evidence.md",
+        "docs/multitenant-mainnet-evidence.md"
+      ]
+    },
+    {
+      "id": "A11",
+      "section": 11,
+      "requirement": "FX and policy snapshots",
+      "status": "partial",
+      "evidence": [
+        "lib/domain/fx.ts",
+        "lib/server/pragma-fx.ts",
+        "lib/policy/engine.ts",
+        "lib/policy/execution-catalog.ts",
+        "scripts/verify-phase3-pragma-mainnet.ts",
+        "evidence/pragma-phase3-mainnet.json",
+        "docs/phase3-evidence.md"
+      ]
+    },
+    {
+      "id": "A12",
+      "section": 12,
+      "requirement": "Payment plans, claims, and remediation",
+      "status": "partial",
+      "evidence": [
+        "app/team/page.tsx",
+        "app/payroll/page.tsx",
+        "app/activity/page.tsx",
+        "app/api/v1/obligation-schedules/route.ts",
+        "app/api/internal/recurring-scheduler/route.ts",
+        "lib/domain/obligations.ts",
+        "lib/domain/obligation-schedule.ts",
+        "lib/persistence/obligation-schedule-repository.ts",
+        "lib/client/agreement-form-workflow.ts",
+        "lib/client/claim-workflows.ts",
+        "lib/client/exception-execution.ts",
+        "circuits/advanced_obligation",
+        "circuits/wage_claim",
+        "circuits/wage_remediation",
+        "tests/browser/phase3-production-controls.spec.ts",
+        "scripts/generate-phase3-ui-workflow-fixture.ts",
+        "scripts/generate-phase3-exception-ui-fixture.ts",
+        "scripts/verify-phase3-ui-workflow-evidence.ts",
+        "scripts/test-phase3-strk20-devnet.mjs",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-ui-origin.json",
+        "evidence/phase3-devnet-fixtures/claim-remediation-ui-origin.json",
+        "evidence/phase3-devnet.json",
+        "evidence/phase3-matrix-devnet.json",
+        "evidence/phase3-private-settlement-devnet.json",
+        "evidence/phase3-private-exceptions-devnet.json",
+        "evidence/phase3-matrix-disclosure.json",
+        "docs/phase3-evidence.md",
+        "docs/WAGE_CLAIM_BINDING_PLAN.md",
+        "app/activity/wage-claims-vnext.tsx",
+        "app/api/v1/claim-access",
+        "app/api/v1/employer-statements",
+        "app/api/v1/obligation-snapshots",
+        "app/api/v1/runs/[id]/payroll-authorization",
+        "app/api/v1/statement-evidence",
+        "app/api/v1/wage-remediations",
+        "app/api/v1/worker-claims",
+        "lib/client/worker-claim.ts",
+        "lib/client/wage-remediation.ts",
+        "lib/client/employer-statement.ts",
+        "lib/client/remediation-payment.ts",
+        "lib/crypto/claim-capability.ts",
+        "lib/domain/exception-protocol.ts",
+        "lib/persistence/exception-authorization-repository.ts",
+        "lib/persistence/payroll-authorization-repository.ts",
+        "lib/server/exception-authorization-relayer.ts",
+        "lib/server/payroll-authorization-relayer.ts",
+        "lib/server/payroll-run-anchor.ts",
+        "lib/proof/exception-input-builder.ts",
+        "circuits/obligation_snapshot_link",
+        "circuits/wage_claim_v2",
+        "circuits/wage_remediation_v2",
+        "contracts/src/payroll_exception_seal.cairo",
+        "contracts/src/exception_commitments.cairo",
+        "contracts/snapshot_v5_verifier",
+        "contracts/claim_v6_verifier",
+        "contracts/remediation_v7_verifier",
+        "contracts/exception_vnext_integration",
+        "scripts/verify-exception-prover.ts",
+        "lib/domain/worker-claim.ts",
+        "lib/domain/wage-remediation.ts",
+        "circuits/vesting_transition",
+        "contracts/src/vesting_book_seal.cairo",
+        "contracts/vesting_verifier_v3",
+        "contracts/vesting_integration",
+        "evidence/vesting-tax-devnet.json",
+        "scripts/lib/payo-vesting-book-mainnet.mjs",
+        "scripts/payo-vesting-book-mainnet.mjs",
+        "evidence/vesting-tax-mainnet-plan.json"
+      ]
+    },
+    {
+      "id": "A13",
+      "section": 13,
+      "requirement": "Encrypted selective disclosure",
+      "status": "complete",
+      "evidence": [
+        "lib/client/proof-package-workflow.ts",
+        "lib/disclosure/proof-package.ts",
+        "app/activity/page.tsx",
+        "scripts/generate-phase3-matrix-disclosure.ts",
+        "evidence/phase3-matrix-disclosure.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-worker-package.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-worker-recurring-package.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-worker-checkpoint-package.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-worker-milestone-package.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-worker-vesting-package.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-worker-final-pay-package.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-worker-approved-adjustment-package.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-employer-package.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-auditor-package.json",
+        "evidence/phase3-devnet-fixtures/advanced-matrix-tax-package.json",
+        "docs/phase3-evidence.md",
+        "app/api/v1/payroll-books",
+        "lib/disclosure/payroll-book-report.ts",
+        "lib/client/payroll-report-workflow.ts",
+        "lib/disclosure/tax-evidence.ts",
+        "evidence/vesting-tax-devnet.json"
+      ]
+    },
+    {
+      "id": "A14",
+      "section": 14,
+      "requirement": "MCP and bounded execution",
+      "status": "complete",
+      "evidence": [
+        "packages/mcp/src/payo-server.ts",
+        "lib/domain/capability.ts",
+        "lib/server/agent-execution-worker.ts",
+        "lib/server/direct-privacy-agent-driver.ts",
+        "lib/server/policy-owner-signer-service.ts",
+        "contracts/src/policy_account.cairo",
+        "evidence/phase4-private-payroll-devnet.json",
+        "docs/phase4-evidence.md",
+        "lib/domain/private-exit.ts",
+        "lib/server/private-exit-quote.test.ts",
+        "lib/starknet/private-exit.test.ts",
+        "tests/browser/block5-private-exit.spec.ts"
+      ]
+    },
+    {
+      "id": "A15",
+      "section": 15,
+      "requirement": "All failure behavior implemented",
+      "status": "complete",
+      "evidence": [
+        "app/starknet/starknet-wallet.tsx",
+        "lib/server/agent-execution-worker.ts",
+        "lib/server/direct-privacy-account-activation.ts",
+        "lib/server/direct-privacy-agent-driver.ts",
+        "lib/server/policy-owner-signer-client.ts",
+        "lib/persistence/database.integration.test.ts",
+        "contracts/tests/test_policy_account.cairo",
+        "docs/phase4-evidence.md"
+      ]
+    },
+    {
+      "id": "A16",
+      "section": 16,
+      "requirement": "Full verification strategy",
+      "status": "complete",
+      "evidence": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/proof-artifacts.yml",
+        "lib",
+        "circuits",
+        "contracts/tests",
+        "contracts/integrity_verifier/tests",
+        "contracts/settlement_verifier_v8/tests",
+        "tests/browser/phase3-production-controls.spec.ts",
+        "tests/browser/phase4-agent-controls.spec.ts",
+        "scripts/verify-phase4-evidence.mjs",
+        "evidence/phase4-private-payroll-devnet.json",
+        "docs/phase1-evidence.md",
+        "docs/phase2-evidence.md",
+        "docs/phase3-evidence.md",
+        "docs/phase4-evidence.md",
+        "contracts/vesting_integration",
+        "scripts/test-vesting-tax-devnet.mjs",
+        "evidence/vesting-tax-devnet.json",
+        "scripts/lib/payo-vesting-book-mainnet.mjs",
+        "scripts/payo-vesting-book-mainnet.mjs",
+        "evidence/vesting-tax-mainnet-plan.json",
+        "tests/browser/block5-private-exit.spec.ts",
+        "scripts/verify-block5-private-exit-upstream.ts",
+        "scripts/verify-pre-hackathon-release.mjs",
+        "evidence/block5-private-exit-browser.json",
+        "evidence/block5-private-exit-upstream.json"
+      ]
+    }
   ]
 }

@@ -159,7 +159,7 @@ export async function fixture(options: {
   const scope = commitPolicyCapability(capability);
   const policyContext = {
     policyId,
-    sealMode: 0 as const,
+    sealMode: 2 as const,
     proofVersion: 1,
     schemaVersion: 1,
     payrollPolicyRoot: root("3"),
@@ -191,6 +191,7 @@ export async function fixture(options: {
           policyAccountAddress: "0x111",
           poolAddress: "0x333",
           sealAddress: "0x444",
+          bookSealAddress: "0x445",
           tokenAddresses: { STRK: "0x555", USDC: "0x666" },
         },
         principal,
@@ -213,7 +214,7 @@ export async function fixture(options: {
           chainId: "0x534e5f5345504f4c4941",
           policyAccountAddress: "0x111",
           policyId,
-          sealMode: 0,
+          sealMode: 2,
           proofVersion: 1,
           schemaVersion: 1,
           payrollPolicyRoot: root("3"),
@@ -226,6 +227,7 @@ export async function fixture(options: {
           maxCallCount: 1,
           poolAddress: "0x333",
           sealAddress: "0x444",
+          bookSealAddress: "0x445",
           tokenAddresses: { STRK: "0x555", USDC: "0x666" },
         },
         testSecrets: {
@@ -259,6 +261,7 @@ export async function fixture(options: {
           sessionPublicKey: account.config.sessionPublicKey,
           poolAddress: account.config.poolAddress,
           sealAddress: account.config.sealAddress,
+          bookSealAddress: account.config.bookSealAddress ?? "0x0",
           sealMode: account.config.sealMode,
           proofVersion: account.config.proofVersion,
           schemaVersion: account.config.schemaVersion,
@@ -540,7 +543,7 @@ export function registerDirectPrivacyRepositoryIntegrationTests(): void {
       principal,
       now,
     });
-    const retryAt = new Date(now.getTime() + 10 * 60_000 + 1);
+    const retryAt = new Date(now.getTime() + 30 * 60_000 + 1);
     await expect(leaseAgentExecutions("direct-expired-worker", 1, retryAt)).resolves.toEqual([]);
     expect((await getDatabase().select().from(agentExecutions))[0]).toMatchObject({
       id: first.executionId,

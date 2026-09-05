@@ -127,6 +127,80 @@ export async function advanceEncryptedRecurringAgreement(input: {
   });
 }
 
+export async function scheduleEncryptedVestingRelease(input: {
+  client: Pick<PayoClient, "storeEncryptedRecord">;
+  record: PayAgreementDirectoryRecord;
+  releaseAt: string;
+  principal: VaultPrincipalKeyPair;
+  now?: Date;
+}): Promise<PayAgreementDirectoryRecord> {
+  const agreement = input.record.agreement;
+  if (
+    agreement.agreementVersion !== "payo-agreement-v2"
+    || agreement.paymentPlan.kind !== "private_vesting"
+  ) {
+    throw new Error("Only an active private vesting agreement can schedule another release.");
+  }
+  if (input.record.effectiveUntil) throw new Error("A closed vesting agreement cannot schedule another release.");
+
+  const plan = agreement.paymentPlan;
+  const releaseAt = new Date(input.releaseAt);
+  if (!input.releaseAt || Number.isNaN(releaseAt.getTime())) {
+    throw new Error("The next vesting release is not a valid date and time.");
+  }
+  const previousReleaseAt = new Date(plan.releaseAt);
+  if (releaseAt <= previousReleaseAt) {
+    throw new Error("The next vesting release must follow the previous checkpoint.");
+  }
+  if (releaseAt > new Date(plan.endsAt)) {
+    throw new Error("The next vesting release cannot exceed the immutable vesting end.");
+  }
+
+  const previousEntitlement = advancedPlanEntitlement(plan, previousReleaseAt);
+  if (BigInt(plan.releasedAtomic) !== previousEntitlement.cumulativeEntitlementAtomic) {
+    throw new Error("The current vesting checkpoint must settle before scheduling another release.");
+  }
+  if (BigInt(plan.releasedAtomic) >= BigInt(plan.totalAtomic)) {
+    throw new Error("This vesting schedule is already fully released.");
+  }
+
+  const paymentPlan: AdvancedPaymentPlan = {
+    ...plan,
+    releaseAt: releaseAt.toISOString(),
+  };
+  const nextEntitlement = advancedPlanEntitlement(paymentPlan, releaseAt);
+  if (nextEntitlement.payableAtomic <= 0n) {
+    throw new Error("The next checkpoint does not add any vested value.");
+  }
+  const nextAgreement = {
+    ...agreement,
+    earningsAtomic: [nextEntitlement.payableAtomic.toString()],
+    paymentPlan,
+    schedule: proofScheduleForAdvancedPlan(paymentPlan),
+  };
+  const now = input.now ?? new Date();
+  const record = payAgreementRecordSchema.parse({
+    ...input.record,
+    revision: input.record.revision + 1,
+    updatedAt: now.toISOString(),
+    agreement: nextAgreement,
+    proofScheduleCommitment: await agreementProofScheduleCommitment(nextAgreement),
+    agreementCommitment: hashCanonicalJson({
+      domain: "PAYO_ENCRYPTED_AGREEMENT_V1",
+      agreement: nextAgreement,
+      recipientCommitment: input.record.recipientCommitment,
+      agreementSalt: input.record.agreementSalt,
+    }),
+  });
+  return storeCanonicalEncryptedRecord({
+    client: input.client,
+    organizationId: record.organizationId,
+    recordType: "pay-agreement",
+    record,
+    principals: [input.principal],
+  });
+}
+
 export type PayrollScheduleReference = {
   agreementId: string;
   scheduleCommitment: string;

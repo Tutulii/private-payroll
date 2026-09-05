@@ -9,3 +9,4 @@ pub mod payroll_exception_seal;
 pub mod policy_registry;
 pub mod settlement_commitments;
 pub mod tenant_obligation_registry;
+pub mod vesting_book_seal;

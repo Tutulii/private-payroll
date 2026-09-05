@@ -117,7 +117,7 @@ export class PolicyOwnerSignerService {
       || owner.length !== 1
       || !sameFelt(owner[0], this.signerPublicKey)
     ) throw new Error("The isolated signer no longer controls the pinned policy account.");
-    if (current.length !== 23) throw new Error("The policy account returned an invalid policy state.");
+    if (current.length !== 24) throw new Error("The policy account returned an invalid policy state.");
     if (BigInt(current[0]) === 1n) {
       if (!configuredPolicyMatches(request.call, current)) {
         throw new Error("The policy identifier is already configured with different limits.");
@@ -180,7 +180,7 @@ export class PolicyOwnerSignerService {
       || owner.length !== 1
       || !sameFelt(owner[0], this.signerPublicKey)
     ) throw new Error("The isolated signer no longer controls the pinned policy account.");
-    if (current.length !== 23) throw new Error("The policy account returned an invalid policy state.");
+    if (current.length !== 24) throw new Error("The policy account returned an invalid policy state.");
     if (BigInt(current[0]) === 1n) {
       if (!configuredPolicyMatches(request.call, current)) {
         throw new Error("The policy identifier is already configured with different limits.");

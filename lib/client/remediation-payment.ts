@@ -11,6 +11,8 @@ import {
   type WageRemediationSummary,
 } from "@/lib/domain/wage-remediation";
 import { buildAuthorizedExceptionAction } from "@/lib/starknet/payo-exception-seal";
+import { buildExceptionBookAction } from "@/lib/starknet/payo-vesting-book";
+import type { VestingBookProof } from "@/lib/proof/protocol";
 import { formatTokenAmount, PAYROLL_TOKENS } from "@/lib/starknet/tokens";
 import type { PayrollRecipient } from "@/app/starknet/starknet-wallet";
 import type { PayoClient } from "./payo-client";
@@ -82,10 +84,12 @@ export async function executeAuthorizedRemediationPayment(input: {
   remediation: WageRemediationSummary;
   principal: VaultPrincipalKeyPair;
   sealAddress: string;
+  bookSealAddress: string;
+  chainId: string;
   prepareSubmit: (
     workflow: "wage_remediation",
     recipients: PayrollRecipient[],
-    action: STRK20_INVOKE_ACTION,
+    action: STRK20_INVOKE_ACTION | readonly STRK20_INVOKE_ACTION[],
   ) => Promise<() => Promise<string>>;
   onStage?: (stage: "loading" | "recording" | "wallet" | "submitted") => void;
 }) {
@@ -145,10 +149,39 @@ export async function executeAuthorizedRemediationPayment(input: {
     subjectRecordId: privateRecord.id,
     totals,
   });
-  const action = buildAuthorizedExceptionAction({
+  const sourceAction = buildAuthorizedExceptionAction({
     sealAddress: input.sealAddress,
     mode: 3,
     publicInputs,
+  });
+  const storedBook = openedProof.payload.vestingBook;
+  if (!storedBook || storedBook.entryKind !== "remediation") {
+    throw new Error("The authorized remediation is missing its recoverable payroll-book proof.");
+  }
+  const vestingBook: VestingBookProof = {
+    ...storedBook,
+    scheduleId: storedBook.scheduleId as `0x${string}`,
+    previousStateCommitment: storedBook.previousStateCommitment as `0x${string}`,
+    nextStateCommitment: storedBook.nextStateCommitment as `0x${string}`,
+    releaseNullifier: storedBook.releaseNullifier as `0x${string}`,
+    bookEntryCommitment: storedBook.bookEntryCommitment as `0x${string}`,
+    provingTimeMs: 0,
+    shards: storedBook.shards.map((shard) => ({
+      ...shard,
+      proof: new Uint8Array(),
+    })) as VestingBookProof["shards"],
+  };
+  const bookAction = buildExceptionBookAction({
+    sealAddress: input.bookSealAddress,
+    exceptionSealAddress: input.sealAddress,
+    chainId: input.chainId,
+    sourceProof: {
+      proof: new Uint8Array(),
+      proofCalldata: openedProof.payload.proof.proofCalldata,
+      calldataHash: openedProof.payload.proof.calldataHash,
+      publicInputs,
+    },
+    vestingBook,
   });
   const recipients: PayrollRecipient[] = [{
     address: privateRecord.recipientAddress,
@@ -166,7 +199,7 @@ export async function executeAuthorizedRemediationPayment(input: {
   const submit = await input.prepareSubmit(
     "wage_remediation",
     recipients,
-    action,
+    [sourceAction, bookAction],
   );
 
   let settlementId = fresh.settlementId;

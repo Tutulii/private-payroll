@@ -62,6 +62,15 @@ function proofResponse(proof: PayoProofWorkerSuccess, origin: string | null) {
         ...exceptionProof,
         proofBase64: Buffer.from(proofBytes).toString("base64"),
       },
+      ...(proof.vestingBook ? {
+        vestingBook: {
+          ...proof.vestingBook,
+          shards: proof.vestingBook.shards.map(({ proof: shardBytes, ...shard }) => ({
+            ...shard,
+            proofBase64: Buffer.from(shardBytes).toString("base64"),
+          })),
+        },
+      } : {}),
     }, { headers: corsHeaders(origin) });
   }
   return Response.json({
@@ -70,6 +79,15 @@ function proofResponse(proof: PayoProofWorkerSuccess, origin: string | null) {
       ...shard,
       proofBase64: Buffer.from(proofBytes).toString("base64"),
     })),
+    ...(proof.vestingBook ? {
+      vestingBook: {
+        ...proof.vestingBook,
+        shards: proof.vestingBook.shards.map(({ proof: proofBytes, ...shard }) => ({
+          ...shard,
+          proofBase64: Buffer.from(proofBytes).toString("base64"),
+        })),
+      },
+    } : {}),
   }, { headers: corsHeaders(origin) });
 }
 

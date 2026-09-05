@@ -116,12 +116,41 @@ export function buildPrivatePayrollActions(
 export function buildPrivateExceptionActions(
   workflow: PrivateExceptionWorkflow,
   recipients: PrivatePayrollRecipient[],
-  payoAction: STRK20_INVOKE_ACTION,
+  payoAction: STRK20_INVOKE_ACTION | readonly STRK20_INVOKE_ACTION[],
   configuredSeal: string,
   connectedAddress?: string,
+  configuredBookSeal?: string,
 ): PrivatePayrollActionBundle {
+  const payoActions = Array.isArray(payoAction) ? [...payoAction] : [payoAction];
+  const sourceAction = payoActions[0];
+  if (!sourceAction) throw new Error("The proof-bound exception action is missing.");
   const expectedMode = workflow === "wage_claim" ? 2 : 3;
-  assertProofBoundAction(payoAction, configuredSeal, expectedMode);
+  assertProofBoundAction(sourceAction, configuredSeal, expectedMode);
+  if (workflow === "wage_claim" && payoActions.length !== 1) {
+    throw new Error("A wage claim cannot attach a private payroll-book callback.");
+  }
+  if (workflow === "wage_remediation") {
+    if (payoActions.length !== 2 || !configuredBookSeal) {
+      throw new Error("A wage remediation requires its universal payroll-book callback.");
+    }
+    const bookAction = payoActions[1];
+    let bookSeal: string;
+    try {
+      bookSeal = validateAndParseAddress(configuredBookSeal);
+    } catch {
+      throw new Error("The configured PAYO payroll-book seal address is invalid.");
+    }
+    if (bookAction.type !== "invoke"
+      || num.toBigInt(validateAndParseAddress(bookAction.contract)) !== num.toBigInt(bookSeal)
+      || bookAction.calldata.length !== 6
+      || BigInt(String(bookAction.calldata[0])) !== BigInt(String(sourceAction.calldata[1]))
+      || BigInt(String(bookAction.calldata[1])) !== BigInt(String(sourceAction.calldata[2]))) {
+      throw new Error("The remediation payroll-book callback is not bound to the exact source subject.");
+    }
+    for (const field of bookAction.calldata) {
+      if (BigInt(String(field)) < 0n) throw new Error("Payroll-book callback calldata is not canonical.");
+    }
+  }
   if (workflow === "wage_claim") {
     if (recipients.length !== 0) throw new Error("A wage claim cannot transfer private funds.");
     let selfRecipient: string;
@@ -138,7 +167,7 @@ export function buildPrivateExceptionActions(
           amount: num.toHex(1n),
           recipient: selfRecipient,
         },
-        payoAction,
+        sourceAction,
       ],
       totals: { STRK: 0n, USDC: 0n },
       operationalReserves: { STRK: 1n, USDC: 0n },
@@ -149,10 +178,11 @@ export function buildPrivateExceptionActions(
   }
   const { actions, totals } = buildPrivatePayrollActions(
     recipients,
-    { ...payoAction, calldata: ["0x0", ...payoAction.calldata.slice(1)] },
+    { ...sourceAction, calldata: ["0x0", ...sourceAction.calldata.slice(1)] },
     configuredSeal,
   );
-  actions[actions.length - 1] = payoAction;
+  actions[actions.length - 1] = sourceAction;
+  actions.push(payoActions[1]!);
   return { actions, totals, operationalReserves: { STRK: 0n, USDC: 0n } };
 }
 

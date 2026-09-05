@@ -46,6 +46,12 @@ import {
   requiredPayrollReservesForQuotes,
   type PrivateExceptionWorkflow,
 } from "@/lib/starknet/private-payroll";
+import type { PrivateExitQuote } from "@/lib/domain/private-exit";
+import {
+  buildPrivateSwapActions,
+  buildPublicWithdrawalAction,
+  STRK20_EKUBO_ANONYMIZER_CLASS_HASH,
+} from "@/lib/starknet/private-exit";
 import { describeWalletError } from "@/lib/starknet/wallet-error";
 import {
   prepareFxRootPublication,
@@ -104,7 +110,15 @@ export type WalletChoice = {
 };
 
 export type PrivateTransaction = {
-  kind: "shield" | "payroll" | "wage_claim" | "wage_remediation" | "registry" | "deployment";
+  kind:
+    | "shield"
+    | "payroll"
+    | "wage_claim"
+    | "wage_remediation"
+    | "private_swap"
+    | "public_withdrawal"
+    | "registry"
+    | "deployment";
   stage: "wallet" | "confirming" | "confirmed" | "failed";
   label: string;
   hash?: string;
@@ -240,8 +254,15 @@ type StarknetWalletContextValue = {
   prepareProofBoundException: (
     workflow: PrivateExceptionWorkflow,
     recipients: PayrollRecipient[],
-    payoAction: STRK20_INVOKE_ACTION,
+    payoAction: STRK20_INVOKE_ACTION | readonly STRK20_INVOKE_ACTION[],
   ) => Promise<() => Promise<string>>;
+  runPrivateSwap: (quote: PrivateExitQuote) => Promise<string>;
+  runPublicWithdrawal: (input: {
+    token: PayrollTokenSymbol;
+    amount: string;
+    recipient: string;
+    acknowledgedPublicDisclosure: boolean;
+  }) => Promise<string>;
   assertPrivateActionAvailable: () => void;
   reconcilePayrollTransaction: (transactionHash: string) => Promise<void>;
   scheduleObligationRoot: (agreementRoot: string) => Promise<ObligationRootScheduleResult>;
@@ -260,6 +281,7 @@ type StarknetWalletContextValue = {
     observedAt: number;
     maximumAgeSeconds: number;
   }) => Promise<string>;
+  isPolicyRootActive: (policyRoot: string) => Promise<boolean>;
   isFxRootActive: (fxRoot: string) => Promise<boolean>;
   deployPayoMainnet: (
     deploymentPackage: PayoBrowserDeploymentPackage,
@@ -823,7 +845,13 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
 
   const submitPrivateActions = useCallback(
     async (
-      kind: "shield" | "payroll" | "wage_claim" | "wage_remediation",
+      kind:
+        | "shield"
+        | "payroll"
+        | "wage_claim"
+        | "wage_remediation"
+        | "private_swap"
+        | "public_withdrawal",
       label: string,
       actions: STRK20_ACTION[],
       details: Pick<
@@ -920,7 +948,11 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
         ? "wage claim"
         : activeKind === "wage_remediation"
           ? "wage remediation"
-          : "private wallet request";
+          : activeKind === "private_swap"
+            ? "private swap"
+            : activeKind === "public_withdrawal"
+              ? "public withdrawal"
+              : "private wallet request";
     throw new Error(`A ${label} is already awaiting Ready or Mainnet confirmation. Do not generate or approve a duplicate.`);
   }, []);
 
@@ -1032,6 +1064,95 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     (amount: string) => shieldToken("STRK", amount),
     [shieldToken],
   );
+  const runPrivateSwap = useCallback(
+    async (quoteInput: PrivateExitQuote) => {
+      assertPrivateActionAvailable();
+      if (!walletAccount || !address) throw new Error("Connect Ready wallet first.");
+      const { quote, actions } = buildPrivateSwapActions({
+        quote: quoteInput,
+        privateRecipient: address,
+      });
+      const [executorClassHash, feeQuote, currentShieldedBalances] = await Promise.all([
+        mainnetProvider.getClassHashAt(quote.executorAddress, quote.quoteBlockHash),
+        requestPrivateFeeQuote(quote.fromToken),
+        refreshBalanceForAccount(walletAccount),
+      ]);
+      if (BigInt(executorClassHash) !== BigInt(STRK20_EKUBO_ANONYMIZER_CLASS_HASH)) {
+        throw new Error("The private swap executor changed after quoting. No wallet request was created.");
+      }
+      const amountIn = BigInt(quote.amountInAtomic);
+      const available = currentShieldedBalances[quote.fromToken];
+      const required = amountIn + feeQuote.walletFee;
+      if (available === null || available < required) {
+        throw new Error(
+          `The shielded ${quote.fromToken} balance does not cover the swap and private fee reserve. Required ${formatTokenAmount(required, quote.fromToken)} ${quote.fromToken}; available ${formatTokenAmount(available, quote.fromToken)} ${quote.fromToken}.`,
+        );
+      }
+      return submitPrivateActions(
+        "private_swap",
+        `${formatTokenAmount(amountIn, quote.fromToken)} ${quote.fromToken} → at least ${formatTokenAmount(BigInt(quote.minimumOutAtomic), quote.toToken)} ${quote.toToken} privately`,
+        actions,
+        {
+          grossAmount: amountIn,
+          walletFee: feeQuote.walletFee,
+          feeToken: feeQuote.token,
+          token: quote.fromToken,
+          feeQuoteExact: feeQuote.exact,
+        },
+      );
+    },
+    [
+      address,
+      assertPrivateActionAvailable,
+      refreshBalanceForAccount,
+      requestPrivateFeeQuote,
+      submitPrivateActions,
+      walletAccount,
+    ],
+  );
+
+  const runPublicWithdrawal = useCallback(
+    async (input: {
+      token: PayrollTokenSymbol;
+      amount: string;
+      recipient: string;
+      acknowledgedPublicDisclosure: boolean;
+    }) => {
+      assertPrivateActionAvailable();
+      if (!walletAccount) throw new Error("Connect Ready wallet first.");
+      const { action, amountAtomic } = buildPublicWithdrawalAction(input);
+      const [feeQuote, currentShieldedBalances] = await Promise.all([
+        requestPrivateFeeQuote(input.token),
+        refreshBalanceForAccount(walletAccount),
+      ]);
+      const available = currentShieldedBalances[input.token];
+      const required = amountAtomic + feeQuote.walletFee;
+      if (available === null || available < required) {
+        throw new Error(
+          `The shielded ${input.token} balance does not cover this public withdrawal and private fee reserve. Required ${formatTokenAmount(required, input.token)} ${input.token}; available ${formatTokenAmount(available, input.token)} ${input.token}.`,
+        );
+      }
+      return submitPrivateActions(
+        "public_withdrawal",
+        `${formatTokenAmount(amountAtomic, input.token)} ${input.token} withdrawn publicly`,
+        [action],
+        {
+          grossAmount: amountAtomic,
+          walletFee: feeQuote.walletFee,
+          feeToken: feeQuote.token,
+          token: input.token,
+          feeQuoteExact: feeQuote.exact,
+        },
+      );
+    },
+    [
+      assertPrivateActionAvailable,
+      refreshBalanceForAccount,
+      requestPrivateFeeQuote,
+      submitPrivateActions,
+      walletAccount,
+    ],
+  );
 
   const runProofBoundPayroll = useCallback(
     async (recipients: PayrollRecipient[], payoAction: STRK20_INVOKE_ACTION) => {
@@ -1085,17 +1206,19 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     async (
       workflow: PrivateExceptionWorkflow,
       recipients: PayrollRecipient[],
-      payoAction: STRK20_INVOKE_ACTION,
+      payoAction: STRK20_INVOKE_ACTION | readonly STRK20_INVOKE_ACTION[],
     ) => {
       assertPrivateActionAvailable();
       if (!walletAccount || !address) throw new Error("Connect Ready wallet first.");
       const configuredSeal = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
+      const configuredBookSeal = process.env.NEXT_PUBLIC_PAYO_VESTING_BOOK_SEAL_ADDRESS;
       const { actions, totals, operationalReserves } = buildPrivateExceptionActions(
         workflow,
         recipients,
         payoAction,
         configuredSeal ?? "",
         address,
+        configuredBookSeal,
       );
       const feeTokens = workflow === "wage_claim"
         ? [PAYROLL_TOKENS.STRK]
@@ -1416,6 +1539,18 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     const response = await mainnetProvider.callContract({
       contractAddress: registryAddress,
       entrypoint: "is_fx_root_valid",
+      calldata: [high.toString(), low.toString()],
+    });
+    return num.toBigInt(response[0] ?? "0x0") !== 0n;
+  }, []);
+
+  const isPolicyRootActive = useCallback(async (policyRoot: string): Promise<boolean> => {
+    const registryAddress = process.env.NEXT_PUBLIC_PAYO_POLICY_REGISTRY_ADDRESS;
+    if (!registryAddress) throw new Error("The PAYO policy registry is not deployed/configured.");
+    const { high, low } = rootLimbs(policyRoot);
+    const response = await mainnetProvider.callContract({
+      contractAddress: registryAddress,
+      entrypoint: "is_policy_root_valid",
       calldata: [high.toString(), low.toString()],
     });
     return num.toBigInt(response[0] ?? "0x0") !== 0n;
@@ -1965,6 +2100,8 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     runProofBoundPayroll,
     runProofBoundException,
     prepareProofBoundException,
+    runPrivateSwap,
+    runPublicWithdrawal,
     assertPrivateActionAvailable,
     reconcilePayrollTransaction,
     scheduleObligationRoot,
@@ -1973,6 +2110,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     isObligationRootActive,
     getObligationRootOwner,
     publishFxRoot,
+    isPolicyRootActive,
     isFxRootActive,
     deployPayoMainnet,
     schedulePayoBaseline,

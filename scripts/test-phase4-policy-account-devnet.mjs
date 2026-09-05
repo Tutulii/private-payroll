@@ -164,6 +164,7 @@ const configureCall = {
     felt(deployerAddress),
     felt(deployerAddress),
     "0x0",
+    "0x0",
     "0x2",
     "0x1",
     felt(policyRoot >> 128n),
@@ -182,7 +183,7 @@ const configureCall = {
 };
 const configureTransactionHash = await invoke(owner, configureCall);
 let policy = await call(policyAccountAddress, "get_policy", [policyId]);
-if (policy.length !== 23 || BigInt(policy[0]) !== 1n || BigInt(policy[1]) !== 0n) {
+if (policy.length !== 24 || BigInt(policy[0]) !== 1n || BigInt(policy[1]) !== 0n) {
   throw new Error("Configured policy did not round-trip from chain.");
 }
 if (BigInt(policy[2]) !== BigInt(sessionPublicKey)) throw new Error("Initial session key mismatch.");

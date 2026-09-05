@@ -35,6 +35,7 @@ import {
 import {
   obligationScheduleForRecord,
   loadEncryptedPayAgreements,
+  scheduleEncryptedVestingRelease,
   type PayAgreementDirectoryRecord,
 } from "@/lib/client/agreement-directory";
 import {
@@ -42,6 +43,7 @@ import {
   type AgreementPlanKind,
 } from "@/lib/client/agreement-form-workflow";
 import { PAYO_EMPLOYEE_POLICY_OPTIONS } from "@/lib/policy/execution-catalog";
+import { vestingDisplayStatus } from "@/lib/client/vesting-display";
 import {
   CLASSIFICATION_EMPLOYEE_THRESHOLD,
   CLASSIFICATION_FACTS,
@@ -165,6 +167,8 @@ export default function TeamPage() {
   const [requireSeverance, setRequireSeverance] = useState(false);
   const [policyId, setPolicyId] = useState(NET_INVOICE_POLICY_ID);
   const [fxFloorAmount, setFxFloorAmount] = useState("");
+  const [vestingReleaseRecordId, setVestingReleaseRecordId] = useState("");
+  const [nextVestingReleaseAt, setNextVestingReleaseAt] = useState("");
   const [directoryLoadedAt] = useState(() => Date.now());
   const directoryRefreshGeneration = useRef(0);
   const claimIdentityInput = useRef<HTMLInputElement>(null);
@@ -254,16 +258,40 @@ export default function TeamPage() {
     const cadence = agreement?.agreement.schedule.kind === "recurring"
       ? agreement.agreement.schedule.cadence
       : agreement?.agreement.schedule.kind ?? "No agreement";
+    const vestingPlan = agreement?.agreement.agreementVersion === "payo-agreement-v2"
+      && agreement.agreement.paymentPlan.kind === "private_vesting"
+      ? agreement.agreement.paymentPlan
+      : null;
+    const vestingStatus = vestingPlan ? vestingDisplayStatus(vestingPlan) : null;
+    const vestingToken = agreement?.agreement.settlementToken ?? payee.tokenPreference;
+    const vesting = vestingStatus ? {
+      vested: `${formatTokenAmount(vestingStatus.vestedAtomic, vestingToken)} ${vestingToken}`,
+      released: `${formatTokenAmount(vestingStatus.releasedAtomic, vestingToken)} ${vestingToken}`,
+      available: `${formatTokenAmount(vestingStatus.availableAtomic, vestingToken)} ${vestingToken}`,
+      nextRelease: vestingStatus.nextRelease.state === "scheduled"
+        ? `Next ${new Date(vestingStatus.nextRelease.at).toISOString().slice(0, 16).replace("T", " ")} UTC`
+        : vestingStatus.nextRelease.state === "available_now"
+          ? "Release available now"
+          : vestingStatus.nextRelease.state === "complete"
+            ? "Vesting complete"
+            : "Schedule the next release",
+      canSchedule: vestingStatus.nextRelease.state === "needs_schedule",
+      releaseAt: vestingPlan?.releaseAt ?? "",
+      endsAt: vestingPlan?.endsAt ?? "",
+    } : null;
     return {
       id: payee.id,
       payee,
       name: payee.displayName,
       role: payee.principalKind === "agent" ? "AI agent" : "Human contributor",
       kind: payee.principalKind === "agent" ? "Agent" as const : "Human" as const,
-      amount: earnings === undefined
-        ? `Not configured · ${payee.tokenPreference}`
-        : `${formatTokenAmount(earnings, agreement.agreement.settlementToken)} ${agreement.agreement.settlementToken}`,
-      cadence,
+      amount: vestingPlan
+        ? `${formatTokenAmount(BigInt(vestingPlan.totalAtomic), vestingToken)} ${vestingToken} total`
+        : earnings === undefined
+          ? `Not configured · ${payee.tokenPreference}`
+          : `${formatTokenAmount(earnings, agreement.agreement.settlementToken)} ${agreement.agreement.settlementToken}`,
+      cadence: vestingPlan ? "Private vesting" : cadence,
+      vesting,
       initials: payee.displayName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase(),
       tone: memberTones[index % memberTones.length],
       ready: payee.status === "active" && Boolean(agreement),
@@ -468,6 +496,62 @@ export default function TeamPage() {
         : "Agreement encrypted · Payroll will retry its private due-schedule registration");
     } catch (error) {
       setDirectoryError(error instanceof Error ? error.message : "The agreement could not be encrypted.");
+    } finally {
+      setDirectoryLoading(false);
+    }
+  };
+
+  const openVestingReleaseForm = (record: PayAgreementDirectoryRecord, openedAt: Date) => {
+    const agreement = record.agreement;
+    if (
+      agreement.agreementVersion !== "payo-agreement-v2"
+      || agreement.paymentPlan.kind !== "private_vesting"
+    ) {
+      setDirectoryError("Only a private vesting agreement can schedule another release.");
+      return;
+    }
+    const previous = new Date(agreement.paymentPlan.releaseAt).getTime();
+    const end = new Date(agreement.paymentPlan.endsAt).getTime();
+    const target = Math.min(Math.max(openedAt.getTime() + 10 * 60_000, previous + 60_000), end);
+    if (target <= previous) {
+      setDirectoryError("This vesting schedule has no later checkpoint available.");
+      return;
+    }
+    setVestingReleaseRecordId(record.id);
+    setNextVestingReleaseAt(localDateTimeInputValue(new Date(target)));
+    setDirectoryError("");
+  };
+
+  const submitVestingRelease = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!vault.client || !vault.session) {
+      setDirectoryError("Unlock the encrypted workspace before scheduling a vesting release.");
+      return;
+    }
+    const record = agreements.find(({ id }) => id === vestingReleaseRecordId);
+    if (!record) {
+      setDirectoryError("The selected vesting agreement is no longer available.");
+      return;
+    }
+    setDirectoryLoading(true);
+    setDirectoryError("");
+    try {
+      const scheduled = await scheduleEncryptedVestingRelease({
+        client: vault.client,
+        record,
+        releaseAt: nextVestingReleaseAt,
+        principal: vault.session.principal,
+      });
+      await vault.client.registerObligationSchedules({
+        organizationId: vault.session.organizationId,
+        schedules: [obligationScheduleForRecord(scheduled)],
+      });
+      setVestingReleaseRecordId("");
+      setNextVestingReleaseAt("");
+      await refreshPayees();
+      notify("Next private vesting release encrypted and scheduled");
+    } catch (error) {
+      setDirectoryError(error instanceof Error ? error.message : "The next vesting release could not be scheduled.");
     } finally {
       setDirectoryLoading(false);
     }
@@ -900,7 +984,27 @@ export default function TeamPage() {
               <div className="member-name"><h4>{member.name}</h4><span className={member.kind === "Agent" ? "kind-tag kind-tag--agent" : "kind-tag"}>{member.kind}</span></div>
               <p>{member.role}</p>
               <div className="member-pay"><span><small>Compensation</small><strong>{member.amount}</strong></span><em>{member.cadence}</em></div>
-              <button type="button" className="member-open" onClick={() => openAgreementForm(member.payee)}>{member.ready ? "Update encrypted agreement" : "Add encrypted agreement"} <span>→</span></button>
+              {member.vesting && (
+                <div className="member-pay" aria-label={`Private vesting status for ${member.name}`}>
+                  <span><small>Vested / released</small><strong>{member.vesting.vested} / {member.vesting.released}</strong></span>
+                  <span><small>Available</small><strong>{member.vesting.available}</strong><em>{member.vesting.nextRelease}</em></span>
+                </div>
+              )}
+              {member.vesting ? (
+                <>
+                  <p className="member-vesting-note"><ShieldCheck size={12} /> Immutable proof-bound vesting terms</p>
+                  {member.vesting.canSchedule && member.agreement && (
+                    vestingReleaseRecordId === member.agreement.id
+                      ? <form className="member-vesting-form" onSubmit={submitVestingRelease}>
+                          <label><span>Next release checkpoint</span><input type="datetime-local" value={nextVestingReleaseAt} onChange={(event) => setNextVestingReleaseAt(event.target.value)} required /></label>
+                          <div><button type="button" onClick={() => { setVestingReleaseRecordId(""); setNextVestingReleaseAt(""); }}>Cancel</button><button type="submit" disabled={directoryLoading}>{directoryLoading ? <LoaderCircle className="spin" size={13} /> : <ShieldCheck size={13} />} Schedule</button></div>
+                        </form>
+                      : <button type="button" className="member-open" onClick={() => openVestingReleaseForm(member.agreement!, new Date())}>Schedule next release <span>→</span></button>
+                  )}
+                </>
+              ) : (
+                <button type="button" className="member-open" onClick={() => openAgreementForm(member.payee)}>{member.ready ? "Update encrypted agreement" : "Add encrypted agreement"} <span>→</span></button>
+              )}
               {member.kind === "Agent" && member.ready && (
                 member.activeCapability
                   ? <button type="button" className="member-open member-open--capability" onClick={() => void revokeAgentCapability(member.activeCapability!)} disabled={directoryLoading}>Revoke {member.activeCapability.signedCapability.capability.executionMode === "autonomous_bounded" ? "bounded autonomy" : "approval capability"} <span>×</span></button>

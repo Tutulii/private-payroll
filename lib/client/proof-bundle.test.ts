@@ -14,6 +14,7 @@ import {
   type ProofWorkerSuccess,
 } from "@/lib/proof/protocol";
 import { hashProofCalldata } from "@/lib/proof/starknet-calldata";
+import { mockExceptionBookProof } from "@/lib/proof/vesting-transition-test-support";
 import {
   prepareEncryptedExceptionProofBundle,
   prepareEncryptedPayrollIntegrityBundle,
@@ -153,6 +154,20 @@ describe("encrypted vNext exception proof bundle", () => {
           shardIndex: "0",
         },
       },
+      vestingBook: mockExceptionBookProof({
+        source: {
+          chainId: "1", sealAddress: "0x12345", proofVersion: "6", schemaVersion: "2",
+          agreementRootHigh: "1", agreementRootLow: "2", manifestRootHigh: "3", manifestRootLow: "4",
+          policyRootHigh: "5", policyRootLow: "6", fxRootHigh: "7", fxRootLow: "8",
+          subjectNullifierHigh: "9", subjectNullifierLow: "10", parentNullifierHigh: "11", parentNullifierLow: "12",
+          factCommitmentHigh: "13", factCommitmentLow: "14", parentFactCommitmentHigh: "15", parentFactCommitmentLow: "16",
+          validityStart: "1000", validityExpiry: "2000", shardIndex: "0",
+        },
+        entryKind: "claim",
+        bookSealAddress: "0x456",
+        sourceSealAddress: "0x12345",
+        ownerAddress: "0xabc",
+      }),
     };
   }
 

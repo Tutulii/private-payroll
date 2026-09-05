@@ -10,8 +10,74 @@ import {
   mapExceptionPublicInputsV2,
   type ExceptionPublicInputsV2,
 } from "@/lib/domain/exception-protocol";
+import {
+  PAYO_VESTING_TRANSITION_PUBLIC_INPUT_COUNT,
+  mapVestingTransitionPublicInputs,
+  type VestingTransitionPublicInputs,
+} from "./vesting-transition-input";
 
 export const STARKNET_FIELD_PRIME = (1n << 251n) + (17n << 192n) + 1n;
+
+const VESTING_PUBLIC_INPUT_KEYS = [
+  "chainId",
+  "sealAddress",
+  "proofVersion",
+  "schemaVersion",
+  "entryKind",
+  "agreementRootHigh",
+  "agreementRootLow",
+  "manifestRootHigh",
+  "manifestRootLow",
+  "policyRootHigh",
+  "policyRootLow",
+  "fxRootHigh",
+  "fxRootLow",
+  "runNullifierHigh",
+  "runNullifierLow",
+  "subjectNullifierHigh",
+  "subjectNullifierLow",
+  "parentFactHigh",
+  "parentFactLow",
+  "factHigh",
+  "factLow",
+  "ownerAddress",
+  "sourceSealAddress",
+  "sourceProofVersion",
+  "attestationRootHigh",
+  "attestationRootLow",
+  "shard0ContributorCount",
+  "shard1ContributorCount",
+  "totalsDisclosed",
+  "totalsCommitmentHigh",
+  "totalsCommitmentLow",
+  "shard0StrkGross",
+  "shard0StrkDeductions",
+  "shard0StrkNet",
+  "shard0UsdcGross",
+  "shard0UsdcDeductions",
+  "shard0UsdcNet",
+  "shard1StrkGross",
+  "shard1StrkDeductions",
+  "shard1StrkNet",
+  "shard1UsdcGross",
+  "shard1UsdcDeductions",
+  "shard1UsdcNet",
+  "scheduleIdHigh",
+  "scheduleIdLow",
+  "previousStateHigh",
+  "previousStateLow",
+  "nextStateHigh",
+  "nextStateLow",
+  "releaseNullifierHigh",
+  "releaseNullifierLow",
+  "bookEntryHigh",
+  "bookEntryLow",
+  "periodStart",
+  "periodEnd",
+  "validityStart",
+  "validityExpiry",
+  "shardIndex",
+] as const satisfies readonly (keyof VestingTransitionPublicInputs)[];
 
 const PUBLIC_INPUT_KEYS = [
   "chainId",
@@ -50,6 +116,12 @@ export function orderedPayrollPublicInputs(input: PayrollIntegrityPublicInputs):
   return PUBLIC_INPUT_KEYS.map((key) => input[key]);
 }
 
+export function orderedVestingTransitionPublicInputs(
+  input: VestingTransitionPublicInputs,
+): string[] {
+  return VESTING_PUBLIC_INPUT_KEYS.map((key) => input[key]);
+}
+
 /** Barretenberg serializes each public input as one 32-byte, big-endian value. */
 export function serializePayrollPublicInputs(values: readonly string[]): Uint8Array {
   if (values.length !== PAYROLL_INTEGRITY_PUBLIC_INPUT_COUNT) {
@@ -60,6 +132,23 @@ export function serializePayrollPublicInputs(values: readonly string[]): Uint8Ar
   const output = new Uint8Array(values.length * 32);
   values.forEach((value, index) => {
     let remaining = parseUnsigned(value, `Public input ${index}`, 1n << 256n);
+    for (let byte = 31; byte >= 0; byte -= 1) {
+      output[index * 32 + byte] = Number(remaining & 0xffn);
+      remaining >>= 8n;
+    }
+  });
+  return output;
+}
+
+export function serializeVestingTransitionPublicInputs(values: readonly string[]): Uint8Array {
+  if (values.length !== PAYO_VESTING_TRANSITION_PUBLIC_INPUT_COUNT) {
+    throw new Error(
+      `Expected ${PAYO_VESTING_TRANSITION_PUBLIC_INPUT_COUNT} vesting-transition public inputs; received ${values.length}.`,
+    );
+  }
+  const output = new Uint8Array(values.length * 32);
+  values.forEach((value, index) => {
+    let remaining = parseUnsigned(value, `Vesting public input ${index}`, 1n << 256n);
     for (let byte = 31; byte >= 0; byte -= 1) {
       output[index * 32 + byte] = Number(remaining & 0xffn);
       remaining >>= 8n;
@@ -233,6 +322,36 @@ export function parsePayrollPublicInputsFromGaragaCalldata(
     }
   }
   return advancedInputs;
+}
+
+/** Extracts the canonical 58-field v3 state/book ABI from direct Garaga calldata. */
+export function parseVestingTransitionPublicInputsFromGaragaCalldata(
+  calldata: readonly string[],
+): VestingTransitionPublicInputs {
+  const requiredLength = 1 + PAYO_VESTING_TRANSITION_PUBLIC_INPUT_COUNT * 2;
+  if (calldata.length < requiredLength) {
+    throw new Error("Garaga proof calldata is too short for vesting-transition public inputs.");
+  }
+  const count = parseUnsigned(calldata[0], "Vesting public input count", 1n << 32n);
+  if (count !== BigInt(PAYO_VESTING_TRANSITION_PUBLIC_INPUT_COUNT)) {
+    throw new Error(
+      `Expected ${PAYO_VESTING_TRANSITION_PUBLIC_INPUT_COUNT} Garaga vesting public inputs; received ${count}.`,
+    );
+  }
+  const values = Array.from({ length: PAYO_VESTING_TRANSITION_PUBLIC_INPUT_COUNT }, (_, index) => {
+    const low = parseUnsigned(
+      calldata[1 + index * 2],
+      `Vesting public input ${index} low limb`,
+      1n << 128n,
+    );
+    const high = parseUnsigned(
+      calldata[2 + index * 2],
+      `Vesting public input ${index} high limb`,
+      1n << 128n,
+    );
+    return (low + (high << 128n)).toString();
+  });
+  return mapVestingTransitionPublicInputs(values);
 }
 
 /** Extracts the canonical 23-field vNext ABI from direct Garaga calldata. */

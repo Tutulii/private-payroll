@@ -9,6 +9,7 @@ import {
   exceptionProofCalldataSchema,
   exceptionProofPublicInputsSchema,
   starknetFeltSchema,
+  vestingBookProofSubmissionSchema,
 } from "@/lib/domain/proof-bundle";
 import {
   WAGE_CLAIM_VNEXT_CIRCUIT_SHA256,
@@ -35,7 +36,20 @@ export const encryptedExceptionProofPayloadSchema = z.object({
     calldataHash: starknetFeltSchema,
     publicInputs: exceptionProofPublicInputsSchema,
   }).strict(),
-}).strict();
+  vestingBook: vestingBookProofSubmissionSchema.optional(),
+}).strict().superRefine((payload, context) => {
+  const requiresBook = payload.profile === "wage_claim_v6"
+    || payload.profile === "wage_remediation_v7";
+  if (requiresBook !== Boolean(payload.vestingBook)) {
+    context.addIssue({
+      code: "custom",
+      path: ["vestingBook"],
+      message: requiresBook
+        ? "Claim and remediation recovery requires the universal payroll-book proof."
+        : "An obligation snapshot cannot carry a payroll-book proof.",
+    });
+  }
+});
 
 export type OpenedExceptionProof = z.infer<
   typeof encryptedExceptionProofPayloadSchema
@@ -109,7 +123,10 @@ export async function authorizeStoredExceptionProof(input: {
   const opened = await openStoredExceptionProof(input);
   const { authorization } = await input.client.enqueueExceptionAuthorization({
     proofBundleId: input.proofBundleId,
-    proofCalldata: opened.payload.proof.proofCalldata,
+    request: {
+      proofCalldata: opened.payload.proof.proofCalldata,
+      vestingBook: opened.payload.vestingBook!,
+    },
   });
   return { ...opened, authorization };
 }

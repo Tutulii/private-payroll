@@ -19,7 +19,11 @@ import type {
   ObligationSnapshotPlanSummary,
 } from "@/lib/domain/obligation-snapshot-plan";
 import { generateUuidV7, payrollLineRecordSchema } from "@/lib/domain/records";
-import type { EncryptedPayoProofBundleCreate } from "@/lib/domain/proof-bundle";
+import type {
+  EncryptedPayoProofBundleCreate,
+  ExceptionAuthorizationRequest,
+  VestingAuthorizationRequest,
+} from "@/lib/domain/proof-bundle";
 import type { WorkerClaimCreate, WorkerClaimSummary } from "@/lib/domain/worker-claim";
 import type { WageRemediationCreate, WageRemediationSummary } from "@/lib/domain/wage-remediation";
 import type {
@@ -32,6 +36,10 @@ import type {
   PayoReadinessResult,
 } from "@/lib/starknet/readiness";
 import type { VaultRotationRequest } from "@/lib/domain/vault-lifecycle";
+import type {
+  PayrollBookReportSource,
+  TrustedPayrollBookSnapshot,
+} from "@/lib/disclosure/payroll-book-report";
 import type { SignedCapability } from "@/lib/domain/capability";
 import type { AgentExecutionReceipt } from "@/lib/domain/agent-execution";
 import type { DirectPrivacyAccountConfig } from "@/lib/domain/direct-privacy";
@@ -55,7 +63,13 @@ export type ExceptionAuthorizationStatus = {
   workflowType: "wage_claim" | "wage_remediation";
   subjectRecordId: string;
   state: "pending" | "leased" | "complete" | "dead";
+  activeStep: "source" | "book_begin" | "book_transition0" | "book_transition1" | "book_finalize";
   transactionHash: string | null;
+  sourceTransactionHash: string | null;
+  bookBeginTransactionHash: string | null;
+  bookTransitionShard0TransactionHash: string | null;
+  bookTransitionShard1TransactionHash: string | null;
+  bookFinalizeTransactionHash: string | null;
   attempts: number;
   lastErrorCode: string | null;
   lastErrorMessage: string | null;
@@ -79,6 +93,28 @@ export type PayrollAuthorizationStatus = {
   snapshotTransactionHash: string | null;
   shard0TransactionHash: string | null;
   shard1TransactionHash: string | null;
+  attempts: number;
+  lastErrorCode: string | null;
+  lastErrorMessage: string | null;
+  authorizedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  replayed?: boolean;
+};
+
+export type VestingAuthorizationStatus = {
+  id: string;
+  organizationId: string;
+  runId: string;
+  payrollProofBundleId: string;
+  state: "pending" | "leased" | "complete" | "dead";
+  activeStep: "begin" | "payroll0" | "payroll1" | "transition0" | "transition1";
+  transactionHash: string | null;
+  beginTransactionHash: string | null;
+  payrollShard0TransactionHash: string | null;
+  payrollShard1TransactionHash: string | null;
+  transitionShard0TransactionHash: string | null;
+  transitionShard1TransactionHash: string | null;
   attempts: number;
   lastErrorCode: string | null;
   lastErrorMessage: string | null;
@@ -1160,6 +1196,30 @@ export class PayoClient {
     }>(`/api/v1/vault-records?${search}`);
   }
 
+  async getPayrollBookSnapshot(input: {
+    organizationId: string;
+    ownerAddress: string;
+    periodStart: string;
+    periodEnd: string;
+  }) {
+    const search = new URLSearchParams(input);
+    return this.request<{ snapshot: TrustedPayrollBookSnapshot }>(
+      `/api/v1/payroll-books?${search}`,
+    );
+  }
+
+  async getPayrollBookSources(input: {
+    organizationId: string;
+    ownerAddress: string;
+    periodStart: string;
+    periodEnd: string;
+  }) {
+    const search = new URLSearchParams(input);
+    return this.request<{ sources: PayrollBookReportSource[] }>(
+      `/api/v1/payroll-books/sources?${search}`,
+    );
+  }
+
   async registerObligationSchedules(input: {
     organizationId: string;
     schedules: ObligationScheduleRegistration[];
@@ -1476,13 +1536,13 @@ export class PayoClient {
 
   async enqueueExceptionAuthorization(input: {
     proofBundleId: string;
-    proofCalldata: string[];
+    request: ExceptionAuthorizationRequest;
   }) {
     return this.request<{ authorization: ExceptionAuthorizationStatus }>(
       `/api/v1/proof-packages/${encodeURIComponent(input.proofBundleId)}/authorization`,
       {
         method: "POST",
-        body: JSON.stringify({ proofCalldata: input.proofCalldata }),
+        body: JSON.stringify(input.request),
       },
     );
   }
@@ -1517,6 +1577,22 @@ export class PayoClient {
   async getPayrollAuthorization(runId: string) {
     return this.request<{ authorization: PayrollAuthorizationStatus }>(
       `/api/v1/runs/${encodeURIComponent(runId)}/payroll-authorization`,
+    );
+  }
+
+  async enqueueVestingAuthorization(input: {
+    runId: string;
+    request: VestingAuthorizationRequest;
+  }) {
+    return this.request<{ authorization: VestingAuthorizationStatus }>(
+      `/api/v1/runs/${encodeURIComponent(input.runId)}/vesting-authorization`,
+      { method: "POST", body: JSON.stringify(input.request) },
+    );
+  }
+
+  async getVestingAuthorization(runId: string) {
+    return this.request<{ authorization: VestingAuthorizationStatus }>(
+      `/api/v1/runs/${encodeURIComponent(runId)}/vesting-authorization`,
     );
   }
 

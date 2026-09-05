@@ -18,6 +18,7 @@ fn policy(used: u32, period_used: u32) -> PolicyState {
         session_public_key: 11,
         pool: 22.try_into().unwrap(),
         seal: 33.try_into().unwrap(),
+        book_seal: 0.try_into().unwrap(),
         seal_mode: 0,
         proof_version: 1,
         schema_version: 1,

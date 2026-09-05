@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "payo.block4.external-attestation.browser.v1",
+  "generatedAt": "2026-09-05T00:51:09.069Z",
+  "routeGuard": "PAYO_BROWSER_EVIDENCE_MODE=1",
+  "productionPage": "app/payroll/page.tsx",
+  "checks": {
+    "portablePackageImported": true,
+    "issuerSignatureVerified": true,
+    "catalogMembershipVerified": true,
+    "wrongSubjectRejected": true,
+    "exactAgreementAndPolicyBound": true,
+    "readableVerifiedStateRendered": true,
+    "signatureNotRendered": true
+  }
+}

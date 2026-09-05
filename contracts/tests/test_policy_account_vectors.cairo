@@ -9,6 +9,7 @@ fn policy_run_leaf_matches_typescript_vector() {
         session_public_key: 1,
         pool: 2.try_into().unwrap(),
         seal: 3.try_into().unwrap(),
+        book_seal: 0.try_into().unwrap(),
         seal_mode: 0,
         proof_version: 1,
         schema_version: 1,

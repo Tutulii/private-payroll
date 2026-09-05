@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "payo.block5.private-exit.browser.v1",
+  "generatedAt": "2026-09-05T02:26:43.794Z",
+  "productionPage": "app/wallet/page.tsx",
+  "checks": {
+    "exactAtomicQuoteRequested": true,
+    "canonicalPrivateRouteRendered": true,
+    "privacyLeakageDisclosed": true,
+    "tamperedQuoteRejected": true,
+    "publicWithdrawalRequiresExplicitAcknowledgement": true,
+    "publicWithdrawalRemainsWalletGated": true,
+    "unsupportedBridgeAndExchangeBlocked": true
+  }
+}

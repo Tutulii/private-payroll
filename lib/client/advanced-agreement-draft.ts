@@ -134,7 +134,6 @@ export function buildAdvancedPaymentPlanDraft(input:
     endsAt: iso(input.endsAt, "Vesting end"),
     totalAtomic: input.totalAtomic.toString(),
     releasedAtomic: "0",
-    releaseSequence: 1,
+    releaseSequence: 0,
   });
 }
-

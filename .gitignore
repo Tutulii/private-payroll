@@ -2,6 +2,8 @@ node_modules/
 .next/
 out/
 dist/
+test-results/
+playwright-report*/
 .env*
 !.env.example
 *.log
@@ -13,4 +15,5 @@ circuits/payroll_integrity/Prover.toml
 circuits/payroll_integrity/Prover-shard-1.toml
 circuits/payroll_integrity/Prover-devnet.toml
 circuits/payroll_integrity/Prover-devnet-shard-1.toml
+circuits/vesting_transition/Prover.toml
 public/fixtures/encrypted-payroll-witness-v1.json

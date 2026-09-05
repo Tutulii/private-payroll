@@ -1,0 +1,170 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-05T01:06:32.874Z",
+  "passed": true,
+  "scope": "vesting-v3-complete-payroll-book-and-external-attestation-devnet",
+  "chainId": "0x534e5f5345504f4c4941",
+  "rpcVersion": "0.10.2",
+  "devnetVersion": "0.9.2",
+  "realProofVerification": {
+    "passed": true,
+    "verifier": "0x267f8c35bb6848d7e5d4e3b1d4ba1e3f312d75f9ec16083cbf0ea5edad4436a",
+    "bundle": "0x71b64b34ff88f2efe900703e514f76a27969c9a7931d18637179afc6e28ee94",
+    "proofCalldataFelts": [
+      3269,
+      3269
+    ]
+  },
+  "topology": {
+    "pool": "0x64b48806902a367c8598f4f95c305e8c1a1acba5f082d294a43793113115691",
+    "policyRegistry": "0x13740519db014a97f1a7b73d06d3507c3e60fcc42186d85943a40305275380e",
+    "obligationRegistry": "0x42ebe798c5c9757ab95d085e406890363ec7163e8a97af6387faeabb46462bc",
+    "vestingBookSeal": "0x2b7492b7dff05e342063541880d9a0f5979c341fb2be16890cadeae2e3c07a8",
+    "lifecycleHarness": "0x3d8650e4b8d3db4c1dea59ad7561bcd50f772c8b20d9f8a2fe1678a8f066da9"
+  },
+  "classes": {
+    "policyRegistry": {
+      "classHash": "0x6366141e5ae47f2e170409c6babaa4d6ae220b5b255f8dcbf9b0173f8681cfd",
+      "declarationTransactionHash": "0xf5a49114548c26cf7702eb1ec348e3df42ec22f029c12ede38045e6600e797",
+      "artifactSha256": "93096d0c7a5112e04c1bcbc5ee9f8ea0b0faf522b36f24ed9fef8c3047543dac"
+    },
+    "obligationRegistry": {
+      "classHash": "0x50ac78b67fd69d7e2a892dc51014159d7e69fe1770c3f4f33add21131aa2a0b",
+      "declarationTransactionHash": "0x262204e7da3e847d00a67a08b2afe047177ce2d03e9ec74c839825e5be6a7be",
+      "artifactSha256": "0d6a939504c0681725c08d5f732e6c56582a44c3e8b89006516d01edbdb72fc2"
+    },
+    "vestingBookSeal": {
+      "classHash": "0x25af7969593ae59fe67830f7cb42774f0e62807c9114367d36e753be9577553",
+      "declarationTransactionHash": "0x630d24efc548572d4b2660fb39a5a5b5d0b36be2bb49f8c268a0898f5cf4f02",
+      "artifactSha256": "f7be3b0fb5e0f0830009edfae51f18125bb029e1a6e28e1c3a3303a1f7f5b4c7"
+    },
+    "realVerifier": {
+      "classHash": "0x5880228c9533d8b168275dbf3671cf219e684fb6027dd56f5ef3215caf37573",
+      "declarationTransactionHash": "0x38002dc6533f418dc83ebec3f1361a03082bbc7c1eb273b38a9b5a5132cb85",
+      "artifactSha256": "8cd91e54a04406ab8fbc03c77f0e3a10e6ef5f598c41ac9610b5bafb4a004391"
+    },
+    "realBundle": {
+      "classHash": "0x7aa6924647c8f6bed105fe7a11e51b3679dfc111f88f63519a5b2043fe1586d",
+      "declarationTransactionHash": "0x77ee9628c25be7810a8b384c6a97255a7ac92557910428795cac2fa4217f11",
+      "artifactSha256": "84a9a1516808d0c4672137ebcb30ee2aae0bbc593853ae9537e165e3bd9850a6"
+    },
+    "lifecycleHarness": {
+      "classHash": "0x2ca2cfb99cb126a05d4fa36ff0cad1f9d9bd8fb5227c240efd726c2fea34212",
+      "declarationTransactionHash": "0x5ec3e849de2718e4218680091af8b30a98899c89072df7a4ab6be71eb8c3f91",
+      "artifactSha256": "44f1ad22ab3ded3c9185e6bc55418321f3799957f5590ade7904c78ba4d475e8"
+    }
+  },
+  "deployments": {
+    "realVerifier": {
+      "address": "0x267f8c35bb6848d7e5d4e3b1d4ba1e3f312d75f9ec16083cbf0ea5edad4436a",
+      "transactionHash": "0x75b03fc8fa6f913f12f81b2df73869ea784670e5f1d36697d37780e06a0de42",
+      "blockNumber": 8
+    },
+    "realBundle": {
+      "address": "0x71b64b34ff88f2efe900703e514f76a27969c9a7931d18637179afc6e28ee94",
+      "transactionHash": "0x620b7fe9b2df066a71a9b92ef35bcad7d12e729244abc7f1272eb2dd19f1a05",
+      "blockNumber": 9
+    },
+    "lifecycleHarness": {
+      "address": "0x3d8650e4b8d3db4c1dea59ad7561bcd50f772c8b20d9f8a2fe1678a8f066da9",
+      "transactionHash": "0x2afbd69a6d78a287dd8b14c54b1672b026e800fdd91802e7891781da02b2c62",
+      "blockNumber": 10
+    },
+    "policyRegistry": {
+      "address": "0x13740519db014a97f1a7b73d06d3507c3e60fcc42186d85943a40305275380e",
+      "transactionHash": "0x589e3e7991bbca8ca98562fd45338eeaa8fee3582acda0967d557e867d2364c",
+      "blockNumber": 11
+    },
+    "obligationRegistry": {
+      "address": "0x42ebe798c5c9757ab95d085e406890363ec7163e8a97af6387faeabb46462bc",
+      "transactionHash": "0x171c77091fb6e66c64d809d289e016610548a90a494a602bc4c911b521d4019",
+      "blockNumber": 12
+    },
+    "vestingBookSeal": {
+      "address": "0x2b7492b7dff05e342063541880d9a0f5979c341fb2be16890cadeae2e3c07a8",
+      "transactionHash": "0x1fdaed2947cb52038523d2fcc7c06557fbb8533d4aee2e675818db12f6455b",
+      "blockNumber": 13
+    }
+  },
+  "transactions": {
+    "registryActivation": "0x5334474904df25ec6a703a8780638e3c14a816fadefcb12a2a52661c8f06bdd",
+    "registryActivationBlock": 14,
+    "beginAuthorization": {
+      "transactionHash": "0x713d115dd28068e5a5c239a805dcc2c70b7a8f79aafe1ffa87a5d01cc0d8a44",
+      "blockNumber": 16
+    },
+    "verifyProofs": [
+      {
+        "transactionHash": "0x1c95e1fde702545c4b0e7e1dc40893db2c58b762e743b63b88ea2bbe2a70eb2",
+        "blockNumber": 17
+      },
+      {
+        "transactionHash": "0x1d991ccda9ccb2442aba13915484e0d44f1aef3bbdb2803ddf70d1dc0dd93be",
+        "blockNumber": 18
+      },
+      {
+        "transactionHash": "0x19a9350c7c6249b504e174dd02dc1c5f133e8db6fb25721864aff4001efdd45",
+        "blockNumber": 19
+      },
+      {
+        "transactionHash": "0x353da7a95d59ed946b60867a3897808079fde5b73fb093d66146dfd60ec062a",
+        "blockNumber": 20
+      }
+    ],
+    "invokeTransition": {
+      "transactionHash": "0x3620401bb8ffd9bb9f658f3a2972b8278612eda9be1c6c363ec9c173e4a96b9",
+      "blockNumber": 21
+    },
+    "revokeAttestationCatalog": {
+      "transactionHash": "0x565e0e740ff5aa5989605bb2a24c303fe3dbd6380008075066cb691e4adf096",
+      "blockNumber": 22
+    }
+  },
+  "externalAttestation": {
+    "root": "0x05a649755746757000454e5d6fcbb95460522e05ba4c5469dfea413ce724818f",
+    "factMask": 7,
+    "requiredFacts": [
+      "residency",
+      "employment_status",
+      "tax_status"
+    ],
+    "exactPolicyRootBound": true,
+    "exactRecipientCommitmentBound": true,
+    "credentialContentsPublic": false,
+    "activeCatalogAccepted": true,
+    "revokedCatalogRejected": true
+  },
+  "publicState": {
+    "scheduleId": [
+      "0x1223db51eda8f66cb31f190fb13fef90",
+      "0x64de241bcb3c34799b69147f4cee601b"
+    ],
+    "nextStateCommitment": [
+      "0xbac95d662718f66a93c2a9fc55c9f1f2",
+      "0x1f2101dc57001962bd4300ff3f8e926d"
+    ],
+    "releaseNullifier": [
+      "0x38eb81e5f94cb05d9e2bf8da8deee937",
+      "0x38b7afbbdb9241528007f62f97090780"
+    ],
+    "releaseConsumed": true,
+    "period": [
+      1,
+      1000
+    ],
+    "bookEntryCount": 1,
+    "bookEntryCommitment": "0xe2a03bd2b746cc54e587944fe7bad9ac9317b9762387e80b4076f9e7eaf6b19a",
+    "bookAccumulatorRoot": "0x2ad70eae743d9c4fb185a03f40a6e4a11c1531a9c9a1d8a2fd14b837e71e8c3"
+  },
+  "negativeTests": {
+    "changedAttestationBoundRealProofRejected": true,
+    "changedProofRejected": true,
+    "replayRejected": true,
+    "staleGenesisRejected": true
+  },
+  "limitations": [
+    "The attestation-bound real proof pair is verified by the real generated v3 verifier on this Devnet.",
+    "The state/book/catalog lifecycle uses a test-only public-input harness because the committed real proof is intentionally bound to seal 0x456; production never deploys this harness.",
+    "The same real proof, active catalog root and production seal are composed in contracts/vesting_integration and must pass in CI."
+  ]
+}

@@ -29,6 +29,8 @@ flowchart LR
     Ready --> Pool[STRK20 privacy pool]
     Signer --> Pool
     Pool --> Seal[PAYO Payroll Seal]
+    Pool --> Exit[Reviewed STRK20 swap anonymizer]
+    Exit --> Ekubo[Ekubo single-hop pool]
     Seal --> Bundle[Two-shard bundle verifier]
     Bundle --> Verifier[Garaga PayrollIntegrity verifier]
     Seal --> Policies[Policy-root registry]
@@ -49,6 +51,7 @@ flowchart LR
 | STRK20 | Private notes, channels, proving, and settlement | Enforce PAYO employment policy |
 | Payroll Seal | Verify proof state and prevent replay | Custody payroll assets |
 | Bundle verifier | Verify both linked shards with one proof-bound Garaga verifier | Accept a missing, duplicated, or reordered shard |
+| Private-exit adapter | Validate a canonical Ekubo quote and build the reviewed STRK20 anonymizer call | Call arbitrary routers, pools, bridges, exchanges, or label public withdrawal private |
 
 ## 3. Trust and leakage boundaries
 
@@ -68,7 +71,8 @@ flowchart LR
 - transaction timing and calldata size;
 - verifier and policy-catalog versions;
 - commitment roots, run nullifier, and proof status;
-- explicitly disclosed aggregate values.
+- explicitly disclosed aggregate values; and
+- for a private Ekubo swap, the anonymous amount, pool route, timing, and calldata size.
 
 Commitments do not make low-entropy values secret by themselves. Every sensitive leaf includes a cryptographically random 32-byte salt before hashing.
 
@@ -169,6 +173,33 @@ stateDiagram-v2
 Native USDC is enabled because the live Ready/pool compatibility test and its on-chain evidence pass. The application never substitutes bridged USDC silently.
 
 A payroll may mix STRK and USDC lines. Treasury validation groups totals and passive fee reserves by token and fails closed if any active token lacks sufficient shielded balance. PAYO does not call `wallet_strk20PrepareInvoke` merely to preview a fee before later calling `wallet_strk20InvokeTransaction`; that created a second wallet request without producing a submittable transaction. The final Wallet API request remains responsible for constructing and submitting the private transaction. Receipt-reported Starknet gas and Ready's token-denominated privacy-fee recovery are separate evidence and must not be collapsed into one guessed public-STRK debit.
+
+### Private exit boundary
+
+PAYO integrates the existing STRK20 `EkuboSwapAnonymizer`; it does not implement
+an exchange. The production route is deliberately narrow: Mainnet STRK/USDC,
+Ekubo's pinned router, one extension-free single-hop pool, no split, and no
+`skip_ahead`. The server accepts only an exact-input quote from Ekubo's official
+quoter, rereads its block hash from Starknet, rejects a quote more than 20 blocks
+behind, and commits the complete route for 45 seconds. It verifies the configured
+executor's class hash both at readiness and at the quoted block. The browser
+rechecks that class before it is permitted to open Ready.
+
+The Wallet API action order is one input-token withdrawal to the anonymizer, one
+`OPEN` output note to the connected private account, and one invocation whose
+open-note identifier is supplied by Ready. The reviewed anonymizer enforces a
+positive full-fill swap, minimum received, matching pool tokens, nonzero output,
+and return of the output asset to that open note. Input amount plus the live
+token-specific STRK20 fee reserve must be available before submission.
+
+This route keeps the user's source account and resulting encrypted note shielded,
+but it does not conceal the anonymous swap amount or
+Ekubo pool route from the external protocol. A direct STRK20 withdrawal is a
+separate, explicitly acknowledged public exit: destination, token, amount, timing
+and transaction become linkable. Bridges, centralized exchanges and arbitrary
+contract calls are blocked rather than described as private. Until an on-chain
+Mainnet instance reproduces the reviewed anonymizer class hash, the route remains
+disabled; its declaration, deployment and live canary are release-gate work.
 
 ## 7. Commitments and nullifiers
 
@@ -332,7 +363,7 @@ The adapter enforces:
 - a configurable conservative haircut;
 - an explicit unsupported-pair state.
 
-US and UK packs are versioned reference implementations. They demonstrate verifiable calculations and review triggers; they are not maintained legal advice.
+US, UK and Canadian packs are versioned reference implementations. They demonstrate verifiable calculations and review triggers; they are not maintained legal advice.
 
 ## 12. Payment plans and claims
 
@@ -361,6 +392,125 @@ milestone, vesting, or recurring settlement is an actual private note transfer
 through that context.
 
 A worker claim uses a separate proof mode to show that an obligation is absent or below its committed floor without revealing the expected amount. A remediation payment references the claim nullifier.
+
+### Stateful VestingBook v3
+
+A finalized book entry is authorized by four ordered proofs: the two active v2
+PayrollIntegrity shards and two v3 VestingTransition shards. The v3 public statement
+binds the v2 agreement root, manifest root and run nullifier to an entry kind, payer,
+vesting schedule, previous and next state, one release nullifier, reporting period,
+book-entry commitment, deployment, chain and validity window. An ordinary payroll
+book append uses entry kind `0` and zero vesting fields; stateful vesting uses entry
+kind `1`.
+
+The private v3 witness opens exactly one authoritative agreement. For vesting it
+recomputes the salted schedule identifier from recipient, token, total, start, cliff
+and end; checks the immutable committed plan; calculates linear accrual at the release
+time; proves the payable value is exactly `vested - already_released`; increments the
+release sequence; and derives the next-state and release-nullifier commitments. Before
+the cliff the accrued amount is zero, after the end it is capped at the committed
+total, and a zero or changed release cannot pass.
+
+`PayoVestingBookSeal` reloads both active verifier versions and the tenant-owned
+obligation root, checks all four calldata hashes and public-input bindings, and only
+accepts its immutable STRK20 pool as the final caller. Finalization consumes the run
+and release nullifiers, requires the stored schedule state to equal the proved old
+state (or a unique zero-state genesis), writes the next state, and atomically appends
+the book entry. The ordered period accumulator is
+`Poseidon(PAYO_BOOK_ADD_V1, previous_root, entry_high, entry_low, index)`; entries and
+state are commitments, never public salary plaintext.
+
+### Complete private compliance book
+
+For every on-chain book entry, the organization retains an authenticated encrypted
+source record. A complete employer or tax-authority export must open exactly one
+source for every ordered on-chain entry, rebuild the original PayrollIntegrity inputs,
+recompute statutory deductions and classification treatment, verify transaction
+bindings, recompute every entry commitment and reproduce the trusted accumulator.
+Missing, duplicated, changed, cross-tenant or extra evidence fails closed. A worker
+statement is derived only after that complete-book check and contains only the selected
+worker's lines plus the checkpoint needed for verification.
+
+Reports are X25519-recipient encrypted. Import, decryption and integrity checking occur
+locally in Activity, which rereads the live VestingBook checkpoint before showing a
+verified result. Employer scope exposes the complete payroll book to the payer; tax
+scope exposes the same complete book only to the chosen tax reviewer; worker scope
+exposes only that worker's income statement. The W-2/P60/T4-style rendering is a
+readable cryptographic report, not an official government filing or legal/tax advice.
+
+Every readable view is derived from `payo-verified-income-evidence-v1`; formats do not
+run their own arithmetic. Each canonical line contains its ordered book/line index,
+recipient binding, worker type, token-denominated gross, deductions and net, both
+proof/settlement transaction bindings, and the exact policy ID, revision, program
+commitment and catalog root. The evidence also commits the complete independently read
+checkpoint and states whether it covers the entire book or one worker's opened lines.
+It can be constructed only after the encrypted report reconstructs that checkpoint.
+
+The report carries every exact versioned policy pack used by each entry. PAYO
+recomputes the policy catalog root, requires it to equal the PayrollIntegrity policy
+root, and requires each line's complete canonical policy to match a catalog member.
+Changing a rule, revision, source, effective window or instruction therefore fails as
+policy substitution even when the policy ID is unchanged. The initial source-pinned
+examples cover a narrow US supplemental-wage method, UK monthly category-A employee
+NI and a narrow Canadian small irregular-payment method. Each remains review-gated
+and lists assumptions and unsupported cases.
+
+Employee lines in the supported jurisdictions can then be rendered locally as
+W-2-style (Box 1/Box 2), P60-style (total pay/bound deductions), or T4-style (Box
+14/Box 22) evidence. Amounts stay denominated in the privately paid token and every
+view commits its source evidence, policy bindings and book root. Contractor and agent
+lines are never relabelled as employee forms. A plaintext readable download is an
+explicit privacy exit and is labelled sensitive; PAYO does not claim government
+e-filing, certification, legal sufficiency or official-form equivalence.
+
+A direct STRK20 holder derives a reporting-only X25519 key with domain-separated
+HKDF from their local viewing key and exports only the X25519 public key, derived
+Stark public key, deployment/recipient context and a Stark-ECDSA ownership proof.
+The viewing key is cleared from the form and is never exported. The employer first
+verifies the complete book, then encrypts a recipient-only statement source to that
+identity. The worker opens that source locally, rereads the public on-chain checkpoint,
+chooses the final report identity/time and self-encrypts the verified statement. A
+wrong key, forged ownership proof, changed recipient, omitted line, altered entry or
+stale checkpoint fails closed. Because Ready does not expose its STRK20 viewing key,
+Ready users are labelled explicitly as a PAYO-X25519 fallback and are never described
+as viewing-key-derived.
+
+The reproducible real-proof composition gate is in `contracts/vesting_integration`.
+Standalone topology, state transition, ordered-accumulator, changed-proof, replay and
+stale-genesis evidence is in `evidence/vesting-tax-devnet.json`; its lifecycle harness
+is test-only and is never part of a production deployment.
+
+### Private external fact attestations
+
+`payo-external-attestation-package-v1` binds one exact advanced agreement to a
+six-level catalog opening. Its domain-separated signed commitment covers the issuer's
+Ed25519 public key, the agreement recipient commitment, residency/employment/tax fact
+mask, jurisdiction commitment, active status, validity window, unique nonce and the
+exact PayrollIntegrity policy root. The browser verifies the signature and reconstructs
+the catalog root before it encrypts any prover witness; the current composer accepts
+one package for one selected advanced agreement so subject selection is unambiguous.
+
+The v3 circuit independently recomputes that commitment, proves its fixed-tree
+membership, requires all three facts and active/nonzero fields, binds the subject to
+the authenticated agreement leaf and requires the credential to cover the complete
+one-hour proof window. Only the catalog root enters public inputs and the payroll-book
+entry. `PayoVestingBookSeal` reads that root back from both verified shards and accepts
+it only while the existing versioned policy registry reports it active. A changed
+subject, policy root, fact mask, validity value, membership path or public root fails
+closed; revoking the catalog root prevents new authorizations.
+
+Ed25519 verification is deliberately outside the Noir/Cairo verifier. Approved issuer
+keys and revoked nonces are checked while constructing the catalog, and the registry
+administrator authorizes only that already-verified root. This administrator is the
+explicit issuer trust boundary: an individual nonce revocation requires publishing a
+replacement catalog and revoking the previous root. PAYO never claims that Starknet
+natively verified the issuer signature or publishes the credential contents.
+The combined STRK20 SDK evidence in
+`evidence/universal-payroll-book-private-devnet.json` additionally records one atomic
+private agent payment, exact recipient balance delta, SettlementMatch verification,
+single book append and replay rejection. Its v2/v3 public-input authorization harness
+is test-only; `contracts/vesting_integration` separately proves the same production
+seal composition against the real generated v3 verifier.
 
 ## 13. Selective disclosure
 
@@ -466,6 +616,8 @@ tests plus an explicitly approved live canary pass.
 | Ready session expires | Keep any returned transaction hash in local recovery state; re-authorize Ready and resume idempotent recording without resubmitting payroll |
 | Replayed authentication or recovery challenge | Reject atomically; challenges are single-use and attempt-limited |
 | Agent capability exceeded | Reject before signing and append a redacted audit event |
+| Private swap quote expired, changed, split, stale, or bound to another route/class | Reject before opening Ready and require a fresh canonical quote |
+| Public or unsupported exit selected | Require explicit permanent-disclosure acknowledgement for a direct withdrawal; block bridges, exchanges and arbitrary calls |
 
 ## 16. Verification strategy
 
@@ -477,6 +629,7 @@ tests plus an explicitly approved live canary pass.
 - Encryption tests for tenant isolation, associated-data tampering, revocation, and disclosure scope.
 - MCP adversarial tests for prompt injection, arbitrary targets, replay, and period-limit bypass.
 - Wallet integration tests for rejection, repeated requests, confirmation recovery, and balance refresh.
+- Private-exit tests for quote commitment/expiry, canonical block and class binding, route substitution, fee reserve, rendered disclosure, and the upstream STRK20 open-note composition.
 - Mainnet smoke tests with deliberately small STRK and USDC values.
 
 No roadmap item is marked working until its relevant artifact builds, its negative tests pass, and its evidence is linked from the repository.

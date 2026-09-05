@@ -26,8 +26,22 @@ import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAppShell } from "../ui/app-shell";
 import { usePayoVault } from "../vault/payo-vault";
-import { STARKNET_MAINNET_EXPLORER, useStarknetWallet } from "../starknet/starknet-wallet";
+import {
+  STARKNET_MAINNET_CHAIN_ID,
+  STARKNET_MAINNET_EXPLORER,
+  STRK20_MAINNET_POOL_ADDRESS,
+  useStarknetWallet,
+} from "../starknet/starknet-wallet";
 import { decryptVaultRecord, encryptedVaultRecordSchema } from "@/lib/crypto/vault";
+import {
+  createReadyReportingIdentity,
+  createReadyReportingPublicIdentity,
+  deriveDirectStrk20ReportingIdentity,
+  parsePayoReportingIdentity,
+  reportingIdentityFilename,
+  type PayoReportingIdentity,
+  type PayoReportingIdentityKeyPair,
+} from "@/lib/crypto/reporting-identity";
 import { disclosureGrantRecordSchema } from "@/lib/domain/records";
 import { createEncryptedSettlementReceipt } from "@/lib/client/settlement-receipts";
 import { createProofPackageForSettlement } from "@/lib/client/proof-package-workflow";
@@ -84,6 +98,29 @@ import type { PayrollExecutionStage } from "@/lib/client/payroll-execution";
 import type { SerializedPayrollIntegrityBuildRequest } from "@/lib/proof/input-builder";
 import { runProgressiveTasks, type ProgressiveTask } from "@/lib/client/progressive-tasks";
 import { READY_AUTH_CHAIN_ID } from "@/lib/auth/ready-session";
+import {
+  createEncryptedPayrollReportFromBook,
+  createWorkerStatementSourceFromBook,
+  generateWorkerStatementAgainstLiveBook,
+  inspectPayrollReportAgainstLiveBook,
+  payrollReportFilename,
+  type PayrollReportKind,
+} from "@/lib/client/payroll-report-workflow";
+import {
+  encryptedPayrollReportSchema,
+  type EncryptedPayrollReport,
+  type PayrollReportPayload,
+} from "@/lib/disclosure/payroll-book-report";
+import {
+  encryptedWorkerStatementSourceSchema,
+  workerStatementSourceFilename,
+  type EncryptedWorkerStatementSource,
+} from "@/lib/disclosure/worker-statement-source";
+import {
+  familiarTaxEvidenceFilename,
+  type FamiliarTaxDocument,
+} from "@/lib/disclosure/tax-evidence";
+import { formatTokenAmount, type PayrollTokenSymbol } from "@/lib/starknet/tokens";
 import {
   disclosureFormDefaults,
   resolveDisclosureSelection,
@@ -158,7 +195,33 @@ type OpenProofPackageResult = {
   filename: string;
 };
 
+type PayrollReportView = {
+  file: EncryptedPayrollReport;
+  filename: string;
+  recipientPrincipalId: string;
+  title: string;
+  scope: string;
+  countLabel: string;
+  totals: string[];
+  periodLabel: string;
+  checkpointRoot: string;
+  blockNumber: string;
+  packageCommitment: string;
+  familiarTaxDocuments: FamiliarTaxDocument[];
+};
+
+type WorkerSourceView = {
+  file: EncryptedWorkerStatementSource;
+  filename: string;
+  workerName: string;
+  recipientAddress: string;
+  identityMode: PayoReportingIdentity["mode"];
+  identityFingerprint: string;
+  sourceCommitment: string;
+};
+
 const MAX_PROOF_PACKAGE_FILE_BYTES = 24 * 1024 * 1024;
+const MAX_PAYROLL_REPORT_FILE_BYTES = 24 * 1024 * 1024;
 const MAX_PUBLIC_IDENTITY_FILE_BYTES = 16 * 1024;
 
 function downloadJson(value: unknown, filename: string): void {
@@ -171,6 +234,85 @@ function downloadJson(value: unknown, filename: string): void {
   anchor.click();
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function reportingPeriod(year: number): { periodStart: string; periodEnd: string } {
+  if (!Number.isInteger(year) || year < 2020 || year > 2100) {
+    throw new Error("Choose a reporting year from 2020 through 2100.");
+  }
+  return {
+    periodStart: String(Math.floor(Date.UTC(year, 0, 1) / 1_000)),
+    periodEnd: String(Math.floor(Date.UTC(year + 1, 0, 1) / 1_000)),
+  };
+}
+
+function sameFelt(left: string, right: string): boolean {
+  try {
+    return BigInt(left) === BigInt(right);
+  } catch {
+    return false;
+  }
+}
+
+function payrollReportView(input: {
+  file: EncryptedPayrollReport;
+  filename: string;
+  recipientPrincipalId: string;
+  payload: PayrollReportPayload;
+  verification: unknown;
+  blockNumber: string;
+  familiarTaxDocuments: FamiliarTaxDocument[];
+}): PayrollReportView {
+  const start = new Date(Number(BigInt(input.payload.checkpoint.periodStart)) * 1_000);
+  const end = new Date(Number(BigInt(input.payload.checkpoint.periodEnd)) * 1_000 - 1);
+  const periodLabel = `${start.getUTCFullYear()} · ${start.toLocaleDateString()} – ${end.toLocaleDateString()}`;
+  if (input.payload.reportType === "complete_payroll_book") {
+    const verified = input.verification as {
+      entryCount: number;
+      totals: Record<PayrollTokenSymbol, { grossAtomic: string; deductionsAtomic: string; netAtomic: string }>;
+    };
+    const totals = (["STRK", "USDC"] as const).flatMap((token) => {
+      const value = verified.totals[token];
+      return BigInt(value.grossAtomic) === 0n ? [] : [
+        `${token}: gross ${formatTokenAmount(BigInt(value.grossAtomic), token)} · deductions ${formatTokenAmount(BigInt(value.deductionsAtomic), token)} · net ${formatTokenAmount(BigInt(value.netAtomic), token)}`,
+      ];
+    });
+    return {
+      file: input.file,
+      filename: input.filename,
+      recipientPrincipalId: input.recipientPrincipalId,
+      title: input.payload.scope === "tax_authority" ? "Tax-authority payroll book" : "Employer payroll book",
+      scope: input.payload.scope.replaceAll("_", " "),
+      countLabel: `${verified.entryCount} complete on-chain ${verified.entryCount === 1 ? "entry" : "entries"}`,
+      totals,
+      periodLabel,
+      checkpointRoot: input.payload.checkpoint.accumulatorRoot,
+      blockNumber: input.blockNumber,
+      packageCommitment: input.file.packageCommitment,
+      familiarTaxDocuments: input.familiarTaxDocuments,
+    };
+  }
+  const verified = input.verification as {
+    lineCount: number;
+    netTotals: Record<PayrollTokenSymbol, string>;
+  };
+  const totals = (["STRK", "USDC"] as const).flatMap((token) => BigInt(verified.netTotals[token]) === 0n
+    ? []
+    : [`${token}: income ${formatTokenAmount(BigInt(verified.netTotals[token]), token)}`]);
+  return {
+    file: input.file,
+    filename: input.filename,
+    recipientPrincipalId: input.recipientPrincipalId,
+    title: `${input.payload.recipientReference} · private income statement`,
+    scope: "worker",
+    countLabel: `${verified.lineCount} privately disclosed ${verified.lineCount === 1 ? "payroll line" : "payroll lines"}`,
+    totals,
+    periodLabel,
+    checkpointRoot: input.payload.checkpoint.accumulatorRoot,
+    blockNumber: input.blockNumber,
+    packageCommitment: input.file.packageCommitment,
+    familiarTaxDocuments: input.familiarTaxDocuments,
+  };
 }
 
 const exceptionStageLabel: Record<PayrollExecutionStage, string> = {
@@ -315,6 +457,17 @@ export default function ActivityPage() {
   const [proofPackageFailure, setProofPackageFailure] = useState<ProofPackageOpenFailure | null>(null);
   const [openingProofPackage, setOpeningProofPackage] = useState(false);
   const [proofPackageVaultKey, setProofPackageVaultKey] = useState("");
+  const [payrollReportKind, setPayrollReportKind] = useState<PayrollReportKind>("employer_book");
+  const [payrollReportYear, setPayrollReportYear] = useState(String(new Date().getUTCFullYear()));
+  const [payrollReportWorkerId, setPayrollReportWorkerId] = useState("");
+  const [payrollReportBusy, setPayrollReportBusy] = useState(false);
+  const [payrollReportViewState, setPayrollReportViewState] = useState<PayrollReportView | null>(null);
+  const [workerSourceViewState, setWorkerSourceViewState] = useState<WorkerSourceView | null>(null);
+  const [payrollRecipientIdentity, setPayrollRecipientIdentity] = useState<PayoReportingIdentity | null>(null);
+  const [localReportingKey, setLocalReportingKey] = useState<PayoReportingIdentityKeyPair | null>(null);
+  const [directReportingRecipient, setDirectReportingRecipient] = useState("");
+  const [directReportingViewingKey, setDirectReportingViewingKey] = useState("");
+  const [payrollReportVaultKey, setPayrollReportVaultKey] = useState("");
   const [activityError, setActivityError] = useState("");
   const [creatingException, setCreatingException] = useState(false);
   const [showClaimForm, setShowClaimForm] = useState(false);
@@ -337,6 +490,8 @@ export default function ActivityPage() {
   const automaticExceptionRecoveryAttempts = useRef(new Map<string, number>());
   const proofPackageInput = useRef<HTMLInputElement>(null);
   const publicIdentityInput = useRef<HTMLInputElement>(null);
+  const payrollReportInput = useRef<HTMLInputElement>(null);
+  const payrollReportIdentityInput = useRef<HTMLInputElement>(null);
 
   const persistPendingException = useCallback((submission: PendingExceptionSubmission | null) => {
     const organizationId = vault.session?.organizationId;
@@ -618,6 +773,11 @@ export default function ActivityPage() {
     : "";
   const showProofPackageState = Boolean(currentProofPackageVaultKey)
     && proofPackageVaultKey === currentProofPackageVaultKey;
+  const currentPayrollReportVaultKey = vault.session
+    ? `${vault.session.organizationId}:${vault.session.principal.principalId}`
+    : "";
+  const showPayrollReportState = Boolean(currentPayrollReportVaultKey)
+    && payrollReportVaultKey === currentPayrollReportVaultKey;
 
   const fillCurrentDisclosureIdentity = () => {
     if (!vault.session) return;
@@ -653,6 +813,319 @@ export default function ActivityPage() {
       notify("Recipient PAYO identity file validated and imported");
     } catch (error) {
       setActivityError(error instanceof Error ? error.message : "The recipient identity could not be imported.");
+    }
+  };
+
+  const exportReadyReportingIdentity = () => {
+    if (!vault.session || !starknet.address) return;
+    setActivityError("");
+    try {
+      const keyPair = createReadyReportingIdentity({
+        principal: vault.session.principal,
+        context: {
+          chainId: STARKNET_MAINNET_CHAIN_ID,
+          poolAddress: STRK20_MAINNET_POOL_ADDRESS,
+          recipientAddress: starknet.address,
+        },
+      });
+      setLocalReportingKey(keyPair);
+      setPayrollRecipientIdentity(keyPair.identity);
+      downloadJson(keyPair.identity, reportingIdentityFilename(keyPair.identity));
+      notify("Ready fallback reporting identity downloaded · no secret key included");
+    } catch (error) {
+      setActivityError(error instanceof Error ? error.message : "The Ready reporting identity could not be created.");
+    }
+  };
+
+  const exportDirectReportingIdentity = () => {
+    setActivityError("");
+    try {
+      const recipientAddress = directReportingRecipient.trim() || starknet.address;
+      if (!recipientAddress) throw new Error("Enter the direct STRK20 recipient address.");
+      if (!directReportingViewingKey.trim()) throw new Error("Enter the direct STRK20 viewing key locally.");
+      const keyPair = deriveDirectStrk20ReportingIdentity({
+        viewingKey: directReportingViewingKey.trim(),
+        context: {
+          chainId: STARKNET_MAINNET_CHAIN_ID,
+          poolAddress: STRK20_MAINNET_POOL_ADDRESS,
+          recipientAddress,
+        },
+      });
+      setLocalReportingKey(keyPair);
+      setPayrollRecipientIdentity(keyPair.identity);
+      setDirectReportingViewingKey("");
+      downloadJson(keyPair.identity, reportingIdentityFilename(keyPair.identity));
+      notify("Direct STRK20 reporting identity derived locally · viewing key cleared");
+    } catch (error) {
+      setDirectReportingViewingKey("");
+      setActivityError(error instanceof Error ? error.message : "The direct reporting identity could not be derived.");
+    }
+  };
+
+  const importPayrollRecipientIdentity = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setActivityError("");
+    try {
+      if (file.size > MAX_PUBLIC_IDENTITY_FILE_BYTES) throw new Error("The PAYO reporting identity file is too large.");
+      const value = parsePayoJsonText(await file.text(), "The PAYO reporting identity file");
+      let identity: PayoReportingIdentity;
+      if (
+        value
+        && typeof value === "object"
+        && "format" in value
+        && value.format === "payo-reporting-identity-v1"
+      ) {
+        identity = parsePayoReportingIdentity(value);
+      } else {
+        const fallback = parsePayoPublicIdentity(value);
+        const worker = payees.find(({ id }) => id === payrollReportWorkerId);
+        if (!worker) throw new Error("Choose the worker before importing their Ready PAYO identity.");
+        identity = createReadyReportingPublicIdentity({
+          principal: { principalId: fallback.principalId, publicKey: fallback.publicKey },
+          context: {
+            chainId: STARKNET_MAINNET_CHAIN_ID,
+            poolAddress: STRK20_MAINNET_POOL_ADDRESS,
+            recipientAddress: worker.recipientAddress,
+          },
+          createdAt: new Date(fallback.createdAt),
+        });
+      }
+      if (!sameFelt(identity.context.chainId, STARKNET_MAINNET_CHAIN_ID)
+        || !sameFelt(identity.context.poolAddress, STRK20_MAINNET_POOL_ADDRESS)) {
+        throw new Error("The reporting identity belongs to another Starknet deployment.");
+      }
+      setPayrollRecipientIdentity(identity);
+      notify(`Worker reporting identity imported · ${identity.mode === "direct_strk20_viewing_key" ? "direct STRK20" : "Ready fallback"}`);
+    } catch (error) {
+      setPayrollRecipientIdentity(null);
+      setActivityError(error instanceof Error ? error.message : "The worker reporting identity could not be imported.");
+    }
+  };
+
+  const createPayrollReport = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setActivityError("");
+    setPayrollReportBusy(true);
+    try {
+      if (!vault.client || !vault.session) throw new Error("Unlock the encrypted PAYO workspace first.");
+      if (!starknet.address) throw new Error("Connect the payer's Ready wallet to choose the on-chain payroll book.");
+      const year = Number(payrollReportYear);
+      const period = reportingPeriod(year);
+      const selectedWorker = payrollReportKind === "worker_statement"
+        ? payees.find(({ id }) => id === payrollReportWorkerId)
+        : undefined;
+      if (payrollReportKind === "worker_statement" && !selectedWorker) {
+        throw new Error("Choose the worker whose private income statement should be exported.");
+      }
+      if (payrollReportKind === "worker_statement" && selectedWorker) {
+        const recipientIdentity = payrollRecipientIdentity
+          ?? (selectedWorker.claimIdentityPrincipalId && selectedWorker.claimIdentityPublicKey
+            ? createReadyReportingPublicIdentity({
+                principal: {
+                  principalId: selectedWorker.claimIdentityPrincipalId,
+                  publicKey: selectedWorker.claimIdentityPublicKey,
+                },
+                context: {
+                  chainId: STARKNET_MAINNET_CHAIN_ID,
+                  poolAddress: STRK20_MAINNET_POOL_ADDRESS,
+                  recipientAddress: selectedWorker.recipientAddress,
+                },
+              })
+            : null);
+        if (!recipientIdentity) {
+          throw new Error("Import this worker's reporting identity before creating their encrypted source.");
+        }
+        if (!sameFelt(recipientIdentity.context.recipientAddress, selectedWorker.recipientAddress)) {
+          throw new Error("The imported reporting identity belongs to another worker address.");
+        }
+        const source = await createWorkerStatementSourceFromBook({
+          client: vault.client,
+          organizationId: vault.session.organizationId,
+          ownerAddress: starknet.address,
+          ...period,
+          principal: vault.session.principal,
+          recipientIdentity,
+          agreements,
+          payees,
+          workerPayeeId: selectedWorker.id,
+        });
+        const filename = workerStatementSourceFilename({
+          encryptedSource: source.encryptedSource,
+          recipientReference: selectedWorker.displayName,
+          year,
+        });
+        setPayrollReportViewState(null);
+        setWorkerSourceViewState({
+          file: source.encryptedSource,
+          filename,
+          workerName: selectedWorker.displayName,
+          recipientAddress: selectedWorker.recipientAddress,
+          identityMode: recipientIdentity.mode,
+          identityFingerprint: recipientIdentity.fingerprint,
+          sourceCommitment: source.encryptedSource.sourceCommitment,
+        });
+        setPayrollReportVaultKey(`${vault.session.organizationId}:${vault.session.principal.principalId}`);
+        downloadJson(source.encryptedSource, filename);
+        notify("Complete book verified · encrypted worker source downloaded");
+        return;
+      }
+      let recipient = vault.session.principal;
+      if (payrollReportKind !== "employer_book") {
+        if (!granteeIdentityFingerprint || !granteePrincipalId || !granteePublicKey) {
+          throw new Error("Import the tax authority's public PAYO identity first.");
+        }
+        recipient = {
+          principalId: granteePrincipalId,
+          publicKey: granteePublicKey,
+        } as typeof vault.session.principal;
+      }
+      const result = await createEncryptedPayrollReportFromBook({
+        client: vault.client,
+        organizationId: vault.session.organizationId,
+        ownerAddress: starknet.address,
+        ...period,
+        principal: vault.session.principal,
+        recipient,
+        kind: payrollReportKind,
+        agreements,
+        payees,
+      });
+      const filename = payrollReportFilename(result.encryptedReport, {
+        year,
+      });
+      const view = payrollReportView({
+        file: result.encryptedReport,
+        filename,
+        recipientPrincipalId: recipient.principalId,
+        payload: result.payload,
+        verification: result.verification,
+        blockNumber: result.snapshot.blockNumber,
+        familiarTaxDocuments: result.familiarTaxDocuments,
+      });
+      setPayrollReportViewState(view);
+      setWorkerSourceViewState(null);
+      setPayrollReportVaultKey(`${vault.session.organizationId}:${vault.session.principal.principalId}`);
+      downloadJson(result.encryptedReport, filename);
+      notify("Verified complete payroll book downloaded");
+    } catch (error) {
+      setActivityError(error instanceof Error ? error.message : "The private compliance report could not be created.");
+    } finally {
+      setPayrollReportBusy(false);
+    }
+  };
+
+  const inspectPayrollReportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setActivityError("");
+    setPayrollReportBusy(true);
+    try {
+      if (!vault.client || !vault.session) throw new Error("Unlock the PAYO vault before opening a payroll report.");
+      if (file.size > MAX_PAYROLL_REPORT_FILE_BYTES) throw new Error("The encrypted payroll report is too large.");
+      const value = parsePayoJsonText(await file.text(), "The encrypted payroll report");
+      const workerSource = encryptedWorkerStatementSourceSchema.safeParse(value);
+      if (workerSource.success) {
+        const recipient = localReportingKey?.identity.fingerprint === workerSource.data.recipientIdentityFingerprint
+          ? localReportingKey.principal
+          : vault.session.principal;
+        if (!workerSource.data.envelope.wrappedKeys.some(({ principalId }) => principalId === recipient.principalId)) {
+          throw new Error("This worker source needs its matching direct STRK20 reporting key or Ready PAYO vault.");
+        }
+        const generated = await generateWorkerStatementAgainstLiveBook({
+          client: vault.client,
+          encryptedSource: workerSource.data,
+          recipient,
+        });
+        const filename = payrollReportFilename(generated.encryptedReport, {
+          recipientReference: generated.statement.recipientReference,
+          year: new Date(Number(BigInt(generated.statement.checkpoint.periodStart)) * 1_000).getUTCFullYear(),
+        });
+        setWorkerSourceViewState({
+          file: workerSource.data,
+          filename: file.name,
+          workerName: generated.statement.recipientReference,
+          recipientAddress: generated.statement.recipientAddress,
+          identityMode: generated.recipientIdentity.mode,
+          identityFingerprint: generated.recipientIdentity.fingerprint,
+          sourceCommitment: generated.sourceCommitment,
+        });
+        setPayrollReportViewState(payrollReportView({
+          file: generated.encryptedReport,
+          filename,
+          recipientPrincipalId: recipient.principalId,
+          payload: generated.statement,
+          verification: generated.verification,
+          blockNumber: generated.snapshot.blockNumber,
+          familiarTaxDocuments: generated.familiarTaxDocuments,
+        }));
+        setPayrollReportVaultKey(`${vault.session.organizationId}:${vault.session.principal.principalId}`);
+        downloadJson(generated.encryptedReport, filename);
+        notify("Worker generated and verified a private statement against the live book");
+        return;
+      }
+      const encryptedReport = encryptedPayrollReportSchema.parse(value);
+      const recipient = localReportingKey
+        && encryptedReport.envelope.wrappedKeys.some(({ principalId }) => principalId === localReportingKey.principal.principalId)
+        ? localReportingKey.principal
+        : vault.session.principal;
+      const opened = await inspectPayrollReportAgainstLiveBook({
+        client: vault.client,
+        encryptedReport,
+        recipient,
+      });
+      setPayrollReportViewState(payrollReportView({
+        file: encryptedReport,
+        filename: file.name,
+        recipientPrincipalId: recipient.principalId,
+        payload: opened.payload,
+        verification: opened.verification,
+        blockNumber: opened.snapshot.blockNumber,
+        familiarTaxDocuments: opened.familiarTaxDocuments,
+      }));
+      setWorkerSourceViewState(null);
+      setPayrollReportVaultKey(`${vault.session.organizationId}:${vault.session.principal.principalId}`);
+      notify("Encrypted report and complete on-chain payroll book verified");
+    } catch (error) {
+      setPayrollReportViewState(null);
+      setPayrollReportVaultKey(vault.session
+        ? `${vault.session.organizationId}:${vault.session.principal.principalId}`
+        : "");
+      setActivityError(error instanceof Error ? error.message : "The encrypted payroll report could not be verified.");
+    } finally {
+      setPayrollReportBusy(false);
+    }
+  };
+
+  const openCreatedPayrollReport = async () => {
+    if (!vault.client || !vault.session || !payrollReportViewState) return;
+    setActivityError("");
+    setPayrollReportBusy(true);
+    try {
+      const recipient = localReportingKey?.principal.principalId === payrollReportViewState.recipientPrincipalId
+        ? localReportingKey.principal
+        : vault.session.principal;
+      const opened = await inspectPayrollReportAgainstLiveBook({
+        client: vault.client,
+        encryptedReport: payrollReportViewState.file,
+        recipient,
+      });
+      setPayrollReportViewState(payrollReportView({
+        file: payrollReportViewState.file,
+        filename: payrollReportViewState.filename,
+        recipientPrincipalId: recipient.principalId,
+        payload: opened.payload,
+        verification: opened.verification,
+        blockNumber: opened.snapshot.blockNumber,
+        familiarTaxDocuments: opened.familiarTaxDocuments,
+      }));
+      notify("Payroll report reopened and checked against the live on-chain book");
+    } catch (error) {
+      setActivityError(error instanceof Error ? error.message : "The payroll report could not be reopened.");
+    } finally {
+      setPayrollReportBusy(false);
     }
   };
 
@@ -1466,6 +1939,99 @@ export default function ActivityPage() {
                   {!grant.revokedAt && !expired && <button type="button" onClick={() => void revokeDisclosure(grant.id)} disabled={creatingReceipt}>Revoke</button>}
                 </div>;
               })}
+            </div>}
+          </section>
+
+          <section className="receipts-card payroll-report-card">
+            <div className="receipt-doodle" aria-hidden="true"><ReceiptText size={28} /><span>∑</span></div>
+            <span className="label">PRIVATE COMPLIANCE BOOK</span>
+            <h3>Complete to the chain.<br />Private to everyone else.</h3>
+            <p>PAYO rebuilds every finalized payroll entry from client-encrypted records and compares the complete result with the independently read on-chain period accumulator. One omitted, duplicated or changed payroll makes export fail.</p>
+            <div className="familiar-tax-formats" aria-label="Supported familiar evidence views">
+              <span>W-2-style</span><span>P60-style</span><span>T4-style</span>
+              <small>One canonical verified-income schema · never represented as an official filing</small>
+            </div>
+            <form className="receipt-disclosure-form" onSubmit={createPayrollReport}>
+              <label><span>Report</span><select value={payrollReportKind} onChange={(event) => setPayrollReportKind(event.target.value as PayrollReportKind)}>
+                <option value="employer_book">Employer · complete payroll book</option>
+                <option value="tax_book">Tax authority · fully disclosed book</option>
+                <option value="worker_statement">Worker · encrypted self-service source</option>
+              </select></label>
+              <label><span>Reporting year</span><input type="number" min={2020} max={2100} step={1} value={payrollReportYear} onChange={(event) => setPayrollReportYear(event.target.value)} required /></label>
+              {payrollReportKind === "worker_statement" && <label><span>Worker</span><select value={payrollReportWorkerId} onChange={(event) => setPayrollReportWorkerId(event.target.value)} required><option value="">Choose contributor</option>{payees.filter(({ principalKind }) => principalKind === "human").map((payee) => <option value={payee.id} key={payee.id}>{payee.displayName} · {shortId(payee.recipientAddress)}</option>)}</select><small>Only this recipient&apos;s lines and Merkle openings are disclosed.</small></label>}
+              {payrollReportKind === "worker_statement" && <>
+                <div className="proof-identity-actions">
+                  <button type="button" className="button button--soft" onClick={() => payrollReportIdentityInput.current?.click()}><UserPlus size={16} /> Import worker identity</button>
+                  <button type="button" className="button button--soft" onClick={exportReadyReportingIdentity} disabled={!vault.session || !starknet.address}><Download size={16} /> Share my Ready fallback</button>
+                </div>
+                <input ref={payrollReportIdentityInput} className="proof-package-file-input" type="file" accept="application/json,.json" onChange={(event) => void importPayrollRecipientIdentity(event)} tabIndex={-1} aria-hidden="true" />
+                <p>Direct STRK20 workers share a report-only identity derived locally from their viewing key. Ready workers use PAYO X25519; PAYO cannot access Ready&apos;s STRK20 viewing key.</p>
+                {payrollRecipientIdentity && <p className="proof-identity-fingerprint"><ShieldCheck size={13} /> {payrollRecipientIdentity.mode === "direct_strk20_viewing_key" ? "Direct STRK20" : "Ready fallback"} identity · {shortId(payrollRecipientIdentity.fingerprint)}</p>}
+                <details className="reporting-identity-tools">
+                  <summary>Direct STRK20 identity tools</summary>
+                  <p>Use this only with a direct STRK20 viewing key. It stays in this browser memory, is cleared after derivation, and is never included in the downloaded public identity.</p>
+                  <label><span>Private recipient address</span><input value={directReportingRecipient} onChange={(event) => setDirectReportingRecipient(event.target.value)} placeholder={starknet.address ?? "0x…"} autoComplete="off" spellCheck={false} /></label>
+                  <label><span>Direct viewing key</span><input type="password" value={directReportingViewingKey} onChange={(event) => setDirectReportingViewingKey(event.target.value)} placeholder="Never use a recovery phrase" autoComplete="off" spellCheck={false} /></label>
+                  <button type="button" className="button button--soft button--wide" onClick={exportDirectReportingIdentity} disabled={!directReportingViewingKey.trim() || !(directReportingRecipient.trim() || starknet.address)}><KeyRound size={16} /> Derive locally &amp; download public identity</button>
+                </details>
+              </>}
+              {payrollReportKind === "tax_book" && <>
+                <div className="proof-identity-actions">
+                  <button type="button" className="button button--soft" onClick={() => payrollReportIdentityInput.current?.click()}><UserPlus size={16} /> Import tax identity</button>
+                  <button type="button" className="button button--soft" onClick={exportCurrentPublicIdentity}><Download size={16} /> Share mine</button>
+                </div>
+                <input ref={payrollReportIdentityInput} className="proof-package-file-input" type="file" accept="application/json,.json" onChange={(event) => void importRecipientPublicIdentity(event)} tabIndex={-1} aria-hidden="true" />
+                <p>Import the tax authority&apos;s public PAYO identity. PAYO encrypts the full book only to that reviewer.</p>
+                {granteeIdentityFingerprint && <p className="proof-identity-fingerprint"><ShieldCheck size={13} /> Recipient identity verified · {shortId(granteeIdentityFingerprint)}</p>}
+              </>}
+              <button type="submit" className="button button--ink button--wide" disabled={payrollReportBusy || !vault.session || !starknet.address || (payrollReportKind === "worker_statement" && !payrollReportWorkerId)}>{payrollReportBusy ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />} {payrollReportKind === "worker_statement" ? "Verify book & create worker source" : "Verify, encrypt and download"}</button>
+            </form>
+            <button type="button" className="button button--soft button--wide" onClick={() => payrollReportInput.current?.click()} disabled={!vault.session || payrollReportBusy}><Eye size={16} /> Open report or worker source</button>
+            <input ref={payrollReportInput} className="proof-package-file-input" type="file" accept="application/json,.json" onChange={(event) => void inspectPayrollReportFile(event)} tabIndex={-1} aria-hidden="true" />
+            {workerSourceViewState && showPayrollReportState && <div className="proof-package-success payroll-report-result" role="status">
+              <div className="proof-package-result-title"><ShieldCheck size={19} /><span><small>WORKER-CONTROLLED SOURCE READY</small><strong>{workerSourceViewState.workerName}</strong></span></div>
+              <p className="proof-package-verdict"><LockKeyhole size={15} /> Complete book checked first; this source is encrypted only to the worker&apos;s {workerSourceViewState.identityMode === "direct_strk20_viewing_key" ? "direct STRK20-derived" : "Ready PAYO fallback"} identity.</p>
+              <dl>
+                <div><dt>Recipient</dt><dd>{shortId(workerSourceViewState.recipientAddress)}</dd></div>
+                <div><dt>Identity</dt><dd>{shortId(workerSourceViewState.identityFingerprint)}</dd></div>
+                <div><dt>Commitment</dt><dd>{shortId(workerSourceViewState.sourceCommitment)}</dd></div>
+                <div><dt>Next</dt><dd>Worker opens this file and generates the final statement locally.</dd></div>
+              </dl>
+              <div className="proof-package-result-actions">
+                <button type="button" onClick={() => downloadJson(workerSourceViewState.file, workerSourceViewState.filename)}><Download size={14} /> Download source</button>
+                <button type="button" onClick={() => void copyPackageCommitment(workerSourceViewState.sourceCommitment)}><Copy size={14} /> Copy commitment</button>
+              </div>
+            </div>}
+            {payrollReportViewState && showPayrollReportState && <div className="proof-package-success payroll-report-result" role="status">
+              <div className="proof-package-result-title"><CheckCircle2 size={19} /><span><small>CHAIN-COMPLETE REPORT VERIFIED</small><strong>{payrollReportViewState.title}</strong></span></div>
+              <p className="proof-package-verdict"><ShieldCheck size={15} /> Every disclosed line reconstructs its proved roots; every entry reconstructs the on-chain accumulator.</p>
+              <dl>
+                <div><dt>Coverage</dt><dd>{payrollReportViewState.countLabel}</dd></div>
+                <div><dt>Period</dt><dd>{payrollReportViewState.periodLabel}</dd></div>
+                <div><dt>Scope</dt><dd>{payrollReportViewState.scope}</dd></div>
+                <div><dt>On-chain root</dt><dd>{shortId(payrollReportViewState.checkpointRoot)} · block {payrollReportViewState.blockNumber}</dd></div>
+                <div><dt>Package</dt><dd>{shortId(payrollReportViewState.packageCommitment)}</dd></div>
+              </dl>
+              {payrollReportViewState.totals.length > 0 && <div className="payroll-report-totals">{payrollReportViewState.totals.map((total) => <span key={total}>{total}</span>)}</div>}
+              {payrollReportViewState.familiarTaxDocuments.length > 0
+                ? <div className="familiar-tax-documents">
+                    <div className="familiar-tax-documents__heading"><span>READABLE VERIFIED EVIDENCE</span><small>Generated locally after the complete on-chain book and exact policy roots pass verification.</small></div>
+                    {payrollReportViewState.familiarTaxDocuments.map((document) => <article key={document.documentCommitment}>
+                      <header><span><small>{document.jurisdictionCode} · {document.taxYear}</small><strong>{document.title}</strong></span><i>{document.token}</i></header>
+                      <dl>{document.fields.map((field) => <div key={field.code}><dt>{field.code} · {field.label}</dt><dd>{formatTokenAmount(BigInt(field.amountAtomic), document.token)}</dd></div>)}</dl>
+                      <p>Policy {document.policyBindings.map(({ policyId, policyRevision }) => `${policyId} r${policyRevision}`).join(" · ")} · root {shortId(document.checkpointRoot)}</p>
+                      <button type="button" onClick={() => downloadJson(document, familiarTaxEvidenceFilename(document))}><Download size={14} /> Download readable JSON</button>
+                    </article>)}
+                    <p className="familiar-tax-documents__warning">These plaintext files contain private compensation data. Share only with the named worker or authorized reviewer.</p>
+                  </div>
+                : <p className="familiar-tax-empty">No employee line in this report maps to the supported US, UK or Canadian familiar views. The canonical encrypted book remains verified.</p>}
+              <div className="proof-package-result-actions">
+                <button type="button" onClick={() => downloadJson(payrollReportViewState.file, payrollReportViewState.filename)}><Download size={14} /> Download</button>
+                <button type="button" onClick={() => void openCreatedPayrollReport()} disabled={payrollReportBusy || (payrollReportViewState.recipientPrincipalId !== vault.session?.principal.principalId && payrollReportViewState.recipientPrincipalId !== localReportingKey?.principal.principalId)}><Eye size={14} /> Verify again</button>
+                <button type="button" onClick={() => void copyPackageCommitment(payrollReportViewState.packageCommitment)}><Copy size={14} /> Copy commitment</button>
+              </div>
+              {payrollReportViewState.recipientPrincipalId !== vault.session?.principal.principalId && payrollReportViewState.recipientPrincipalId !== localReportingKey?.principal.principalId && <p>This file is encrypted to the imported recipient. Only their matching reporting key can open the disclosed salaries.</p>}
+              <p>Readable tax-style evidence only. PAYO does not claim this is an official W-2, P60, T4 or legal filing.</p>
             </div>}
           </section>
 

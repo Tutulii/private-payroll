@@ -1,11 +1,16 @@
 import { z } from "zod";
 import type { EncryptedVaultRecord, VaultPrincipalKeyPair } from "@/lib/crypto/vault";
-import { starknetFeltSchema } from "@/lib/domain/proof-bundle";
+import {
+  starknetFeltSchema,
+  vestingTransitionPublicInputsSchema,
+} from "@/lib/domain/proof-bundle";
+import { universalPayrollBookEntrySchema } from "@/lib/domain/universal-payroll-book";
 import {
   PAYO_MAX_PROOF_CALLDATA_FELTS,
   type ExceptionProofWorkerSuccess,
   type PayoProofWorkerSuccess,
   type ProofWorkerSuccess,
+  type VestingBookProof,
 } from "./protocol";
 
 const publicInputsSchema = z.object({
@@ -28,6 +33,33 @@ const publicInputsSchema = z.object({
   shardIndex: z.string(),
 }).strict();
 
+const remoteVestingShardSchema = z.object({
+  shardIndex: z.union([z.literal(0), z.literal(1)]),
+  proofBase64: z.string().min(1).max(100_000),
+  proofCalldata: z.array(starknetFeltSchema).min(1).max(PAYO_MAX_PROOF_CALLDATA_FELTS),
+  calldataHash: starknetFeltSchema,
+  publicInputs: vestingTransitionPublicInputsSchema,
+}).strict();
+
+const remoteVestingBookProofSchema = z.object({
+  proofVersion: z.literal(3),
+  entryKind: z.enum(["ordinary", "vesting", "agent", "claim", "remediation"]),
+  circuitSha256: z.string().regex(/^0x[0-9a-f]{64}$/),
+  verificationKeySha256: z.string().regex(/^0x[0-9a-f]{64}$/),
+  provingTimeMs: z.number().int().nonnegative(),
+  scheduleId: z.string().regex(/^0x[0-9a-f]{64}$/),
+  previousStateCommitment: z.string().regex(/^0x[0-9a-f]{64}$/),
+  nextStateCommitment: z.string().regex(/^0x[0-9a-f]{64}$/),
+  releaseNullifier: z.string().regex(/^0x[0-9a-f]{64}$/),
+  bookEntry: universalPayrollBookEntrySchema,
+  bookEntryCommitment: z.string().regex(/^0x[0-9a-f]{64}$/),
+  shards: z.tuple([remoteVestingShardSchema, remoteVestingShardSchema]),
+}).strict().superRefine((proof, context) => {
+  if (proof.shards[0].shardIndex !== 0 || proof.shards[1].shardIndex !== 1) {
+    context.addIssue({ code: "custom", path: ["shards"], message: "Vesting proof shards are not ordered." });
+  }
+});
+
 export const remotePayrollProofResponseSchema = z.object({
   version: z.literal(1),
   type: z.literal("proof-complete"),
@@ -35,6 +67,7 @@ export const remotePayrollProofResponseSchema = z.object({
   scheme: z.literal("ultra_keccak_zk_honk"),
   circuitSha256: z.string().regex(/^0x[0-9a-f]{64}$/),
   provingTimeMs: z.number().int().nonnegative(),
+  vestingBook: remoteVestingBookProofSchema.optional(),
   shards: z.tuple([
     z.object({
       shardIndex: z.literal(0),
@@ -93,6 +126,7 @@ export const remoteExceptionProofResponseSchema = z.object({
     calldataHash: starknetFeltSchema,
     publicInputs: exceptionPublicInputsSchema,
   }).strict(),
+  vestingBook: remoteVestingBookProofSchema.optional(),
 }).strict();
 
 export const remoteProofResponseSchema = z.union([
@@ -147,8 +181,40 @@ export function decodeRemoteProofResponse(input: unknown): PayoProofWorkerSucces
         calldataHash: response.proof.calldataHash,
         publicInputs: response.proof.publicInputs,
       },
+      ...(response.vestingBook ? {
+        vestingBook: {
+          ...response.vestingBook,
+          scheduleId: response.vestingBook.scheduleId as `0x${string}`,
+          previousStateCommitment: response.vestingBook.previousStateCommitment as `0x${string}`,
+          nextStateCommitment: response.vestingBook.nextStateCommitment as `0x${string}`,
+          releaseNullifier: response.vestingBook.releaseNullifier as `0x${string}`,
+          bookEntryCommitment: response.vestingBook.bookEntryCommitment as `0x${string}`,
+          shards: response.vestingBook.shards.map((shard) => ({
+            shardIndex: shard.shardIndex,
+            proof: decodeBase64(shard.proofBase64),
+            proofCalldata: shard.proofCalldata,
+            calldataHash: shard.calldataHash,
+            publicInputs: shard.publicInputs,
+          })) as VestingBookProof["shards"],
+        },
+      } : {}),
     } satisfies ExceptionProofWorkerSuccess;
   }
+  const vestingBook: ProofWorkerSuccess["vestingBook"] = response.vestingBook ? {
+    ...response.vestingBook,
+    scheduleId: response.vestingBook.scheduleId as `0x${string}`,
+    previousStateCommitment: response.vestingBook.previousStateCommitment as `0x${string}`,
+    nextStateCommitment: response.vestingBook.nextStateCommitment as `0x${string}`,
+    releaseNullifier: response.vestingBook.releaseNullifier as `0x${string}`,
+    bookEntryCommitment: response.vestingBook.bookEntryCommitment as `0x${string}`,
+    shards: response.vestingBook.shards.map((shard) => ({
+      shardIndex: shard.shardIndex,
+      proof: decodeBase64(shard.proofBase64),
+      proofCalldata: shard.proofCalldata,
+      calldataHash: shard.calldataHash,
+      publicInputs: shard.publicInputs,
+    })) as NonNullable<ProofWorkerSuccess["vestingBook"]>["shards"],
+  } : undefined;
   return {
     version: 1,
     type: "proof-complete",
@@ -163,5 +229,6 @@ export function decodeRemoteProofResponse(input: unknown): PayoProofWorkerSucces
       calldataHash: shard.calldataHash,
       publicInputs: shard.publicInputs,
     })) as ProofWorkerSuccess["shards"],
+    ...(vestingBook ? { vestingBook } : {}),
   };
 }

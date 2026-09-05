@@ -94,6 +94,12 @@ import { isAgreementDue } from "@/lib/domain/obligations";
 import type { ObligationSnapshotPlanSummary } from "@/lib/domain/obligation-snapshot-plan";
 import type { AgentExecutionReceipt } from "@/lib/domain/agent-execution";
 import type { DirectPrivacyActivationEstimate } from "@/lib/client/payo-client";
+import {
+  assertExternalAttestationUsable,
+  openExternalAttestationProofPackage,
+  PAYO_EXTERNAL_ATTESTATION_ALL_FACTS,
+  type ExternalAttestationProofPackage,
+} from "@/lib/domain/external-attestation";
 
 type PayrollRunSummary = {
   id: string;
@@ -148,6 +154,13 @@ function unambiguousLocalDateTime(value: string | number | Date) {
     .concat(" local");
 }
 
+function externalAttestationExpiry(value: string) {
+  const milliseconds = BigInt(value) * 1_000n;
+  return milliseconds <= BigInt(Number.MAX_SAFE_INTEGER)
+    ? unambiguousLocalDateTime(Number(milliseconds))
+    : `Unix ${value}`;
+}
+
 export default function PayrollPage() {
   const { openPayroll, notify } = useAppShell();
   const starknet = useStarknetWallet();
@@ -175,6 +188,9 @@ export default function PayrollPage() {
   const [executionMode, setExecutionMode] = useState<"ready" | "autonomous">("ready");
   const [autonomousCapabilityId, setAutonomousCapabilityId] = useState("");
   const [formError, setFormError] = useState("");
+  const [externalAttestationPackage, setExternalAttestationPackage] =
+    useState<ExternalAttestationProofPackage | null>(null);
+  const [externalAttestationError, setExternalAttestationError] = useState("");
   const [workspaceName, setWorkspaceName] = useState("");
   const [recoveryPassword, setRecoveryPassword] = useState("");
   const [workspaceError, setWorkspaceError] = useState("");
@@ -323,6 +339,35 @@ export default function PayrollPage() {
     ({ agreement }) => agreement.agreement.agreementVersion === "payo-agreement-v2",
   );
   const selectedMixedProofProfiles = selectedContainsAdvancedProfile && !selectedAdvancedProfile;
+  const externalAttestationIssue = useMemo(() => {
+    if (!externalAttestationPackage) return null;
+    if (selectedObligations.length !== 1) {
+      return "Select the one advanced agreement named by this external-facts package.";
+    }
+    const [{ agreement }] = selectedObligations;
+    if (agreement.agreement.agreementVersion !== "payo-agreement-v2") {
+      return "External facts require an advanced proof-v2 agreement.";
+    }
+    if (externalAttestationPackage.agreementId !== agreement.agreement.id) {
+      return "This external-facts package names another encrypted agreement.";
+    }
+    const proofStart = BigInt(Math.floor(dashboardNow / 1_000)) - 30n;
+    const proofExpiry = proofStart + 3_600n;
+    try {
+      assertExternalAttestationUsable(externalAttestationPackage.signed, {
+        subjectCommitment: agreement.recipientCommitment,
+        policyRoot: agreement.agreement.statutoryPolicy.catalogRoot,
+        requiredFactMask: PAYO_EXTERNAL_ATTESTATION_ALL_FACTS,
+        at: proofStart,
+      });
+      if (BigInt(externalAttestationPackage.signed.attestation.validUntil) < proofExpiry) {
+        return "The external attestation expires before PAYO's one-hour proof window closes.";
+      }
+    } catch (error) {
+      return error instanceof Error ? error.message : "The external-facts package is not usable.";
+    }
+    return null;
+  }, [dashboardNow, externalAttestationPackage, selectedObligations]);
   const selectedSnapshotCycleId = useMemo(() => {
     if (!vault.session || selectedObligations.length === 0) return null;
     return deriveObligationSnapshotCycleId(
@@ -1184,6 +1229,24 @@ export default function PayrollPage() {
     }
   };
 
+  const importExternalAttestation = async (file: File | undefined) => {
+    if (!file) return;
+    setExternalAttestationError("");
+    try {
+      if (file.size > 256_000) throw new Error("External-facts package is unexpectedly large.");
+      const opened = await openExternalAttestationProofPackage(
+        JSON.parse(await file.text()),
+      );
+      setExternalAttestationPackage(opened);
+      notify("Issuer signature and private catalog membership verified");
+    } catch (error) {
+      setExternalAttestationPackage(null);
+      setExternalAttestationError(
+        error instanceof Error ? error.message : "External-facts package verification failed.",
+      );
+    }
+  };
+
   const submitPayroll = async () => {
     setFormError("");
     setProofDeliveryNotice("");
@@ -1213,15 +1276,25 @@ export default function PayrollPage() {
       if (prepareForAgent && !selectedAutonomousCapability) {
         throw new Error("Select one active one-run autonomy capability for this AI-agent payment.");
       }
+      if (selectedObligations.length === 0) throw new Error("Select at least one due encrypted agreement.");
+      if (externalAttestationPackage && externalAttestationIssue) {
+        throw new Error(externalAttestationIssue);
+      }
+      const advancedProfile = selectedObligations.every(
+        ({ agreement }) => agreement.agreement.agreementVersion === "payo-agreement-v2",
+      );
+      const vestingBookSealAddress = process.env.NEXT_PUBLIC_PAYO_VESTING_BOOK_SEAL_ADDRESS;
+      const useVestingBook = advancedProfile && Boolean(vestingBookSealAddress);
       const sealAddress = prepareForAgent
         ? process.env.NEXT_PUBLIC_PAYO_AGENT_SEAL_ADDRESS
-        : process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
+        : useVestingBook
+          ? vestingBookSealAddress
+          : process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
       if (!sealAddress) throw new Error("The proof-bound PAYO seal is not deployed/configured.");
       const policyAccountAddress = process.env.NEXT_PUBLIC_PAYO_AGENT_POLICY_ACCOUNT_ADDRESS;
       if (prepareForAgent && !policyAccountAddress) {
         throw new Error("The reviewed PAYO agent policy account is not configured.");
       }
-      if (selectedObligations.length === 0) throw new Error("Select at least one due encrypted agreement.");
       if (selectedSnapshotIssue) throw new Error(selectedSnapshotIssue);
       const plannedObligations = await preparePayrollObligationRoot({
         organizationId: vault.session.organizationId,
@@ -1236,9 +1309,6 @@ export default function PayrollPage() {
       if (BigInt(obligationOwner) !== BigInt(starknet.address)) {
         throw new Error("The connected Ready account does not own this encrypted obligation root.");
       }
-      const advancedProfile = selectedObligations.every(
-        ({ agreement }) => agreement.agreement.agreementVersion === "payo-agreement-v2",
-      );
       let dueSnapshotPlan: ReturnType<typeof openObligationSnapshotPlan> | undefined;
       if (advancedProfile) {
         if (!selfHostedProverUrl) {
@@ -1267,6 +1337,27 @@ export default function PayrollPage() {
           throw new Error("The selected snapshot does not match the agent execution run.");
         }
       }
+      const boundExternalAttestation = externalAttestationPackage
+        ? {
+            agreementId: externalAttestationPackage.agreementId,
+            catalogRoot: externalAttestationPackage.catalogRoot,
+            signed: externalAttestationPackage.signed,
+            siblings: externalAttestationPackage.siblings,
+            pathBits: externalAttestationPackage.pathBits,
+          }
+        : undefined;
+      if (boundExternalAttestation) {
+        if (!dueSnapshotPlan) {
+          throw new Error("External facts require the exact protected advanced-payroll snapshot.");
+        }
+        if (BigInt(boundExternalAttestation.signed.attestation.policyRoot)
+          !== BigInt(dueSnapshotPlan.snapshot.policyRoot)) {
+          throw new Error("The external attestation is bound to another protected payroll policy root.");
+        }
+        if (!(await starknet.isPolicyRootActive(boundExternalAttestation.catalogRoot))) {
+          throw new Error("The external-attestation catalog is not active in PAYO's on-chain registry.");
+        }
+      }
       if (!prepareForAgent) {
         for (const token of Object.keys(PAYROLL_TOKENS) as PayrollTokenSymbol[]) {
           const available = starknet.shieldedBalances[token];
@@ -1286,15 +1377,26 @@ export default function PayrollPage() {
         obligations: selectedObligations,
         ...(dueSnapshotPlan ? {
           snapshotPlan: dueSnapshotPlan,
-          proveSnapshot: async ({ encryptedWitness, principal, onProgress }) => {
-            onProgress?.("loading");
-            onProgress?.("proving");
-            return vault.client!.proveExceptionRemotely({
-              proverBaseUrl: selfHostedProverUrl!,
-              encryptedWitness,
-              principal,
-            });
-          },
+          ...(useVestingBook ? {
+            vestingBook: {
+              ownerAddress: starknet.address,
+              bookSealAddress: vestingBookSealAddress!,
+              entryKind: prepareForAgent ? "agent" as const : "ordinary" as const,
+              ...(boundExternalAttestation
+                ? { attestation: boundExternalAttestation }
+                : {}),
+            },
+          } : {
+            proveSnapshot: async ({ encryptedWitness, principal, onProgress }) => {
+              onProgress?.("loading");
+              onProgress?.("proving");
+              return vault.client!.proveExceptionRemotely({
+                proverBaseUrl: selfHostedProverUrl!,
+                encryptedWitness,
+                principal,
+              });
+            },
+          }),
         } : {
           runRevision: Math.max(
             0,
@@ -2083,6 +2185,45 @@ export default function PayrollPage() {
               </div>
             )}
 
+            {selectedAdvancedProfile && (
+              <div className={`external-facts-card ${externalAttestationPackage && !externalAttestationIssue ? "external-facts-card--verified" : externalAttestationPackage ? "external-facts-card--blocked" : ""}`}>
+                <span className="external-facts-card__icon"><KeyRound size={18} /></span>
+                <span className="external-facts-card__copy" aria-live="polite">
+                  <small>OPTIONAL · ISSUER-SIGNED EXTERNAL FACTS</small>
+                  <strong>{externalAttestationPackage
+                    ? externalAttestationIssue ? "Package does not match this payroll" : "Residency, employment and tax facts verified"
+                    : "Attach one private fact package"}</strong>
+                  <p>{externalAttestationPackage
+                    ? externalAttestationIssue ?? `Jurisdiction ${externalAttestationPackage.signed.attestation.jurisdictionCode} · expires ${externalAttestationExpiry(externalAttestationPackage.signed.attestation.validUntil)} · catalog ${externalAttestationPackage.catalogRoot.slice(0, 10)}…`
+                    : "PAYO verifies the issuer signature and catalog opening locally, then proves the three facts without publishing the credential contents."}</p>
+                </span>
+                <span className="external-facts-card__actions">
+                  <label className="button button--soft external-facts-card__import">
+                    {externalAttestationPackage ? "Replace package" : "Import signed JSON"}
+                    <input
+                      className="proof-package-file-input"
+                      type="file"
+                      accept="application/json,.json"
+                      aria-label="Import external facts package"
+                      onChange={(event) => {
+                        void importExternalAttestation(event.target.files?.[0]);
+                        event.currentTarget.value = "";
+                      }}
+                    />
+                  </label>
+                  {externalAttestationPackage && <button
+                    className="button button--soft"
+                    type="button"
+                    onClick={() => {
+                      setExternalAttestationPackage(null);
+                      setExternalAttestationError("");
+                    }}
+                  >Remove</button>}
+                </span>
+              </div>
+            )}
+            {externalAttestationError && <div className="runner-error"><X size={16} /><span>{externalAttestationError}</span></div>}
+
             <div className="composer-summary">
               <div><small>{selectedProofProfile}</small><strong>{selectedObligations.length} selected</strong></div><div><small>Private total</small><strong>{`${formatTokenAmount(payrollTotals.STRK, "STRK")} STRK · ${formatTokenAmount(payrollTotals.USDC, "USDC")} USDC`}</strong></div><div><small>{executionMode === "autonomous" ? "Execution treasury" : "Shielded treasury"}</small><strong>{executionMode === "autonomous" ? "Encrypted policy account" : `${formatTokenAmount(starknet.shieldedBalances.STRK, "STRK")} STRK · ${formatTokenAmount(starknet.shieldedBalances.USDC, "USDC")} USDC`}</strong></div>
               {dueObligations.length === 0 ? (
@@ -2093,7 +2234,7 @@ export default function PayrollPage() {
                 <button
                   type="button"
                   className="button button--ink"
-                  disabled={!vault.session || !vault.recoveryReady || !starknet.isConnected || !starknet.isMainnet || busy || Boolean(recoverableSubmission) || selectedObligations.length === 0 || Boolean(selectedSnapshotIssue) || Boolean(agentApprovalReview && agentApprovalIssue) || (executionMode === "ready" && obligationSchedule?.state === "active" && !canRunPayroll) || (executionMode === "autonomous" && (!selectedAutonomousCapability || Boolean(autonomousPreparation)))}
+                  disabled={!vault.session || !vault.recoveryReady || !starknet.isConnected || !starknet.isMainnet || busy || Boolean(recoverableSubmission) || selectedObligations.length === 0 || Boolean(selectedSnapshotIssue) || Boolean(externalAttestationIssue) || Boolean(agentApprovalReview && agentApprovalIssue) || (executionMode === "ready" && obligationSchedule?.state === "active" && !canRunPayroll) || (executionMode === "autonomous" && (!selectedAutonomousCapability || Boolean(autonomousPreparation)))}
                   onClick={obligationSchedule?.state === "active" ? submitPayroll : scheduleSelectedObligationRoot}
                 >
                   {payrollStage && payrollStage !== "queued" && payrollStage !== "recorded"
@@ -2114,6 +2255,8 @@ export default function PayrollPage() {
                               ? <>Select a due agreement <CalendarDays size={17} /></>
                               : selectedSnapshotIssue
                                 ? <>Future protection required <ShieldCheck size={17} /></>
+                              : externalAttestationIssue
+                                ? <>Fix external facts <KeyRound size={17} /></>
                               : obligationSchedule?.state !== "active"
                                 ? <>Authorize batch in Ready <ShieldCheck size={17} /></>
                                 : <>{executionMode === "autonomous" ? "Prove & prepare agent run" : agentApprovalReview ? "Prove & approve agent payroll" : "Prove & approve payroll"} <ArrowRight size={17} /></>}

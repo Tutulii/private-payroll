@@ -4,10 +4,14 @@ import type {
   DirectPrivacyAccountConfig,
   DirectPrivacyRunMaterial,
 } from "@/lib/domain/direct-privacy";
+import { universalPayrollBookEntryCommitment } from "@/lib/domain/universal-payroll-book";
 import {
+  VESTING_TRANSITION_CIRCUIT_SHA256,
+  VESTING_TRANSITION_VERIFICATION_KEY_SHA256,
   mapPayrollPublicInputs,
   type PayrollIntegrityShardProof,
   type ProofWorkerSuccess,
+  type VestingBookProof,
 } from "@/lib/proof/protocol";
 import { hashProofCalldata } from "@/lib/proof/starknet-calldata";
 import {
@@ -29,6 +33,10 @@ const PUBLIC_INPUTS = [
 
 const joinRoot = (high: string, low: string) =>
   `0x${((BigInt(high) << 128n) | BigInt(low)).toString(16).padStart(64, "0")}` as `0x${string}`;
+const splitRoot = (value: string) => ({
+  high: (BigInt(value) >> 128n).toString(),
+  low: (BigInt(value) & ((1n << 128n) - 1n)).toString(),
+});
 
 function shard(shardIndex: 0 | 1): PayrollIntegrityShardProof {
   const proofCalldata = readFileSync(
@@ -132,6 +140,101 @@ const payrollProof: ProofWorkerSuccess = {
   provingTimeMs: 1,
 };
 
+function autonomousBookProof(): VestingBookProof {
+  const zero = `0x${"00".repeat(32)}` as const;
+  const totalsCommitment = `0x${"aa".repeat(32)}` as const;
+  const runNullifier = joinRoot(PUBLIC_INPUTS[12], PUBLIC_INPUTS[13]);
+  const bookEntry = {
+    entryVersion: "payo-payroll-book-entry-v2" as const,
+    entryKind: "agent" as const,
+    chainId: "0x1" as const,
+    sealAddress: "0x445" as const,
+    sourceSealAddress: "0x12345" as const,
+    ownerAddress: "0x777" as const,
+    periodStart: "1",
+    periodEnd: "9999999999",
+    agreementRoot: joinRoot(PUBLIC_INPUTS[4], PUBLIC_INPUTS[5]),
+    manifestRoot: joinRoot(PUBLIC_INPUTS[6], PUBLIC_INPUTS[7]),
+    policyRoot: joinRoot(PUBLIC_INPUTS[8], PUBLIC_INPUTS[9]),
+    fxRoot: joinRoot(PUBLIC_INPUTS[10], PUBLIC_INPUTS[11]),
+    runNullifier,
+    subjectNullifier: runNullifier,
+    parentFactCommitment: zero,
+    factCommitment: zero,
+    sourceProofVersion: 2,
+    attestationRoot: zero,
+    contributorCount: 2,
+    totalsDisclosure: "hidden" as const,
+    totalsCommitment,
+    totals: {
+      STRK: { grossAtomic: "0", deductionsAtomic: "0", netAtomic: "0" },
+      USDC: { grossAtomic: "0", deductionsAtomic: "0", netAtomic: "0" },
+    },
+    vestingScheduleId: zero,
+    vestingStateCommitment: zero,
+  };
+  const bookEntryCommitment = universalPayrollBookEntryCommitment(bookEntry);
+  const book = splitRoot(bookEntryCommitment);
+  const totals = splitRoot(totalsCommitment);
+  const common = {
+    chainId: "0x1",
+    sealAddress: "0x445",
+    proofVersion: "3" as const,
+    schemaVersion: "1" as const,
+    entryKind: "2" as const,
+    agreementRootHigh: PUBLIC_INPUTS[4], agreementRootLow: PUBLIC_INPUTS[5],
+    manifestRootHigh: PUBLIC_INPUTS[6], manifestRootLow: PUBLIC_INPUTS[7],
+    policyRootHigh: PUBLIC_INPUTS[8], policyRootLow: PUBLIC_INPUTS[9],
+    fxRootHigh: PUBLIC_INPUTS[10], fxRootLow: PUBLIC_INPUTS[11],
+    runNullifierHigh: PUBLIC_INPUTS[12], runNullifierLow: PUBLIC_INPUTS[13],
+    subjectNullifierHigh: PUBLIC_INPUTS[12], subjectNullifierLow: PUBLIC_INPUTS[13],
+    parentFactHigh: "0", parentFactLow: "0", factHigh: "0", factLow: "0",
+    ownerAddress: BigInt("0x777").toString(),
+    sourceSealAddress: BigInt("0x12345").toString(),
+    sourceProofVersion: "2",
+    attestationRootHigh: "0", attestationRootLow: "0",
+    shard0ContributorCount: "1", shard1ContributorCount: "1",
+    totalsDisclosed: "0" as const,
+    totalsCommitmentHigh: totals.high, totalsCommitmentLow: totals.low,
+    shard0StrkGross: "0", shard0StrkDeductions: "0", shard0StrkNet: "0",
+    shard0UsdcGross: "0", shard0UsdcDeductions: "0", shard0UsdcNet: "0",
+    shard1StrkGross: "0", shard1StrkDeductions: "0", shard1StrkNet: "0",
+    shard1UsdcGross: "0", shard1UsdcDeductions: "0", shard1UsdcNet: "0",
+    scheduleIdHigh: "0", scheduleIdLow: "0",
+    previousStateHigh: "0", previousStateLow: "0",
+    nextStateHigh: "0", nextStateLow: "0",
+    releaseNullifierHigh: "0", releaseNullifierLow: "0",
+    bookEntryHigh: book.high, bookEntryLow: book.low,
+    periodStart: "1", periodEnd: "9999999999",
+    validityStart: BigInt(PUBLIC_INPUTS[14]).toString(),
+    validityExpiry: BigInt(PUBLIC_INPUTS[15]).toString(),
+  };
+  const shards = ([0, 1] as const).map((shardIndex) => {
+    const proofCalldata = [`0x${shardIndex + 1}`];
+    return {
+      shardIndex,
+      proof: Uint8Array.of(shardIndex + 1),
+      proofCalldata,
+      calldataHash: hashProofCalldata(proofCalldata),
+      publicInputs: { ...common, shardIndex: String(shardIndex) as "0" | "1" },
+    };
+  }) as VestingBookProof["shards"];
+  return {
+    proofVersion: 3,
+    entryKind: "agent",
+    circuitSha256: VESTING_TRANSITION_CIRCUIT_SHA256,
+    verificationKeySha256: VESTING_TRANSITION_VERIFICATION_KEY_SHA256,
+    provingTimeMs: 1,
+    scheduleId: zero,
+    previousStateCommitment: zero,
+    nextStateCommitment: zero,
+    releaseNullifier: zero,
+    bookEntry,
+    bookEntryCommitment,
+    shards,
+  };
+}
+
 describe("direct private SDK execution plan", () => {
   it("builds only authoritative private notes and change after proof-first sealing", () => {
     const plan = buildDirectPrivacyPlan({ config, material, payrollProof, nowUnixSeconds: 1_500n });
@@ -159,6 +262,38 @@ describe("direct private SDK execution plan", () => {
       payrollProof,
       nowUnixSeconds: 1_500n,
     })).toThrow("proved manifest root");
+  });
+
+  it("binds an autonomous v2 payment to the universal agent-book callback", () => {
+    const vestingBook = autonomousBookProof();
+    const advancedProof: ProofWorkerSuccess = {
+      ...payrollProof,
+      shards: payrollProof.shards.map((entry) => ({
+        ...entry,
+        publicInputs: { ...entry.publicInputs, proofVersion: "2" },
+      })) as ProofWorkerSuccess["shards"],
+      vestingBook,
+    };
+    const plan = buildDirectPrivacyPlan({
+      config: { ...config, sealMode: 2, proofVersion: 2, bookSealAddress: "0x445" },
+      material,
+      payrollProof: advancedProof,
+      nowUnixSeconds: 1_500n,
+    });
+    expect(plan.actions.invoke?.callBuilder()).toEqual({
+      contractAddress: expect.stringMatching(/445$/),
+      calldata: [
+        PUBLIC_INPUTS[12], PUBLIC_INPUTS[13], "0x0", "0x0",
+        `0x${BigInt(vestingBook.shards[0].publicInputs.bookEntryHigh).toString(16)}`,
+        `0x${BigInt(vestingBook.shards[0].publicInputs.bookEntryLow).toString(16)}`,
+      ],
+    });
+    expect(() => buildDirectPrivacyPlan({
+      config: { ...config, sealMode: 2, proofVersion: 2, bookSealAddress: "0x445" },
+      material,
+      payrollProof: { ...advancedProof, vestingBook: undefined },
+      nowUnixSeconds: 1_500n,
+    })).toThrow("agent-kind v3 book proof");
   });
 
   it("accepts only proof-bound apply_actions calldata without screening or warnings", () => {

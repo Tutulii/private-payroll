@@ -5,8 +5,10 @@ import { generateUuidV7 } from "@/lib/domain/records";
 import { prepareEncryptedPayee } from "./payee-directory";
 import {
   advanceEncryptedRecurringAgreement,
+  agreementProofScheduleCommitment,
   agreementScheduleCommitment,
   lockedPayrollScheduleCommitments,
+  scheduleEncryptedVestingRelease,
   storeEncryptedAdvancedAgreement,
   storeEncryptedRecurringAgreement,
   synchronizeConfirmedRecurringAgreements,
@@ -138,6 +140,106 @@ describe("encrypted pay agreements", () => {
       expectedScheduleCommitment,
       principal,
     })).rejects.toThrow(/current schedule revision/i);
+  });
+
+  it("schedules a later vesting checkpoint without resetting immutable terms or released state", async () => {
+    const principal = generateVaultPrincipal("admin:vesting-release");
+    const payee = prepareEncryptedPayee({
+      organizationId,
+      displayName: "Private vesting worker",
+      principalKind: "human",
+      recipientAddress: "0x456",
+      tokenPreference: "USDC",
+      jurisdictionCode: "US-CA",
+      principal,
+      now,
+    }).record;
+    const initial = await storeEncryptedAdvancedAgreement({
+      client: { storeEncryptedRecord: vi.fn().mockResolvedValue({ record: {} }) } as never,
+      organizationId,
+      payee,
+      token: "USDC",
+      classification: "contractor",
+      classificationAnswers: referenceClassificationAnswers("contractor"),
+      paymentPlan: {
+        planVersion: "payo-payment-plan-v1",
+        kind: "private_vesting",
+        startsAt: "2026-08-24T10:00:00.000Z",
+        cliffAt: "2026-08-24T11:00:00.000Z",
+        releaseAt: "2026-08-24T12:00:00.000Z",
+        endsAt: "2026-08-24T14:00:00.000Z",
+        totalAtomic: "4000000",
+        releasedAtomic: "0",
+        releaseSequence: 0,
+      },
+      principal,
+      now,
+    });
+    if (
+      initial.agreement.agreementVersion !== "payo-agreement-v2"
+      || initial.agreement.paymentPlan.kind !== "private_vesting"
+    ) throw new Error("Expected an initial private vesting agreement.");
+    const scheduleCommitment = await agreementProofScheduleCommitment(initial.agreement);
+    const [settled] = await synchronizeConfirmedRecurringAgreements({
+      client: { storeEncryptedRecord: vi.fn().mockResolvedValue({ record: {} }) } as never,
+      agreements: [initial],
+      runs: [{
+        state: "confirmed",
+        updatedAt: "2026-08-24T12:01:00.000Z",
+        dueAt: "2026-08-24T12:00:00.000Z",
+        lines: [{
+          agreementId: initial.agreement.id,
+          scheduleCommitment,
+          paidAtomic: "2000000",
+        }],
+      }],
+      principal,
+    });
+    if (
+      settled.agreement.agreementVersion !== "payo-agreement-v2"
+      || settled.agreement.paymentPlan.kind !== "private_vesting"
+    ) throw new Error("Expected a private vesting agreement.");
+
+    const storeEncryptedRecord = vi.fn().mockResolvedValue({ record: {} });
+    const scheduled = await scheduleEncryptedVestingRelease({
+      client: { storeEncryptedRecord } as never,
+      record: settled,
+      releaseAt: "2026-08-24T13:00:00.000Z",
+      principal,
+      now: new Date("2026-08-24T12:02:00.000Z"),
+    });
+    expect(scheduled.revision).toBe(settled.revision + 1);
+    expect(scheduled.agreement.id).toBe(initial.agreement.id);
+    expect(scheduled.agreement.earningsAtomic).toEqual(["1000000"]);
+    expect(scheduled.agreement).toMatchObject({
+      planSalt: initial.agreement.planSalt,
+      paymentPlan: {
+        startsAt: "2026-08-24T10:00:00.000Z",
+        cliffAt: "2026-08-24T11:00:00.000Z",
+        releaseAt: "2026-08-24T13:00:00.000Z",
+        endsAt: "2026-08-24T14:00:00.000Z",
+        totalAtomic: "4000000",
+        releasedAtomic: "2000000",
+        releaseSequence: 1,
+      },
+    });
+    const stored = storeEncryptedRecord.mock.calls[0][0];
+    expect(stored.recordId).toBe(initial.id);
+    expect(stored.revision).toBe(scheduled.revision);
+    expect(decryptVaultRecord(stored.envelope, principal)).toEqual(scheduled);
+
+    await expect(scheduleEncryptedVestingRelease({
+      client: { storeEncryptedRecord: vi.fn() } as never,
+      record: initial,
+      releaseAt: "2026-08-24T13:00:00.000Z",
+      principal,
+    })).rejects.toThrow(/must settle/i);
+    await expect(scheduleEncryptedVestingRelease({
+      client: { storeEncryptedRecord: vi.fn() } as never,
+      record: settled,
+      releaseAt: "2026-08-24T12:00:00.000Z",
+      principal,
+    })).rejects.toThrow(/follow the previous/i);
   });
 
   it("locks in-flight schedules and advances each confirmed schedule exactly once", async () => {

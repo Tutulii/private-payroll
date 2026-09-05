@@ -20,6 +20,7 @@ import {
   settlementRecordSchema,
   wageClaimRecordSchema,
 } from "@/lib/domain/records";
+import { payrollReportRecordSchema } from "@/lib/disclosure/payroll-book-report";
 import type { EncryptedRecordType } from "@/lib/persistence/vault-repository";
 import type { PayoClient } from "./payo-client";
 
@@ -33,6 +34,7 @@ const encryptedRecordSchemas = {
   settlement: settlementRecordSchema,
   receipt: receiptRecordSchema,
   "disclosure-grant": disclosureGrantRecordSchema,
+  "payroll-report": payrollReportRecordSchema,
   "agent-capability": agentCapabilityRecordSchema,
   "wage-claim": wageClaimRecordSchema,
   remediation: remediationRecordSchema,

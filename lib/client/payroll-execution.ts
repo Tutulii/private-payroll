@@ -5,6 +5,7 @@ import {
   prepareEncryptedExceptionProofBundle,
   prepareEncryptedPayrollIntegrityBundle,
 } from "@/lib/client/proof-bundle";
+import { openStoredPayrollBookProof } from "@/lib/client/payroll-proof-recovery";
 import { PayoApiError, PayoClient, prepareEncryptedPayrollRun } from "@/lib/client/payo-client";
 import { hashRecipientCommitment } from "@/lib/crypto/commitments";
 import { hashCanonicalJson } from "@/lib/crypto/digest";
@@ -22,9 +23,10 @@ import {
   fxCatalogPublicationWindow,
   type FxSnapshot,
 } from "@/lib/domain/fx";
-import { isAgreementDue } from "@/lib/domain/obligations";
+import { isAgreementDue, type EmploymentAgreement } from "@/lib/domain/obligations";
 import { generateUuidV7, settlementRecordSchema } from "@/lib/domain/records";
 import { commitAgentSettlementPlan, commitTokenTotals } from "@/lib/domain/settlement";
+import { vestingStateSalt } from "@/lib/domain/vesting-tax";
 import { policyPackCommitment } from "@/lib/policy/engine";
 import {
   calculatePolicyDeductions,
@@ -45,11 +47,15 @@ import { advancedPlanProofCommitment } from "@/lib/proof/advanced-plan-commitmen
 import { proveEncryptedPayroll, type ProofProgressListener } from "@/lib/proof/client";
 import {
   PAYO_MAX_PROOF_CALLDATA_FELTS,
+  VESTING_TRANSITION_CIRCUIT_SHA256,
+  VESTING_TRANSITION_VERIFICATION_KEY_SHA256,
   type ExceptionProofWorkerSuccess,
   type ProofWorkerSuccess,
+  type VestingBookProof,
 } from "@/lib/proof/protocol";
 import { buildPayoSealedPayroll } from "@/lib/starknet/payo-seal";
 import { buildAuthorizedPayrollAction } from "@/lib/starknet/payo-exception-seal";
+import { buildVestingBookAction } from "@/lib/starknet/payo-vesting-book";
 import {
   agreementScheduleCommitment,
   recordProofScheduleCommitment,
@@ -62,6 +68,16 @@ export type PayrollExecutionObligation = {
   agreement: PayAgreementDirectoryRecord;
   payee: PayeeDirectoryRecord;
 };
+
+type AdvancedEmploymentAgreement = Extract<EmploymentAgreement, { agreementVersion: "payo-agreement-v2" }>;
+type PrivateVestingAgreement = AdvancedEmploymentAgreement & {
+  paymentPlan: Extract<AdvancedEmploymentAgreement["paymentPlan"], { kind: "private_vesting" }>;
+};
+
+function isPrivateVestingAgreement(agreement: EmploymentAgreement): agreement is PrivateVestingAgreement {
+  return agreement.agreementVersion === "payo-agreement-v2"
+    && agreement.paymentPlan.kind === "private_vesting";
+}
 
 export function payrollAgreementDueAt(record: PayAgreementDirectoryRecord): bigint {
   const agreement = record.agreement;
@@ -107,7 +123,7 @@ export type PayrollExecutionStage =
   | "queued";
 
 export type PendingPayrollSubmission = {
-  version: 3 | 4;
+  version: 3 | 4 | 5;
   organizationId: string;
   runId: string;
   proofBundleId: string;
@@ -117,7 +133,7 @@ export type PendingPayrollSubmission = {
   tokenTotalsCommitment: `0x${string}`;
   settlementEnvelope: EncryptedVaultRecord;
   proofShards: [string[], string[]];
-  authorizationMode?: "staged_vnext";
+  authorizationMode?: "staged_vnext" | "vesting_book_v3";
   snapshotProofBundleId?: string;
   transactionHash?: string;
   createdAt: string;
@@ -341,13 +357,19 @@ const pendingPayrollSubmissionV4Schema = pendingPayrollSubmissionV3Schema.extend
   snapshotProofBundleId: z.string().uuid(),
 }).strict();
 
+const pendingPayrollSubmissionV5Schema = pendingPayrollSubmissionV3Schema.extend({
+  version: z.literal(5),
+  authorizationMode: z.literal("vesting_book_v3"),
+}).strict();
+
 export function parsePendingPayrollSubmission(input: unknown): PendingPayrollSubmission {
   const parsed = z.union([
+    pendingPayrollSubmissionV5Schema,
     pendingPayrollSubmissionV4Schema,
     pendingPayrollSubmissionV3Schema,
     pendingPayrollSubmissionV2Schema,
   ]).parse(input);
-  return (parsed.version === 4 ? parsed : { ...parsed, version: 3 }) as PendingPayrollSubmission;
+  return (parsed.version >= 4 ? parsed : { ...parsed, version: 3 }) as PendingPayrollSubmission;
 }
 
 type ProvePayroll = (input: {
@@ -379,6 +401,12 @@ export type ExecuteProofBoundPayrollInput = {
   prove?: ProvePayroll;
   snapshotPlan?: ObligationSnapshotPlanPrivate;
   proveSnapshot?: ProveSnapshot;
+  vestingBook?: {
+    ownerAddress: string;
+    bookSealAddress?: string;
+    entryKind?: "ordinary" | "agent";
+    attestation?: import("@/lib/proof/vesting-transition-input").ExternalAttestationProofInput;
+  };
   authorizeFxRoot?: (input: {
     root: `0x${string}`;
     snapshots: readonly FxSnapshot[];
@@ -576,6 +604,7 @@ async function stageAutonomousPayrollRun(input: {
   runId: string;
   proofWitnessPayload: unknown;
   autonomousAgent: PrepareAutonomousPayrollInput["autonomousAgent"];
+  beforeStage?: (binding: { proofBundleId: string; runVersion: number }) => Promise<void>;
   onStage?: (stage: PayrollExecutionStage) => void;
 }): Promise<AutonomousPayrollPreparationResult> {
   input.onStage?.("agent_policy");
@@ -602,6 +631,10 @@ async function stageAutonomousPayrollRun(input: {
   ) {
     throw new Error("PAYO did not return the exact authorized run binding for this policy account.");
   }
+  await input.beforeStage?.({
+    proofBundleId: binding.proofBundleId,
+    runVersion: binding.runVersion,
+  });
   const agentWitness = encryptVaultRecord(input.proofWitnessPayload, {
     schemaVersion: 1,
     organizationId: input.organizationId,
@@ -676,6 +709,110 @@ export async function waitForPayrollAuthorization(input: {
   );
 }
 
+export async function waitForVestingAuthorization(input: {
+  client: Pick<PayoClient, "getVestingAuthorization">;
+  runId: string;
+  initial?: Awaited<ReturnType<PayoClient["getVestingAuthorization"]>>["authorization"];
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+}) {
+  const pollIntervalMs = input.pollIntervalMs ?? 3_000;
+  const timeoutMs = input.timeoutMs ?? 30 * 60_000;
+  if (!Number.isFinite(pollIntervalMs) || pollIntervalMs < 0 || pollIntervalMs > 30_000) {
+    throw new Error("Vesting authorization poll interval is invalid.");
+  }
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 60 * 60_000) {
+    throw new Error("Vesting authorization timeout is invalid.");
+  }
+  const deadline = Date.now() + timeoutMs;
+  let authorization = input.initial;
+  while (Date.now() < deadline) {
+    authorization ??= (await input.client.getVestingAuthorization(input.runId)).authorization;
+    if (authorization.runId !== input.runId) {
+      throw new Error("PAYO returned a state/book authorization for another payroll run.");
+    }
+    if (authorization.state === "complete") {
+      if (!authorization.authorizedAt || !authorization.transactionHash) {
+        throw new Error("PAYO marked state/book authorization complete without finalized chain evidence.");
+      }
+      return authorization;
+    }
+    if (authorization.state === "dead") {
+      throw new Error(
+        authorization.lastErrorMessage
+          ? `State/book proof authorization failed: ${authorization.lastErrorMessage}`
+          : "State/book proof authorization failed permanently.",
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    authorization = (await input.client.getVestingAuthorization(input.runId)).authorization;
+  }
+  throw new Error(
+    "PAYO did not finish state/book proof authorization within 30 minutes. No Ready payment was requested; resume this authorization safely.",
+  );
+}
+
+async function authorizePayrollBookProof(input: {
+  client: PayoClient;
+  runId: string;
+  proofBundleId: string;
+  payrollProof: ProofWorkerSuccess;
+  stateProof: VestingBookProof;
+  chainId: string;
+  bookSealAddress: string;
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+  onStage?: (stage: PayrollExecutionStage) => void;
+}): Promise<STRK20_INVOKE_ACTION> {
+  input.onStage?.("proof_authorization");
+  const stateProof = input.stateProof;
+  if (stateProof.circuitSha256 !== VESTING_TRANSITION_CIRCUIT_SHA256
+    || stateProof.verificationKeySha256 !== VESTING_TRANSITION_VERIFICATION_KEY_SHA256) {
+    throw new Error("The state/book proof is not bound to the pinned PAYO v3 circuit and verification key.");
+  }
+  const queued = await input.client.enqueueVestingAuthorization({
+    runId: input.runId,
+    request: {
+      payrollProofBundleId: input.proofBundleId,
+      payrollShards: [
+        input.payrollProof.shards[0].proofCalldata,
+        input.payrollProof.shards[1].proofCalldata,
+      ],
+      vestingBook: {
+        proofVersion: stateProof.proofVersion,
+        entryKind: stateProof.entryKind,
+        circuitSha256: VESTING_TRANSITION_CIRCUIT_SHA256,
+        verificationKeySha256: VESTING_TRANSITION_VERIFICATION_KEY_SHA256,
+        scheduleId: stateProof.scheduleId,
+        previousStateCommitment: stateProof.previousStateCommitment,
+        nextStateCommitment: stateProof.nextStateCommitment,
+        releaseNullifier: stateProof.releaseNullifier,
+        bookEntry: stateProof.bookEntry,
+        bookEntryCommitment: stateProof.bookEntryCommitment,
+        shards: stateProof.shards.map((shard) => ({
+          shardIndex: shard.shardIndex,
+          proofCalldata: shard.proofCalldata,
+          calldataHash: shard.calldataHash,
+          publicInputs: shard.publicInputs,
+        })) as typeof stateProof.shards,
+      },
+    },
+  });
+  await waitForVestingAuthorization({
+    client: input.client,
+    runId: input.runId,
+    initial: queued.authorization,
+    pollIntervalMs: input.pollIntervalMs,
+    timeoutMs: input.timeoutMs,
+  });
+  return buildVestingBookAction({
+    sealAddress: input.bookSealAddress,
+    chainId: input.chainId,
+    payrollShards: input.payrollProof.shards,
+    vestingBook: stateProof,
+  });
+}
+
 export async function resumePendingPayrollSubmission(input: {
   client: PayoClient;
   pending: PendingPayrollSubmission;
@@ -719,7 +856,7 @@ export async function resumePendingPayrollSubmission(input: {
       { cause: error },
     );
   }
-  if (submitted.authorizationMode !== "staged_vnext") {
+  if (!submitted.authorizationMode) {
     try {
       await retryDurableWrite(() => input.client.enqueueProofVerification({
         settlementId: submitted.settlementId,
@@ -988,10 +1125,31 @@ export async function executeProofBoundPayroll(
     throw new Error("Legacy and advanced obligations must be settled in separate proof-bound runs.");
   }
   const advancedProfile = advancedCount === input.obligations.length;
-  if (snapshotPlan && (!advancedProfile || !input.proveSnapshot)) {
+  if (snapshotPlan && (!advancedProfile || (!input.proveSnapshot && !input.vestingBook))) {
     throw new Error(
-      "A registered payday snapshot requires advanced PayrollIntegrity v2 and the configured vNext prover.",
+      "A registered payday snapshot requires Advanced PayrollIntegrity v2 and an authorization proof path.",
     );
+  }
+  if (input.vestingBook && !snapshotPlan) {
+    throw new Error("Stateful vesting and payroll-book proofs require an exact registered payday snapshot.");
+  }
+  if ("autonomousAgent" in input) {
+    if (
+      !input.vestingBook
+      || input.vestingBook.entryKind !== "agent"
+      || !input.vestingBook.bookSealAddress
+    ) {
+      throw new Error(
+        "Bounded autonomous payroll requires the explicit universal agent-book proof and seal.",
+      );
+    }
+    try {
+      if (BigInt(input.vestingBook.bookSealAddress) === 0n) throw new Error();
+    } catch {
+      throw new Error("Bounded autonomous payroll requires a non-zero payroll-book seal.");
+    }
+  } else if (input.vestingBook?.entryKind === "agent") {
+    throw new Error("An agent payroll-book entry requires bounded autonomous execution.");
   }
   if (snapshotPlan) {
     if (
@@ -1111,52 +1269,106 @@ export async function executeProofBoundPayroll(
     if (!directoryMatches || byAgreement.size !== snapshotPlan.agreementBindings.length) {
       throw new Error("The selected encrypted agreements differ from the registered payday snapshot.");
     }
-    const payrollBuild = await buildPayrollIntegrityInputsFromSerialized(buildInput);
-    snapshotLink = await buildObligationSnapshotLinkInputs({
-      chainId: input.chainId,
-      sealAddress: input.sealAddress,
-      ownerAddress: snapshotPlan.snapshot.ownerAddress,
-      payroll: payrollBuild,
-      claimCapabilityCommitments: Object.fromEntries(snapshotPlan.agreementBindings.map((binding) => [
-        binding.agreementId,
-        binding.claimCapabilityCommitment,
-      ])),
-      graceEndsAt: BigInt(snapshotPlan.snapshot.graceEndsAt),
-      claimEndsAt: BigInt(snapshotPlan.snapshot.claimEndsAt),
-      validityStart: proofValidityStart,
-      validityExpiry: proofValidityExpiry,
-    });
-    payrollBuild.witness.circuitInputs = [{}, {}];
-    if (
-      BigInt(snapshotLink.snapshotCommitment) !== BigInt(snapshotPlan.snapshotCommitment)
-      || hashCanonicalJson(snapshotLink.snapshot) !== hashCanonicalJson(snapshotPlan.snapshot)
-    ) {
-      snapshotLink.circuitInputs = {};
-      throw new Error("The due payroll does not reproduce its immutable pre-payday snapshot.");
+    if (input.vestingBook
+      && BigInt(input.vestingBook.ownerAddress) !== BigInt(snapshotPlan.snapshot.ownerAddress)) {
+      throw new Error("The payroll-book owner differs from the registered payday owner.");
     }
-    const snapshotRequestId = generateUuidV7();
-    encryptedSnapshotWitness = encryptVaultRecord({
-      exceptionCircuitProfile: "obligation_snapshot_v5",
-      circuitInput: snapshotLink.circuitInputs,
-    }, {
-      schemaVersion: 1,
-      organizationId: input.organizationId,
-      recordType: "payroll-proof-request",
-      recordId: snapshotRequestId,
-      revision,
-    }, [input.principal]);
-    snapshotLink.circuitInputs = {};
+    if (!input.vestingBook) {
+      const payrollBuild = await buildPayrollIntegrityInputsFromSerialized(buildInput);
+      snapshotLink = await buildObligationSnapshotLinkInputs({
+        chainId: input.chainId,
+        sealAddress: input.sealAddress,
+        ownerAddress: snapshotPlan.snapshot.ownerAddress,
+        payroll: payrollBuild,
+        claimCapabilityCommitments: Object.fromEntries(snapshotPlan.agreementBindings.map((binding) => [
+          binding.agreementId,
+          binding.claimCapabilityCommitment,
+        ])),
+        graceEndsAt: BigInt(snapshotPlan.snapshot.graceEndsAt),
+        claimEndsAt: BigInt(snapshotPlan.snapshot.claimEndsAt),
+        validityStart: proofValidityStart,
+        validityExpiry: proofValidityExpiry,
+      });
+      payrollBuild.witness.circuitInputs = [{}, {}];
+      if (
+        BigInt(snapshotLink.snapshotCommitment) !== BigInt(snapshotPlan.snapshotCommitment)
+        || hashCanonicalJson(snapshotLink.snapshot) !== hashCanonicalJson(snapshotPlan.snapshot)
+      ) {
+        snapshotLink.circuitInputs = {};
+        throw new Error("The due payroll does not reproduce its immutable pre-payday snapshot.");
+      }
+      const snapshotRequestId = generateUuidV7();
+      encryptedSnapshotWitness = encryptVaultRecord({
+        exceptionCircuitProfile: "obligation_snapshot_v5",
+        circuitInput: snapshotLink.circuitInputs,
+      }, {
+        schemaVersion: 1,
+        organizationId: input.organizationId,
+        recordType: "payroll-proof-request",
+        recordId: snapshotRequestId,
+        revision,
+      }, [input.principal]);
+      snapshotLink.circuitInputs = {};
+    }
   }
   const proofRequestId = generateUuidV7();
+  const vestingAgreements = input.obligations
+    .map(({ agreement }) => agreement.agreement)
+    .filter(isPrivateVestingAgreement);
+  if (input.vestingBook && vestingAgreements.length > 1) {
+    throw new Error("Settle only one private vesting schedule per proof-bound payroll.");
+  }
+  let vestingBookBuildInput: {
+    ownerAddress: string;
+    bookSealAddress?: string;
+    entryKind?: "ordinary" | "agent";
+    periodStart: string;
+    periodEnd: string;
+    previousStateSalt: string;
+    nextStateSalt: string;
+    attestation?: import("@/lib/proof/vesting-transition-input").ExternalAttestationProofInput;
+  } | undefined;
+  if (input.vestingBook) {
+    const validityDate = new Date(Number(proofValidityStart) * 1_000);
+    if (Number.isNaN(validityDate.getTime())) throw new Error("The payroll reporting period is invalid.");
+    const year = validityDate.getUTCFullYear();
+    const periodStart = BigInt(Math.floor(Date.UTC(year, 0, 1) / 1_000));
+    const periodEnd = BigInt(Math.floor(Date.UTC(year + 1, 0, 1) / 1_000));
+    const vestingPlan = vestingAgreements[0];
+    const zero = `0x${"00".repeat(32)}`;
+    vestingBookBuildInput = {
+      ownerAddress: input.vestingBook.ownerAddress,
+      ...(input.vestingBook.bookSealAddress
+        ? { bookSealAddress: input.vestingBook.bookSealAddress }
+        : {}),
+      ...(input.vestingBook.entryKind ? { entryKind: input.vestingBook.entryKind } : {}),
+      periodStart: periodStart.toString(),
+      periodEnd: periodEnd.toString(),
+      previousStateSalt: vestingPlan
+        ? vestingStateSalt(vestingPlan.planSalt, vestingPlan.paymentPlan.releaseSequence)
+        : zero,
+      nextStateSalt: vestingPlan
+        ? vestingStateSalt(vestingPlan.planSalt, vestingPlan.paymentPlan.releaseSequence + 1)
+        : zero,
+      ...(input.vestingBook.attestation
+        ? { attestation: input.vestingBook.attestation }
+        : {}),
+    };
+  }
   const proofWitnessPayload = advancedProfile ? {
       advancedBuildInput: {
         payroll: buildInput,
         agreements: input.obligations.map(({ agreement }) => agreement.agreement),
+        ...(vestingBookBuildInput ? { vestingBook: vestingBookBuildInput } : {}),
       },
     } : { buildInput };
   if (resumableRun?.state === "proven") {
     if (!("autonomousAgent" in input)) {
       throw new Error("This protected payroll is already proven; recover its payment from Activity.");
+    }
+    const agentBookSealAddress = input.vestingBook?.bookSealAddress;
+    if (!agentBookSealAddress) {
+      throw new Error("Autonomous payroll recovery requires the configured universal payroll-book seal.");
     }
     return stageAutonomousPayrollRun({
       client: input.client,
@@ -1164,6 +1376,27 @@ export async function executeProofBoundPayroll(
       runId,
       proofWitnessPayload,
       autonomousAgent: input.autonomousAgent,
+      beforeStage: async ({ proofBundleId }) => {
+        const recovered = await openStoredPayrollBookProof({
+          client: input.client,
+          proofBundleId,
+          organizationId: input.organizationId,
+          runId,
+          principal: input.principal,
+        });
+        await authorizePayrollBookProof({
+          client: input.client,
+          runId,
+          proofBundleId,
+          payrollProof: recovered.payrollProof,
+          stateProof: recovered.vestingBook,
+          chainId: input.chainId,
+          bookSealAddress: agentBookSealAddress,
+          pollIntervalMs: input.authorizationPollIntervalMs,
+          timeoutMs: input.authorizationTimeoutMs,
+          onStage: input.onStage,
+        });
+      },
       onStage: input.onStage,
     });
   }
@@ -1183,6 +1416,12 @@ export async function executeProofBoundPayroll(
     principal: input.principal,
     onProgress: (stage) => input.onStage?.(stage),
   });
+  if (input.vestingBook && !proof.vestingBook) {
+    throw new Error("The prover omitted the required stateful vesting/payroll-book proof.");
+  }
+  if (!input.vestingBook && proof.vestingBook) {
+    throw new Error("The prover returned an unexpected stateful vesting/payroll-book proof.");
+  }
   let snapshotProof: ExceptionProofWorkerSuccess | undefined;
   if (snapshotPlan && snapshotLink && encryptedSnapshotWitness && input.proveSnapshot) {
     input.onStage?.("snapshot");
@@ -1309,6 +1548,20 @@ export async function executeProofBoundPayroll(
   // request the same transition again: the repository deliberately rejects a
   // proven -> proven transition as an invalid state-machine replay.
   if ("autonomousAgent" in input) {
+    if (input.vestingBook && proof.vestingBook) {
+      await authorizePayrollBookProof({
+        client: input.client,
+        runId,
+        proofBundleId,
+        payrollProof: proof,
+        stateProof: proof.vestingBook,
+        chainId: input.chainId,
+        bookSealAddress: input.vestingBook.bookSealAddress ?? input.sealAddress,
+        pollIntervalMs: input.authorizationPollIntervalMs,
+        timeoutMs: input.authorizationTimeoutMs,
+        onStage: input.onStage,
+      });
+    }
     return stageAutonomousPayrollRun({
       client: input.client,
       organizationId: input.organizationId,
@@ -1320,7 +1573,20 @@ export async function executeProofBoundPayroll(
   }
   let snapshotProofBundleId: string | undefined;
   let payoAction: STRK20_INVOKE_ACTION;
-  if (snapshotPlan && snapshotProof) {
+  if (input.vestingBook && proof.vestingBook) {
+    payoAction = await authorizePayrollBookProof({
+      client: input.client,
+      runId,
+      proofBundleId,
+      payrollProof: proof,
+      stateProof: proof.vestingBook,
+      chainId: input.chainId,
+      bookSealAddress: input.vestingBook.bookSealAddress ?? input.sealAddress,
+      pollIntervalMs: input.authorizationPollIntervalMs,
+      timeoutMs: input.authorizationTimeoutMs,
+      onStage: input.onStage,
+    });
+  } else if (snapshotPlan && snapshotProof) {
     snapshotProofBundleId = generateUuidV7();
     await input.client.storeEncryptedProofBundle(prepareEncryptedExceptionProofBundle({
       id: snapshotProofBundleId,
@@ -1425,7 +1691,7 @@ export async function executeProofBoundPayroll(
     [input.principal],
   );
   const pendingApproval: PendingPayrollSubmission = {
-    version: snapshotProofBundleId ? 4 : 3,
+    version: input.vestingBook ? 5 : snapshotProofBundleId ? 4 : 3,
     organizationId: input.organizationId,
     runId,
     proofBundleId,
@@ -1435,7 +1701,9 @@ export async function executeProofBoundPayroll(
     tokenTotalsCommitment,
     settlementEnvelope,
     proofShards: [proof.shards[0].proofCalldata, proof.shards[1].proofCalldata],
-    ...(snapshotProofBundleId ? {
+    ...(input.vestingBook ? {
+      authorizationMode: "vesting_book_v3" as const,
+    } : snapshotProofBundleId ? {
       authorizationMode: "staged_vnext" as const,
       snapshotProofBundleId,
     } : {}),
@@ -1487,7 +1755,7 @@ export async function executeProofBoundPayroll(
         throw error;
       }
     }
-    if (pendingApproval.authorizationMode !== "staged_vnext") {
+    if (!pendingApproval.authorizationMode) {
       await retryDurableWrite(() => input.client.enqueueProofVerification({
         settlementId,
         proofBundleId,

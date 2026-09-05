@@ -33,7 +33,8 @@ export type PolicyAccountState = {
   sessionPublicKey: `0x${string}`;
   poolAddress: `0x${string}`;
   sealAddress: `0x${string}`;
-  sealMode: 0 | 1;
+  bookSealAddress: `0x${string}`;
+  sealMode: 0 | 1 | 2;
   proofVersion: number;
   schemaVersion: number;
   payrollPolicyRootHigh: bigint;
@@ -55,38 +56,39 @@ export type PolicyAccountState = {
 
 /** Decodes the Cairo `PolicyState` return without trusting an ABI supplied by the account. */
 export function decodePolicyAccountState(values: readonly string[]): PolicyAccountState {
-  if (values.length !== 23) throw new Error("The policy account returned an unexpected PolicyState shape.");
+  if (values.length !== 24) throw new Error("The policy account returned an unexpected PolicyState shape.");
   const boolean = (index: number, label: string): boolean => {
     const value = integer(values[index], label, 1n);
     return value === 1n;
   };
   const number = (index: number, label: string, maximum: bigint): number =>
     Number(integer(values[index], label, maximum));
-  const sealMode = number(5, "Policy seal mode", 1n);
+  const sealMode = number(6, "Policy seal mode", 2n);
   return {
     configured: boolean(0, "Policy configured flag"),
     revoked: boolean(1, "Policy revoked flag"),
     sessionPublicKey: felt(values[2], "Policy session public key"),
     poolAddress: felt(values[3], "Policy pool address"),
     sealAddress: felt(values[4], "Policy seal address"),
-    sealMode: sealMode as 0 | 1,
-    proofVersion: number(6, "Policy proof version", U32_MAX),
-    schemaVersion: number(7, "Policy schema version", U32_MAX),
-    payrollPolicyRootHigh: integer(values[8], "Policy root high limb", U128_MASK),
-    payrollPolicyRootLow: integer(values[9], "Policy root low limb", U128_MASK),
-    tokenSetCommitment: felt(values[10], "Policy token commitment"),
-    recipientSetCommitment: felt(values[11], "Policy recipient commitment"),
-    purposeCommitment: felt(values[12], "Policy purpose commitment"),
-    amountLimitCommitment: felt(values[13], "Policy amount commitment"),
-    authorizedRunsRoot: felt(values[14], "Policy authorized-runs root"),
-    validAfterUnix: integer(values[15], "Policy valid-after", U64_MAX),
-    validBeforeUnix: integer(values[16], "Policy valid-before", U64_MAX),
-    periodSeconds: integer(values[17], "Policy period", U64_MAX),
-    maxCallsPerPeriod: number(18, "Policy period call limit", U32_MAX),
-    maxCallCount: number(19, "Policy total call limit", U32_MAX),
-    periodStartedAtUnix: integer(values[20], "Policy period start", U64_MAX),
-    periodCallCount: number(21, "Policy period call count", U32_MAX),
-    usedCallCount: number(22, "Policy used call count", U32_MAX),
+    bookSealAddress: felt(values[5], "Policy book seal address"),
+    sealMode: sealMode as 0 | 1 | 2,
+    proofVersion: number(7, "Policy proof version", U32_MAX),
+    schemaVersion: number(8, "Policy schema version", U32_MAX),
+    payrollPolicyRootHigh: integer(values[9], "Policy root high limb", U128_MASK),
+    payrollPolicyRootLow: integer(values[10], "Policy root low limb", U128_MASK),
+    tokenSetCommitment: felt(values[11], "Policy token commitment"),
+    recipientSetCommitment: felt(values[12], "Policy recipient commitment"),
+    purposeCommitment: felt(values[13], "Policy purpose commitment"),
+    amountLimitCommitment: felt(values[14], "Policy amount commitment"),
+    authorizedRunsRoot: felt(values[15], "Policy authorized-runs root"),
+    validAfterUnix: integer(values[16], "Policy valid-after", U64_MAX),
+    validBeforeUnix: integer(values[17], "Policy valid-before", U64_MAX),
+    periodSeconds: integer(values[18], "Policy period", U64_MAX),
+    maxCallsPerPeriod: number(19, "Policy period call limit", U32_MAX),
+    maxCallCount: number(20, "Policy total call limit", U32_MAX),
+    periodStartedAtUnix: integer(values[21], "Policy period start", U64_MAX),
+    periodCallCount: number(22, "Policy period call count", U32_MAX),
+    usedCallCount: number(23, "Policy used call count", U32_MAX),
   };
 }
 
@@ -121,6 +123,7 @@ export function assertPolicyAccountActivation(input: {
   assertSame("session public key", policy.sessionPublicKey, config.sessionPublicKey);
   assertSame("Privacy Pool", policy.poolAddress, config.poolAddress);
   assertSame("PAYO Seal", policy.sealAddress, config.sealAddress);
+  assertSame("universal payroll-book seal", policy.bookSealAddress, config.bookSealAddress ?? "0x0");
   assertSame("seal mode", policy.sealMode, config.sealMode);
   assertSame("proof version", policy.proofVersion, config.proofVersion);
   assertSame("schema version", policy.schemaVersion, config.schemaVersion);

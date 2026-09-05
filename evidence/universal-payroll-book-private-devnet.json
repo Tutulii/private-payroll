@@ -1,0 +1,158 @@
+{
+  "schemaVersion": "payo.universal-payroll-book-private-devnet.v1",
+  "generatedAt": "2026-09-04T20:12:23.381Z",
+  "chainId": "0x534e5f5345504f4c4941",
+  "rpcVersion": "0.10.2",
+  "devnetVersion": "0.8.0-rc.3",
+  "proofMode": "none",
+  "privacySdk": {
+    "version": "0.14.3-rc.5",
+    "revision": "66e3caae8c0201227a6719696d004e30d90aea65",
+    "poolClassHash": "0x52107fadffab71bdcbb6b2ccb68ba3e1b5558d94036538053e159d3076ad633"
+  },
+  "run": {
+    "runId": "00000000-0000-4000-8000-000000000004",
+    "requestCommitment": "0x104ebb4281a55b1e64d9ca9dde7a3d76c10656b707d5fb2ef907e0b93adbfb44",
+    "agreementRoot": "0x25b3eb017205b89a9bbb031b8e4f837d98e5703738a320021d5d43d240b81c22",
+    "manifestRoot": "0x2424f5b92110c4c513bdba029418d8cf4bd55cb338e80b8de1458c5221d2fe26",
+    "policyRoot": "0x16575a4f2517b43a894ae1d8ad892448892830da2cb8162b50354f396e3d6073",
+    "fxRoot": "0x13251183cb7bd80b4a278d4092d8ee47088d7373aad7f2c7c27b7de111d39370",
+    "runNullifier": "0xe77407bde3b6aa3497f939d5251950aa004c05f3c82252d6b0e58bed54f049fe",
+    "settlementRoot": "0x80a23c82f6527b39b8f439138dfef3b33e21c06727870367c288bb07501aa546",
+    "transactionReference": "0xbf4e9b822c7b3e6ed100448b7a1719af72b7689801b74bbd0382732c18d5fe03",
+    "token": "STRK",
+    "amountAtomic": "1000000000000000",
+    "recipient": "0x1b71a75d9b8dc752b8747ccd1c7b0fa16ffa26a6ab9d88aab6337239b27d862"
+  },
+  "contracts": {
+    "pool": {
+      "address": "0x27c8fe32654ef1e51aa579970ff46bed0bced137ca7cc9ca04521446f3a2505",
+      "transactionHash": "0x11f2dff22ae7288a49892098255ef7680b8482e7a56ad12b4e754e5de0cf301"
+    },
+    "integrityVerifier": {
+      "address": "0x6660f15fc1fa6f95b65fa67d161e6a49a541ef9d45bb55172298ad93a2776f5",
+      "transactionHash": "0x7a5535d8b86633b0eeba93cfeb3c927ef9e7e1b06651af3a3d6784e26b3ad4"
+    },
+    "integrityBundle": {
+      "address": "0x27b8c8c3d85d560a72733cf33a6de8ef246c57b8917d53d9d9910589758071f",
+      "transactionHash": "0x78e62580b63fa939065991f233077feb54d6fb658f6734a01359986eb6f8dfd"
+    },
+    "policyRegistry": {
+      "address": "0x6af87b839125e35f3ea59d7f948af24844d250d2119e1657f0023ccb6020acb",
+      "transactionHash": "0x42c988c71bb2c84754dce906984a98fcd748f6d83cece29cf2cf22db1923fcd"
+    },
+    "obligationRegistry": {
+      "address": "0x61e0bbc6a302d8148373a51796d0236f4b1ee798c363804ca80864945aa4134",
+      "transactionHash": "0x1af23f4d7bbee806b11482dd35c46bc0136ddc0416213b641b4c0609c4777f2"
+    },
+    "settlementVerifier": {
+      "address": "0x1fabf3c0661c4cb9e2952bdb368363c89b9a97be0ad872f4e99ef3a1e3cd33d",
+      "transactionHash": "0x239e305251754457af594eb92ebadc0a7749c02bfff4ee6d8165f3847c9f599"
+    },
+    "payrollSeal": {
+      "address": "0x5bc3b9ff8027ba8ea0846ef4a83f4d28ad90f990feddb3438be4e236cb5c611",
+      "transactionHash": "0x4d7eab087a56e125d33c71269511306d7f6b8aafb92148de24820f87122044a"
+    },
+    "policyAccount": {
+      "address": "0x5b05b488caf68bcf73a50edca447073b1a92e624e47da7d34ab90036e63c759",
+      "transactionHash": "0x2122916c7d9ea62484e79b0f6a778defdc047bc29e768644a3a2115d0adf96"
+    },
+    "lifecycleHarness": {
+      "address": "0x62c70fb0b2651af47e67164f1d6f45130362e984ded07d1a446de34e5fec345",
+      "transactionHash": "0x64b6d181add5c7c49c9884d2c1bcc41ad3c21f59eb86f72e58db527e5db89f3"
+    },
+    "vestingBookSeal": {
+      "address": "0x1b5a9778349791cac77c7318c6c2105d062433607d0639f5664539076eb7ea8",
+      "transactionHash": "0x53060dcb661d909d9da7ad7f60fabfdfef2bf4ab47febe48766b66507565d88"
+    }
+  },
+  "transactions": {
+    "registryConfiguration": "0x20ee38ab79b4760e2c174bfdc068997d6897f21bbeebae65ffee5d485f3571c",
+    "fxPublication": "0x18e5052cee11c1c197d80da11cd2970e11ebbcb57a09d10c602440b79cbcdef",
+    "payrollPrecommit": "0x68875166a97b202db88e6beb388e63c6f853a0110ef37e46840b3c14cf2f178",
+    "payrollProofShards": [
+      "0x20903fb32aea1526ca984c050a741c04baff859fae985ea5291d60134881204",
+      "0x97b52ff7db0aa9b7f16e1ba48742a3479aae56d377c94dc78bd64a4cc1cab0"
+    ],
+    "recipientRegistration": "0x30ace151e3ca35cb85ec30efe798259cbc073246eb2fb5c2f4df7052ae76fc0",
+    "tokenApproval": "0x42fd1cf662f9a7b23a7456cd9c5065498bbaf734b9aaa802da535b81fca0f05",
+    "accountProvisioning": "0x748326b8580ba56436b4ee1d95c507f96163dda287e93cdd13024eb91c91a8a",
+    "policyConfiguration": "0x58f2f1400fcd7b5c3184a53fbc9460f9bf18df9fe5efd1d075efd9cc21ac897",
+    "bookAuthorization": [
+      "0x71e6cdd0a6d8404e4494aa4ff0f1ff9622d958cef74b376b6e807500b1424c0",
+      "0xfe4914a6b1345fa319e9c2eefe52aac22bdae81062b52312681e52188d0d70",
+      "0x661d65f12c986478b67e96f703d8ffb8d46f1024ea047c7c0b279761593af60",
+      "0x4b804cceb9295bf7238658756f3f378630cb08df8ff1e5bd191ab74cc31b7bf",
+      "0xd9c9b9b2e72a77be025f351107bd34eb27f74c3af5ecbe6eb89f7744981d36"
+    ],
+    "atomicPrivatePayrollAndFinalization": "0x1bc912be30b75e5c6926aa3b6cd974462047a9a0de3b1c24bc136b4228025a1"
+  },
+  "settlementBlockNumber": 69,
+  "proofs": {
+    "payrollIntegrity": {
+      "circuitSha256": "0x755bb9374c9cfc72cbd36b1a3e1d8c5e2792b11b8b08e190d2743dc508ebbe41",
+      "shardCalldataHashes": [
+        "0x19e8f153e28e70a904122f5e24ebbb85de6619b70567aa774609149129361d2",
+        "0x7dbe047e018b9f7ba2097f5f5d81a29107b50b8fb43d4478f0db9377e73340"
+      ],
+      "verificationMode": "test-only-public-input-harness"
+    },
+    "universalPayrollBook": {
+      "circuitSha256": "0x7ac1683a7ef671d2bd011d7b83a9c8eceed2344e8a553fc392a254c5e6e89eaa",
+      "verificationKeySha256": "0xec8ef5ab59ca10a0d8994d558eff81c45ca994e72be0de2b8c9454076dfd339b",
+      "shardCalldataHashes": [
+        "0x7a0d7aaeca86015aa919fa36c70179c60eb8295f73ae5a05a7fede4d822ddad",
+        "0x138faf79425e57b758e63c7f8092cd04bd952b8df876d06c985f4e7eb7ca90f"
+      ],
+      "verificationMode": "test-only-public-input-harness"
+    },
+    "settlementMatch": {
+      "circuitSha256": "0xa208f7c548a5205e9e777f4926e282510e918bee4ce7902db3bb8b2d46454033",
+      "verificationKeySha256": "0x4dba54029e3b3b507baad28f6f4f416b9eca9651f98cbad9312d91a637528e23",
+      "calldataHash": "0x34a2590c938884eb8415008e8b5306a62b3803ef329855636231b72c6df6d39",
+      "provingTimeMs": 250733
+    },
+    "sdkTransactionProofBytesPresent": false,
+    "sdkProofFactsPresent": true,
+    "settlementProver": "local-self-hosted"
+  },
+  "checks": {
+    "payrollIntegrityPrecommittedBeforePayment": true,
+    "bothPayrollIntegrityShardsVerifiedBeforePayment": true,
+    "payrollIntegrityProvenBeforePayment": true,
+    "exactSdkCiphertextExtractedBeforeSettlementProof": true,
+    "settlementMatchVerifiedOnchain": true,
+    "privatePaymentAndFinalizationAtomic": true,
+    "policyScopeAndAuthorizedRunEnforced": true,
+    "recipientPrivateNoteDiscovered": true,
+    "recipientBalanceDeltaExact": true,
+    "settlementReceiptMatchesProof": true,
+    "sealFinalized": true,
+    "universalBookAuthorizedBeforePayment": true,
+    "privatePaymentAndUniversalBookAppendAtomic": true,
+    "exactUniversalBookEntryReadBack": true,
+    "replayRejected": true
+  },
+  "universalPayrollBook": {
+    "owner": "0x176ad30efa8e5254cda94f4751fded2d7dea153fb6fca67b459ca0bb6cae0e7",
+    "periodStart": "0",
+    "periodEnd": "20000",
+    "entryCount": 1,
+    "contributorCount": "1",
+    "agentEntryCount": 1,
+    "strkNetAtomic": "1000000000000000",
+    "entryCommitment": "0xa7f3bb0f34034632f47fc7c6597d06b057a6fd3f6bea49a8d0362870681992fb",
+    "accumulatorRoot": "0x766b9dd1bb4882f1bf93f0862d539606c56335c118e0e82e44eb9baaeffd968"
+  },
+  "privateBalanceEvidenceAtomic": {
+    "recipientBefore": "1",
+    "recipientAfter": "1000000000000001",
+    "delta": "1000000000000000"
+  },
+  "limitations": [
+    "Devnet evidence uses one synthetic STRK payroll line and deterministic local accounts.",
+    "The combined private-payment/book lifecycle uses the test-only public-input harness for deployment-bound v2/v3 authorization; real generated v2/v3 verifier-to-production-seal composition must pass separately in the same gate.",
+    "The official Privacy Pool integration runs with Devnet transaction-proof verification disabled because Devnet's fake proof facts are wire-incompatible with the pinned pool; this is not full transaction-OS proof evidence.",
+    "Mainnet declaration, deployment and public operator addresses remain a Phase 5 release gate."
+  ]
+}

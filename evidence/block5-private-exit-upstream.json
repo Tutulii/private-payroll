@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "payo.block5.private-exit.upstream.v1",
+  "generatedAt": "2026-09-05T02:44:50.501Z",
+  "upstream": {
+    "repository": "https://github.com/starkware-libs/starknet-privacy",
+    "commit": "bc75e4bac71ad0ce10c6e63effc33b5b25131a4f",
+    "lockfileSha256": "3c7980bc3eb3eaedd5469dd6b0ea6234f3df842ca7ad4dc681811208c7de2396",
+    "anonymizerSourceSha256": "74bea293185e6daae620159717547104549bc477aee22557e4da14a22dda55c4",
+    "privacyIntegrationSourceSha256": "642e7f67ea6f196e9fce8b9b77c0722ddabe065548fea72618fa13467f234d39"
+  },
+  "toolchain": {
+    "scarb": "scarb 2.17.0 (aa8740944 2026-04-09)",
+    "snforge": "snforge 0.63.0"
+  },
+  "reviewedContract": {
+    "name": "EkuboSwapAnonymizer",
+    "classHash": "0x2a4ac595283d4d64b9952f5ef5c0da1775bfdb7c9d92237524a21dd8d19ebd7",
+    "expectedClassHash": "0x2a4ac595283d4d64b9952f5ef5c0da1775bfdb7c9d92237524a21dd8d19ebd7",
+    "releaseArtifactSha256": "2e92b97500f201b3478dedaa945a01351744dd5ab55bc11d848dab04467f3648"
+  },
+  "checks": {
+    "pinnedUpstreamRevision": true,
+    "releaseClassHashReproduced": true,
+    "anonymizerAssertions": {
+      "passed": 3,
+      "failed": 0
+    },
+    "strk20OpenNoteSwapComposition": {
+      "passed": 1,
+      "failed": 0
+    }
+  },
+  "scope": {
+    "network": "local Starknet Foundry execution",
+    "liveRpcDevnet": false,
+    "mainnetTransaction": false,
+    "note": "This proves the reviewed contract and STRK20 open-note composition locally. Live Devnet and Mainnet canaries remain release-gate evidence."
+  }
+}

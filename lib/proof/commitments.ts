@@ -18,6 +18,7 @@ export const PAYO_PROOF_DOMAIN_REMEDIATION = 6n;
 export const PAYO_PROOF_DOMAIN_ADVANCED_PLAN = 7n;
 export const PAYO_PROOF_DOMAIN_CLAIM_OBLIGATION = 8n;
 export const PAYO_PROOF_DOMAIN_REMEDIATION_ACTION = 9n;
+export const PAYO_PROOF_DOMAIN_EXTERNAL_ATTESTATION = 10n;
 export const PAYO_PROOF_EMPTY_LEAF =
   "0x168758332d5b3e2d13be8048c8011b454590e06c44bce7f702f09103eef5a373" as const;
 
@@ -73,6 +74,7 @@ type ProofCommitter = {
     amountAtomic: bigint | string;
     salt: string;
   }): `0x${string}`;
+  proofExternalAttestationLeaf(commitment: string): `0x${string}`;
 };
 
 const PACKED_AMOUNT_LIMIT = 1n << 120n;
@@ -157,6 +159,9 @@ export async function createProofCommitter(): Promise<ProofCommitter> {
       packedAmount(input.amountAtomic),
       ...limbs(input.salt),
     ]);
+
+  const proofExternalAttestationLeaf = (commitment: string): `0x${string}` =>
+    proofHash(PAYO_PROOF_DOMAIN_EXTERNAL_ATTESTATION, limbs(commitment));
 
   const buildProofFixedMerkleRoot = (
     leaves: readonly string[],
@@ -364,5 +369,6 @@ export async function createProofCommitter(): Promise<ProofCommitter> {
     proofPayrollCommitment,
     proofRemediationCommitment,
     proofRemediationActionCommitment,
+    proofExternalAttestationLeaf,
   };
 }

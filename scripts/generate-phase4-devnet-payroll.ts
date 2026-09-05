@@ -55,7 +55,10 @@ const snapshot = buildFxSnapshot({
   referenceCurrency: "USD",
   quoteDecimals: 6,
   haircutBps: 0,
-  maximumAgeSeconds: 60,
+  // Native SettlementMatch proving can take several minutes on constrained
+  // runners. Keep the quote fresh for the whole proof/submission window while
+  // still binding the exact observation time and bounded age into the proof.
+  maximumAgeSeconds: 600,
   minimumSources: 3,
   feedId: "devnet:STRK/USD:median",
   quotes: [20n, 15n, 10n].map((age, index) => ({

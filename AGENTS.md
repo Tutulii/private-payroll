@@ -23,26 +23,25 @@ The normative execution plan is `MASTER_PLAN.md`. The machine-readable source of
 
 ## Active work target
 
-The active repository target is **Phase 5 — Mainnet evidence and release**, as
-executed by `docs/PHASE5_RELEASE_PLAN.md`. Keep
-this target active across context compaction until its evidence gates pass; then
-remove or replace this section rather than silently changing scope.
+The active target is the pre-hackathon **universal private payroll book, vesting and
+tax evidence** implementation in `docs/PRE_HACKATHON_8_13_PLAN.md`. Keep it active
+across context compaction until its code, negative tests, Devnet E2E, UI and live
+canary evidence pass.
 
-- Starting state: Phase 4 AI agents can inspect scope, read due metadata, submit
-  encrypted drafts, validate bounded intents, request payroll, and track receipts,
-  but live Mainnet execution still requires human PAYO/Ready approval.
-- First production block: complete the isolated policy-signer cutover, private
-  Fly networking, replay-protected HMAC authentication, strict owner/viewing-key
-  separation, pinned configuration attestation, treasury registration, and any
-  reviewed owner/policy activation transactions.
-- First live gate: authorize one exact short-lived policy and record a deliberately
-  small autonomous Mainnet payroll canary through private settlement, finality,
-  proof receipt, and reconciliation. Human approval remains the default fallback.
-- Release gate: record the required STRK, USDC, and advanced/agent Mainnet evidence;
-  publish addresses, class hashes, proof benchmarks, demo URL and three-minute
-  demo; complete `strk20.json` and the deployment, recovery, security, and known-
-  limitations runbooks.
-- Never claim Phase 5 complete until `README.md`, `MASTER_PLAN.md`, all of
-  `architecture.md`, actual integrated code, `docs/implementation-status.json`,
-  deployment read-backs, live canary evidence, and `npm run verify:completion`
-  agree.
+- Route every new ordinary, vesting, agent, claim and remediation settlement through
+  one versioned, proof-bound book finalization path.
+- Add worker-controlled STRK20 viewing-key statements with an explicit PAYO X25519
+  fallback for Ready wallets.
+- Produce canonical W-2-, P60- and T4-style evidence plus versioned US, UK and Canada
+  reference policies; never represent them as official filings or legal advice.
+- Bind approved, expiring and revocable external fact attestations into the v3 proof.
+- Keep supported exits private through an existing STRK20-compatible private-swap
+  route and warn before public or unsupported exits.
+- Freeze the public statement before regenerating Noir/Garaga artifacts. Regenerate
+  the Mainnet plan and estimate from those final artifacts.
+- Phase 5 agent execution is paused at
+  `docs/PHASE5_AGENT_EXECUTION_CHECKPOINT.md`; preserve its dirty-tree work.
+- Never submit a Mainnet declaration, deployment, activation, canary or other
+  transaction without explicit user approval immediately beforehand.
+- Never claim completion from source alone. Reconcile actual tests, deployment
+  evidence, `docs/implementation-status.json`, and `npm run verify:completion`.

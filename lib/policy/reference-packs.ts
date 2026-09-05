@@ -95,7 +95,47 @@ export const UK_2026_27_MONTHLY_NI_CATEGORY_A: ReferencePolicyRelease = {
   },
 };
 
+export const CA_2026_SMALL_IRREGULAR_PAYMENT: ReferencePolicyRelease = {
+  authority: "Canada Revenue Agency",
+  sourceTitle: "Employers' Guide — Payroll Deductions and Remittances (2026), bonuses and retroactive pay increases",
+  sourceRetrievedAt: "2026-09-05",
+  scope: "Federal income-tax withholding at 15% for a non-Quebec bonus or retroactive payment when total annual remuneration including that payment is CAD 5,000 or less.",
+  assumptions: [
+    "The worker is an employee outside Quebec and the payment is a bonus or retroactive pay increase.",
+    "The employer separately established that total remuneration for the year, including this payment, is CAD 5,000 or less.",
+    "The atomic input and output use the same CAD scale.",
+  ],
+  unsupportedCases: [
+    "Quebec's separate 10% rule, remuneration above CAD 5,000, regular periodic pay, or later CRA corrections",
+    "CPP/QPP contributions, EI premiums, provincial deductions, benefits, pension, union-dues, or TD1 adjustments",
+    "Any use without employer review of the eligibility assumptions and current source",
+  ],
+  pack: {
+    packVersion: "payo-policy-pack-v1",
+    id: "ca-cra-small-irregular-payment-2026-v1",
+    revision: 1,
+    jurisdictionCode: "CA",
+    appliesTo: ["employee"],
+    effectiveFrom: "2026-01-01",
+    effectiveUntil: "2026-12-31",
+    sourceUri: "https://www.canada.ca/en/revenue-agency/services/forms-publications/publications/t4001/employers-guide-payroll-deductions-remittances.html",
+    legalReviewRequired: true,
+    instructions: [
+      { op: "INPUT", out: "irregular_gross", key: "gross" },
+      {
+        op: "MUL_DIV",
+        out: "federal_withholding",
+        value: "irregular_gross",
+        numerator: "15",
+        denominator: "100",
+      },
+    ],
+    outputs: { statutoryWithholding: "federal_withholding" },
+  },
+};
+
 export const REFERENCE_POLICY_RELEASES = [
   US_2026_SUPPLEMENTAL_FLAT,
   UK_2026_27_MONTHLY_NI_CATEGORY_A,
+  CA_2026_SMALL_IRREGULAR_PAYMENT,
 ] as const;

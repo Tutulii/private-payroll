@@ -3,6 +3,7 @@ import { encryptVaultRecord, type VaultPrincipal } from "@/lib/crypto/vault";
 import type {
   EncryptedExceptionProofBundleCreate,
   EncryptedPayrollIntegrityBundleCreate,
+  ExceptionAuthorizationRequest,
 } from "@/lib/domain/proof-bundle";
 import {
   ADVANCED_OBLIGATION_CIRCUIT_SHA256,
@@ -14,6 +15,7 @@ import {
   type PayrollIntegrityPublicInputs,
   type ExceptionProofWorkerSuccess,
   type ProofWorkerSuccess,
+  type VestingBookProof,
   WAGE_CLAIM_CIRCUIT_SHA256,
   WAGE_CLAIM_VERIFICATION_KEY_SHA256,
   WAGE_REMEDIATION_CIRCUIT_SHA256,
@@ -22,6 +24,8 @@ import {
   WAGE_CLAIM_VNEXT_VERIFICATION_KEY_SHA256,
   WAGE_REMEDIATION_VNEXT_CIRCUIT_SHA256,
   WAGE_REMEDIATION_VNEXT_VERIFICATION_KEY_SHA256,
+  VESTING_TRANSITION_CIRCUIT_SHA256,
+  VESTING_TRANSITION_VERIFICATION_KEY_SHA256,
 } from "@/lib/proof/protocol";
 import { hashProofCalldata } from "@/lib/proof/starknet-calldata";
 
@@ -130,8 +134,15 @@ export function prepareEncryptedPayrollIntegrityBundle(input: {
       proofBase64: bytesToBase64(shard.proof),
       proofCalldata: shard.proofCalldata,
       calldataHash: shard.calldataHash,
-      publicInputs: shard.publicInputs,
+      publicInputs: {
+        ...shard.publicInputs,
+        chainId: canonicalFelt(shard.publicInputs.chainId),
+        sealAddress: canonicalFelt(shard.publicInputs.sealAddress),
+      },
     })),
+    ...(input.proof.vestingBook
+      ? { vestingBook: prepareVestingBookProofSubmission(input.proof.vestingBook) }
+      : {}),
   };
   const envelope = encryptVaultRecord(
     privatePayload,
@@ -161,6 +172,37 @@ export function prepareEncryptedPayrollIntegrityBundle(input: {
     commonInputs: common,
     shardCalldataHashes: [shardZero.calldataHash, shardOne.calldataHash],
     envelope,
+  };
+}
+
+export function prepareVestingBookProofSubmission(
+  proof: VestingBookProof,
+): ExceptionAuthorizationRequest["vestingBook"] {
+  if (proof.circuitSha256 !== VESTING_TRANSITION_CIRCUIT_SHA256
+    || proof.verificationKeySha256 !== VESTING_TRANSITION_VERIFICATION_KEY_SHA256) {
+    throw new Error("The payroll-book proof does not use PAYO's pinned v3 artifacts.");
+  }
+  return {
+    proofVersion: proof.proofVersion,
+    entryKind: proof.entryKind,
+    circuitSha256: VESTING_TRANSITION_CIRCUIT_SHA256,
+    verificationKeySha256: VESTING_TRANSITION_VERIFICATION_KEY_SHA256,
+    scheduleId: proof.scheduleId,
+    previousStateCommitment: proof.previousStateCommitment,
+    nextStateCommitment: proof.nextStateCommitment,
+    releaseNullifier: proof.releaseNullifier,
+    bookEntry: proof.bookEntry,
+    bookEntryCommitment: proof.bookEntryCommitment,
+    shards: proof.shards.map((shard) => ({
+      shardIndex: shard.shardIndex,
+      proofCalldata: shard.proofCalldata,
+      calldataHash: shard.calldataHash,
+      publicInputs: {
+        ...shard.publicInputs,
+        chainId: canonicalFelt(shard.publicInputs.chainId),
+        sealAddress: canonicalFelt(shard.publicInputs.sealAddress),
+      },
+    })) as ExceptionAuthorizationRequest["vestingBook"]["shards"],
   };
 }
 
@@ -213,6 +255,12 @@ export function prepareEncryptedExceptionProofBundle(input: {
     || publicInputs.schemaVersion !== "2"
     || publicInputs.shardIndex !== "0"
   ) throw new Error("The exception proof returned the wrong versioned public-input ABI.");
+  if (profile.proofType === "obligation_snapshot" && input.proof.vestingBook) {
+    throw new Error("An obligation snapshot cannot carry a payroll-book proof.");
+  }
+  if (profile.proofType !== "obligation_snapshot" && !input.proof.vestingBook) {
+    throw new Error("Claim and remediation proofs require their universal payroll-book proof.");
+  }
   const privatePayload = {
     schemaVersion: 2,
     scheme: input.proof.scheme,
@@ -226,6 +274,9 @@ export function prepareEncryptedExceptionProofBundle(input: {
       calldataHash: proof.calldataHash,
       publicInputs,
     },
+    ...(input.proof.vestingBook
+      ? { vestingBook: prepareVestingBookProofSubmission(input.proof.vestingBook) }
+      : {}),
   };
   const envelope = encryptVaultRecord(privatePayload, {
     schemaVersion: 1,

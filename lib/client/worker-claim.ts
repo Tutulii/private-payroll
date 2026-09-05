@@ -16,6 +16,10 @@ import {
 } from "@/lib/domain/worker-claim";
 import { generateUuidV7 } from "@/lib/domain/records";
 import {
+  deriveExceptionBookTotalsSalt,
+  utcAnnualPayrollBookPeriod,
+} from "@/lib/domain/universal-payroll-book";
+import {
   decryptVaultRecord,
   encryptVaultRecord,
   type VaultPrincipal,
@@ -28,7 +32,11 @@ import {
   type WageClaimV2Build,
 } from "@/lib/proof/exception-input-builder";
 import type { ExceptionProofWorkerSuccess } from "@/lib/proof/protocol";
-import { prepareEncryptedExceptionProofBundle } from "./proof-bundle";
+import { buildExceptionPayrollBookEntryInputs } from "@/lib/proof/vesting-transition-input";
+import {
+  prepareEncryptedExceptionProofBundle,
+  prepareVestingBookProofSubmission,
+} from "./proof-bundle";
 import { openPayrollStatementEvidence } from "./employer-statement";
 import {
   openObligationClaimAccess,
@@ -354,6 +362,7 @@ export async function proveAndSubmitWorkerClaimV2(input: {
   prepared: PreparedWorkerClaimV2;
   principal: VaultPrincipalKeyPair;
   proverBaseUrl: string;
+  bookSealAddress: string;
   onStage?: (
     stage: "persisting_claim" | "proving" | "persisting_proof" | "authorizing",
   ) => void;
@@ -377,9 +386,26 @@ export async function proveAndSubmitWorkerClaimV2(input: {
 
   input.onStage?.("proving");
   const requestId = generateUuidV7();
+  const period = utcAnnualPayrollBookPeriod(prepared.build.publicInputs.validityStart);
+  const exceptionBookBuild = await buildExceptionPayrollBookEntryInputs({
+    source: prepared.build.publicInputs,
+    entryKind: "claim",
+    bookSealAddress: input.bookSealAddress,
+    sourceSealAddress: prepared.build.publicInputs.sealAddress,
+    ownerAddress: prepared.opened.access.snapshot.ownerAddress,
+    runNullifier: prepared.build.claimFact.runNullifier,
+    periodStart: period.periodStart,
+    periodEnd: period.periodEnd,
+    totalsSalt: deriveExceptionBookTotalsSalt({
+      privateSecret: prepared.opened.claimCapabilitySecret,
+      subjectNullifier: prepared.build.claimSubjectNullifier,
+    }),
+    claimFact: prepared.build.claimFact,
+  });
   const encryptedWitness = encryptVaultRecord({
     exceptionCircuitProfile: "wage_claim_v6",
     circuitInput: prepared.build.circuitInputs,
+    exceptionBookBuild,
   }, {
     schemaVersion: 1,
     organizationId: prepared.create.organizationId,
@@ -393,8 +419,8 @@ export async function proveAndSubmitWorkerClaimV2(input: {
     principal: input.principal,
     claimAccessGrantId: prepared.create.claimAccessGrantId,
   });
-  if (proof.profile !== "wage_claim_v6") {
-    throw new Error("The prover returned a different exception profile.");
+  if (proof.profile !== "wage_claim_v6" || proof.vestingBook?.entryKind !== "claim") {
+    throw new Error("The prover omitted or changed the Claim v6 payroll-book proof.");
   }
 
   input.onStage?.("persisting_proof");
@@ -412,7 +438,10 @@ export async function proveAndSubmitWorkerClaimV2(input: {
   input.onStage?.("authorizing");
   const authorization = await input.client.enqueueExceptionAuthorization({
     proofBundleId: prepared.create.proofBundleId,
-    proofCalldata: proof.proof.proofCalldata,
+    request: {
+      proofCalldata: proof.proof.proofCalldata,
+      vestingBook: prepareVestingBookProofSubmission(proof.vestingBook),
+    },
   });
   return {
     claim: storedClaim.claim,

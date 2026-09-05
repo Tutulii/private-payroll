@@ -705,8 +705,15 @@ export const exceptionAuthorizationJobs = pgTable(
     workflowType: text("workflow_type").notNull(),
     subjectRecordId: text("subject_record_id").notNull(),
     proofCalldata: jsonb("proof_calldata").notNull(),
+    transitionMetadata: jsonb("transition_metadata"),
     state: durableJobState("state").default("pending").notNull(),
+    activeStep: text("active_step").default("source").notNull(),
     transactionHash: text("transaction_hash"),
+    sourceTransactionHash: text("source_transaction_hash"),
+    bookBeginTransactionHash: text("book_begin_transaction_hash"),
+    bookTransitionShard0TransactionHash: text("book_transition_shard_0_transaction_hash"),
+    bookTransitionShard1TransactionHash: text("book_transition_shard_1_transaction_hash"),
+    bookFinalizeTransactionHash: text("book_finalize_transaction_hash"),
     attempts: integer("attempts").default(0).notNull(),
     availableAt: timestamp("available_at", { withTimezone: true }).defaultNow().notNull(),
     leaseOwner: text("lease_owner"),
@@ -774,6 +781,54 @@ export const payrollAuthorizationJobs = pgTable(
     uniqueIndex("payroll_authorization_jobs_payroll_bundle_idx").on(table.payrollProofBundleId),
     uniqueIndex("payroll_authorization_jobs_snapshot_bundle_idx").on(table.snapshotProofBundleId),
     index("payroll_authorization_jobs_poll_idx").on(table.state, table.availableAt),
+  ],
+);
+
+/**
+ * Five-step proof-first authorization for Advanced v3 state/book payroll.
+ * The relayer verifies two Advanced v2 shards and two v3 shards before Ready
+ * can atomically settle and append the committed period-book entry.
+ */
+export const vestingAuthorizationJobs = pgTable(
+  "vesting_authorization_jobs",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => payrollRuns.id, { onDelete: "cascade" }),
+    payrollProofBundleId: text("payroll_proof_bundle_id")
+      .notNull()
+      .references(() => proofBundles.id, { onDelete: "cascade" }),
+    transitionMetadata: jsonb("transition_metadata").notNull(),
+    payrollShard0Calldata: jsonb("payroll_shard_0_calldata").notNull(),
+    payrollShard1Calldata: jsonb("payroll_shard_1_calldata").notNull(),
+    transitionShard0Calldata: jsonb("transition_shard_0_calldata").notNull(),
+    transitionShard1Calldata: jsonb("transition_shard_1_calldata").notNull(),
+    state: durableJobState("state").default("pending").notNull(),
+    activeStep: text("active_step").default("begin").notNull(),
+    transactionHash: text("transaction_hash"),
+    beginTransactionHash: text("begin_transaction_hash"),
+    payrollShard0TransactionHash: text("payroll_shard_0_transaction_hash"),
+    payrollShard1TransactionHash: text("payroll_shard_1_transaction_hash"),
+    transitionShard0TransactionHash: text("transition_shard_0_transaction_hash"),
+    transitionShard1TransactionHash: text("transition_shard_1_transaction_hash"),
+    attempts: integer("attempts").default(0).notNull(),
+    availableAt: timestamp("available_at", { withTimezone: true }).defaultNow().notNull(),
+    leaseOwner: text("lease_owner"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    lastErrorCode: text("last_error_code"),
+    lastErrorMessage: text("last_error_message"),
+    authorizedAt: timestamp("authorized_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("vesting_authorization_jobs_run_idx").on(table.runId),
+    uniqueIndex("vesting_authorization_jobs_payroll_bundle_idx").on(table.payrollProofBundleId),
+    index("vesting_authorization_jobs_poll_idx").on(table.state, table.availableAt),
   ],
 );
 

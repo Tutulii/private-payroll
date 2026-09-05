@@ -1,0 +1,28 @@
+{
+  "fixtureVersion": "payo-vesting-transition-real-proof-v1",
+  "proofVersion": 3,
+  "scheme": "ultra_keccak_zk_honk",
+  "verificationKeySha256": "0xafad41c9d11ec920fe9cb091b04dc4ed092d2dfee561444a95b2af855ae80a20",
+  "scheduleId": "0x1223db51eda8f66cb31f190fb13fef9064de241bcb3c34799b69147f4cee601b",
+  "previousStateCommitment": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "nextStateCommitment": "0xbac95d662718f66a93c2a9fc55c9f1f21f2101dc57001962bd4300ff3f8e926d",
+  "releaseNullifier": "0x38eb81e5f94cb05d9e2bf8da8deee93738b7afbbdb9241528007f62f97090780",
+  "bookEntryCommitment": "0xe2a03bd2b746cc54e587944fe7bad9ac9317b9762387e80b4076f9e7eaf6b19a",
+  "attestationRoot": "0x05a649755746757000454e5d6fcbb95460522e05ba4c5469dfea413ce724818f",
+  "shards": [
+    {
+      "shardIndex": 0,
+      "proofSha256": "0x882b90cc2c0fdb1136630d3c8698bc9b92747881e4cf10c0b81e93753b2e1b94",
+      "publicInputsSha256": "0x2ac1e343b1bdfb5642649bbf3606aeaf0fc1e0c2b0fd4c866895ab131ee8e226",
+      "calldataHash": "0x134ec589bcc60828b20403deadf32f9052ed57e55b93a78f2f56a78ba1cd088",
+      "calldataFelts": 3269
+    },
+    {
+      "shardIndex": 1,
+      "proofSha256": "0x9e367a7764eb6f29b81dca899eb660d3a12805528816dea5188047e3931e9551",
+      "publicInputsSha256": "0x8bbf49b360c96c1ec90666c68ea4d22554600910835e940f6559e9385f980a46",
+      "calldataHash": "0x7f719151e8510aa9212afd8db81317d7e801a03c07a3d0afc2c71febcdc8fe2",
+      "calldataFelts": 3269
+    }
+  ]
+}

@@ -1,0 +1,169 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-05T04:41:42.044Z",
+  "network": "starknet-mainnet",
+  "chainId": "0x534e5f4d41494e",
+  "deployerAddress": "0x126a7a572cf8935d069af937e9f7b27a24949e271e1fbccfe4de0c0d8dc8ea9",
+  "poolAddress": "0x40337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+  "reusedTopology": {
+    "policyRegistry": {
+      "address": "0x34701f573096b7bab0e5678e1ed2f17a87c8d56eb5f4d70bcf2197bab8e4477",
+      "classHash": "0x6366141e5ae47f2e170409c6babaa4d6ae220b5b255f8dcbf9b0173f8681cfd"
+    },
+    "obligationRegistry": {
+      "address": "0x44b22f1a17d2710c2f51ed0b37b8b0ff8435262d3c8c0f2f17be07c84ac23b5",
+      "classHash": "0x50ac78b67fd69d7e2a892dc51014159d7e69fe1770c3f4f33add21131aa2a0b"
+    },
+    "exceptionSeal": {
+      "address": "0x3394e58bb2bb294e0ae92514079a1394c6c66eae8a6c033a6f7f449b1d12ce",
+      "classHash": "0x612f04ea11fd47f83793efee058a9ddd1380b03fe1273fe9fab13ff58b3a3b"
+    },
+    "payrollV2Bundle": "0xeba326f15f73968026bd12007220d88104fdcb322a56ad8c69fbe8a5350e18"
+  },
+  "circuit": {
+    "proofVersion": 3,
+    "schemaVersion": 1,
+    "publicInputCount": 58,
+    "circuitSha256": "0xbb1a8029e604de7b47a28f2ab7dc49f7a3859bc0c3c66b4bf502bdb1b943aec6",
+    "verificationKeySha256": "0xafad41c9d11ec920fe9cb091b04dc4ed092d2dfee561444a95b2af855ae80a20",
+    "measuredProofCalldataFelts": 3269,
+    "maximumProofCalldataFelts": 4992
+  },
+  "verifierProfile": {
+    "mode": 0,
+    "proofVersion": 3,
+    "address": "0x1bc7517191802bf82ccfb60fa4f27f9306d6cfee9160b545d7dea662e8870a8"
+  },
+  "contracts": {
+    "vestingVerifier": {
+      "address": "0x4b35d2d366848169ea4fb32d4fffda498b5251160da2e60fc53030a37d5551c",
+      "salt": "0x7061796f2d76657374696e672d76332d76657269666965722d7631",
+      "constructorCalldata": [],
+      "classHash": "0x5880228c9533d8b168275dbf3671cf219e684fb6027dd56f5ef3215caf37573",
+      "compiledClassHash": "0x70899e9edf6dd859860e26f2a4695fe3f1ab4de78c71b5cd27e4625da6d4770",
+      "sierraSha256": "8cd91e54a04406ab8fbc03c77f0e3a10e6ef5f598c41ac9610b5bafb4a004391",
+      "casmSha256": "ec88c07f3ef2f48c65e6f35261e4dd8f712cd2e86e8335741200ec1c026facfe"
+    },
+    "vestingBundle": {
+      "address": "0x1bc7517191802bf82ccfb60fa4f27f9306d6cfee9160b545d7dea662e8870a8",
+      "salt": "0x7061796f2d76657374696e672d76332d62756e646c652d7631",
+      "constructorCalldata": [
+        "0x4b35d2d366848169ea4fb32d4fffda498b5251160da2e60fc53030a37d5551c"
+      ],
+      "classHash": "0x7aa6924647c8f6bed105fe7a11e51b3679dfc111f88f63519a5b2043fe1586d",
+      "compiledClassHash": "0x409609d6b59e878680504448da5df1eb6adb87f48d89010f217f34482ef38f3",
+      "sierraSha256": "84a9a1516808d0c4672137ebcb30ee2aae0bbc593853ae9537e165e3bd9850a6",
+      "casmSha256": "b29a2d95bb22e507c818b0b6a0f2dfcedb777215dc4370fef45eddb2ad30a560"
+    },
+    "vestingBookSeal": {
+      "address": "0x5208cc07cb4153235ab5c6ecd1936ee77f9be7a2ea09f6cc69518a6362493f",
+      "salt": "0x7061796f2d76657374696e672d626f6f6b2d7365616c2d7631",
+      "constructorCalldata": [
+        "0x40337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+        "0x34701f573096b7bab0e5678e1ed2f17a87c8d56eb5f4d70bcf2197bab8e4477",
+        "0x44b22f1a17d2710c2f51ed0b37b8b0ff8435262d3c8c0f2f17be07c84ac23b5",
+        "0x3394e58bb2bb294e0ae92514079a1394c6c66eae8a6c033a6f7f449b1d12ce",
+        "0x534e5f4d41494e"
+      ],
+      "classHash": "0x25af7969593ae59fe67830f7cb42774f0e62807c9114367d36e753be9577553",
+      "compiledClassHash": "0x105281f078733e95593b505c087a189a12cc45acd0902a4f931f557e225f7ed",
+      "sierraSha256": "f7be3b0fb5e0f0830009edfae51f18125bb029e1a6e28e1c3a3303a1f7f5b4c7",
+      "casmSha256": "129ba07d97d898d92c3e86ada10dd40316deadb2c1943109dcba1273c526f44d"
+    }
+  },
+  "source": "circuits/vesting_transition/target/payo-vesting-book-mainnet-plan.json",
+  "mutationSubmitted": false,
+  "feeEstimate": {
+    "observedAt": "2026-09-05T04:55:06.606Z",
+    "status": {
+      "declarations": {
+        "vestingVerifier": false,
+        "vestingBundle": false,
+        "vestingBookSeal": false
+      },
+      "contracts": {
+        "vestingVerifier": {
+          "address": "0x4b35d2d366848169ea4fb32d4fffda498b5251160da2e60fc53030a37d5551c",
+          "expectedClassHash": "0x5880228c9533d8b168275dbf3671cf219e684fb6027dd56f5ef3215caf37573",
+          "actualClassHash": null,
+          "deployed": false
+        },
+        "vestingBundle": {
+          "address": "0x1bc7517191802bf82ccfb60fa4f27f9306d6cfee9160b545d7dea662e8870a8",
+          "expectedClassHash": "0x7aa6924647c8f6bed105fe7a11e51b3679dfc111f88f63519a5b2043fe1586d",
+          "actualClassHash": null,
+          "deployed": false
+        },
+        "vestingBookSeal": {
+          "address": "0x5208cc07cb4153235ab5c6ecd1936ee77f9be7a2ea09f6cc69518a6362493f",
+          "expectedClassHash": "0x25af7969593ae59fe67830f7cb42774f0e62807c9114367d36e753be9577553",
+          "actualClassHash": null,
+          "deployed": false
+        }
+      },
+      "profile": {
+        "mode": 0,
+        "proofVersion": 3,
+        "address": null,
+        "active": false,
+        "matches": false
+      },
+      "wiring": {
+        "checked": false,
+        "passed": false
+      }
+    },
+    "pendingDeployments": [
+      "vestingVerifier",
+      "vestingBundle",
+      "vestingBookSeal"
+    ],
+    "activationWindow": {
+      "validAfter": 1788584101,
+      "expiresAt": 1820120101
+    },
+    "estimates": [
+      {
+        "label": "declare.vestingVerifier",
+        "feeFri": "335779321954404924144",
+        "feeStrk": 335.7793219544049
+      },
+      {
+        "label": "declare.vestingBundle",
+        "feeFri": "14011877445174701424",
+        "feeStrk": 14.011877445174703
+      },
+      {
+        "label": "declare.vestingBookSeal",
+        "feeFri": "250035125622302135664",
+        "feeStrk": 250.03512562230216
+      },
+      {
+        "label": "deploy.vestingVerifier",
+        "feeFri": "76005490002829275",
+        "feeStrk": 0.07600549000282927
+      },
+      {
+        "label": "deploy.vestingBundle",
+        "feeFri": "114386635104278430",
+        "feeStrk": 0.11438663510427843
+      },
+      {
+        "label": "deploy.vestingBookSeal",
+        "feeFri": "272006984270657292",
+        "feeStrk": 0.2720069842706573
+      },
+      {
+        "label": "activate.verifier.0.3",
+        "feeFri": "184100307728283435",
+        "feeStrk": 0.18410030772828342
+      }
+    ],
+    "totalFeeFri": "600472824438987809664",
+    "totalFeeStrk": 600.4728244389878,
+    "balanceFri": "505966086733170101951",
+    "balanceStrk": 505.9660867331701,
+    "currentlyFunded": false,
+    "mutationTip": "1"
+  }
+}

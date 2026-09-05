@@ -9,6 +9,7 @@ import {
   WAGE_REMEDIATION_VNEXT_CIRCUIT_SHA256,
 } from "@/lib/proof/protocol";
 import { hashProofCalldata } from "@/lib/proof/starknet-calldata";
+import { mockExceptionBookProof } from "@/lib/proof/vesting-transition-test-support";
 import {
   authorizeStoredExceptionProof,
   openStoredExceptionProof,
@@ -77,6 +78,13 @@ function storedProofFixture(
       calldataHash: hashProofCalldata(proofCalldata),
       publicInputs: publicInputs(proofVersion),
     },
+    vestingBook: mockExceptionBookProof({
+      source: publicInputs(proofVersion),
+      entryKind: profile === "wage_claim_v6" ? "claim" : "remediation",
+      bookSealAddress: "0x456",
+      sourceSealAddress: "0x12345",
+      ownerAddress: "0xabc",
+    }),
   };
   const bundle = prepareEncryptedExceptionProofBundle({
     id: generateUuidV7(),
@@ -160,7 +168,7 @@ describe("stored vNext exception proof recovery", () => {
     expect(opened.payload.profile).toBe(profile);
     expect(opened.payload.proof.proofCalldata).toEqual(fixture.proofCalldata);
 
-    await authorizeStoredExceptionProof({
+    const authorized = await authorizeStoredExceptionProof({
       client,
       proofBundleId: fixture.bundle.id,
       principal,
@@ -168,7 +176,10 @@ describe("stored vNext exception proof recovery", () => {
     expect(enqueue).toHaveBeenCalledOnce();
     expect(enqueue).toHaveBeenCalledWith({
       proofBundleId: fixture.bundle.id,
-      proofCalldata: fixture.proofCalldata,
+      request: {
+        proofCalldata: fixture.proofCalldata,
+        vestingBook: authorized.payload.vestingBook,
+      },
     });
   });
 

@@ -37,6 +37,7 @@ export type DirectPrivacyDeploymentConfig = {
   poolAddress: `0x${string}`;
   policyAccountAddress: `0x${string}`;
   policyAccountClassHash: `0x${string}`;
+  bookSealAddress: `0x${string}`;
   tokenAddresses: { STRK: `0x${string}`; USDC: `0x${string}` };
 };
 
@@ -60,6 +61,10 @@ export function getDirectPrivacyDeploymentConfig(): DirectPrivacyDeploymentConfi
       "The autonomous PAYO policy account",
     ),
     policyAccountClassHash: requiredClassHash(),
+    bookSealAddress: requiredAddress(
+      "PAYO_VESTING_BOOK_SEAL_ADDRESS",
+      "The universal PAYO payroll-book seal",
+    ),
     tokenAddresses: {
       STRK: requiredAddress("PAYO_AGENT_STRK_TOKEN_ADDRESS", "The autonomous STRK token"),
       USDC: requiredAddress("PAYO_AGENT_USDC_TOKEN_ADDRESS", "The autonomous USDC token"),

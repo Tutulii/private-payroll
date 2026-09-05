@@ -9,6 +9,15 @@ import {
 } from "./private-payroll";
 
 const SEAL = "0x1234";
+const BOOK_SEAL = "0x4567";
+
+function remediationBookAction(source: STRK20_INVOKE_ACTION): STRK20_INVOKE_ACTION {
+  return {
+    type: "invoke",
+    contract: BOOK_SEAL,
+    calldata: [source.calldata[1]!, source.calldata[2]!, "0x0", "0x0", "0x31", "0x32"],
+  };
+}
 const PAYO_ACTION: STRK20_INVOKE_ACTION = {
   type: "invoke",
   contract: SEAL,
@@ -89,17 +98,22 @@ describe("buildPrivatePayrollActions", () => {
       .toThrow(/connected Starknet address/i);
 
     const remediationAction = { ...PAYO_ACTION, calldata: ["0x3", ...PAYO_ACTION.calldata.slice(1)] };
+    const bookAction = remediationBookAction(remediationAction);
     const remediation = buildPrivateExceptionActions(
       "wage_remediation",
       [{ address: "0x111", token: "USDC", amount: "2.5" }],
-      remediationAction,
+      [remediationAction, bookAction],
       SEAL,
+      undefined,
+      BOOK_SEAL,
     );
     expect(remediation.totals).toEqual({ STRK: 0n, USDC: 2_500_000n });
     expect(remediation.operationalReserves).toEqual({ STRK: 0n, USDC: 0n });
-    expect(remediation.actions.at(-1)).toBe(remediationAction);
-    expect(() => buildPrivateExceptionActions("wage_remediation", [], remediationAction, SEAL))
-      .toThrow(/exactly one/i);
+    expect(remediation.actions.at(-2)).toBe(remediationAction);
+    expect(remediation.actions.at(-1)).toBe(bookAction);
+    expect(() => buildPrivateExceptionActions(
+      "wage_remediation", [], [remediationAction, bookAction], SEAL, undefined, BOOK_SEAL,
+    )).toThrow(/exactly one/i);
   });
 
   it("accepts the vNext seven-field payroll and remediation consumption ABI", () => {
@@ -117,12 +131,17 @@ describe("buildPrivatePayrollActions", () => {
       ...PAYO_ACTION,
       calldata: ["0x3", "0x21", "0x22", "0x23", "0x24", "0x25", "0x26"],
     };
-    expect(buildPrivateExceptionActions(
+    const bookAction = remediationBookAction(remediationAction);
+    const actions = buildPrivateExceptionActions(
       "wage_remediation",
       [{ address: "0x111", token: "USDC", amount: "2.5" }],
-      remediationAction,
+      [remediationAction, bookAction],
       SEAL,
-    ).actions.at(-1)).toBe(remediationAction);
+      undefined,
+      BOOK_SEAL,
+    ).actions;
+    expect(actions.at(-2)).toBe(remediationAction);
+    expect(actions.at(-1)).toBe(bookAction);
   });
 
   it("rejects a proof action whose mode or ABI does not match its workflow", () => {

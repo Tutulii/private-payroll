@@ -8,7 +8,8 @@ export async function POST(request: Request) {
   try {
     const principal = await requirePrincipal(request);
     const bundle = encryptedPayoProofBundleCreateSchema.parse(await readJson(request));
-    const [deployment, ...additionalPayrollDeployments] = getPayoPayrollProofDeployments();
+    const [deployment, ...configuredPayrollDeployments] = getPayoPayrollProofDeployments();
+    const additionalPayrollDeployments = configuredPayrollDeployments;
     const stored = await storeEncryptedPayrollIntegrityBundle({
       bundle,
       principal,

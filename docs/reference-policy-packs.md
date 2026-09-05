@@ -20,4 +20,27 @@ These packs are narrowly scoped, versioned calculation examples. `legalReviewReq
 - Implemented scope: monthly category-A employee National Insurance in GBP pence, with the £1,048 primary threshold, £4,189 upper earnings limit, 8% main rate, and 2% additional rate
 - Excluded: PAYE income tax, other NI categories or periods, directors, employer contributions, benefits, statutory pay, loans, and later corrections
 
-`lib/policy/reference-packs.test.ts` checks both results, source/review metadata, program bounds, and commitments. `compilePolicyPack` deterministically lowers `BRACKET` into the same 16-step primitive VM enforced by Noir.
+## Canada: small non-Quebec irregular payment
+
+- Pack: `ca-cra-small-irregular-payment-2026-v1`, revision 1
+- Effective window: 2026-01-01 through 2026-12-31
+- Program commitment: `0xf8b8f3600c334d7cc22491ef61549096d83d81ef60a502dbe5a74bc67f71abd9`
+- Source: [CRA Employers' Guide — Payroll Deductions and Remittances](https://www.canada.ca/en/revenue-agency/services/forms-publications/publications/t4001/employers-guide-payroll-deductions-remittances.html), reviewed 2026-09-05
+- Implemented scope: 15% federal income-tax withholding for a bonus or retroactive pay increase outside Quebec when separately reviewed total annual remuneration, including the payment, is CAD 5,000 or less
+- Excluded: Quebec, remuneration above CAD 5,000, regular pay, CPP/QPP, EI, provincial deductions, benefits, pension, union-dues and TD1 adjustments
+
+`lib/policy/reference-packs.test.ts` checks all three results, source/review metadata, program bounds, and commitments. `compilePolicyPack` deterministically lowers `BRACKET` into the same 16-step primitive VM enforced by Noir.
+
+## Familiar evidence views
+
+`lib/disclosure/tax-evidence.ts` first creates one canonical verified-income record
+from a report that has reproduced the independently observed annual payroll-book
+accumulator. It then maps supported **employee** lines to W-2-, P60- or T4-style
+readable evidence. The view carries the exact policy ID, revision, commitment and
+catalog root; it does not replace or reinterpret the proved calculation.
+
+These downloads are token-denominated cryptographic evidence, not official forms,
+government filings, legal certification or tax advice. US and Canadian examples use
+familiar numbered fields only where the narrow bound policy supplies the corresponding
+income/withholding fact. The UK example labels its deduction as a bound deduction
+because the implemented pack proves National Insurance, not PAYE income tax.

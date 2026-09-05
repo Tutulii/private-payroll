@@ -55,6 +55,7 @@ fn state_from_config(config: PolicyConfig) -> PolicyState {
         session_public_key: config.session_public_key,
         pool: config.pool,
         seal: config.seal,
+        book_seal: config.book_seal,
         seal_mode: config.seal_mode,
         proof_version: config.proof_version,
         schema_version: config.schema_version,
@@ -85,6 +86,7 @@ fn base_config(
         session_public_key,
         pool,
         seal,
+        book_seal: 0.try_into().unwrap(),
         seal_mode: 0,
         proof_version: 1,
         schema_version: 1,
@@ -224,6 +226,78 @@ fn pool_calldata_with_invoke(seal: ContractAddress) -> Array<felt252> {
     );
     let mut encoded = array![];
     array![note, invoke].span().serialize(ref encoded);
+    let screening: Option<ScreeningAttestation> = Option::None;
+    screening.serialize(ref encoded);
+    encoded
+}
+
+fn configured_universal_policy(
+    session_public_key: felt252,
+    pool: ContractAddress,
+    seal: ContractAddress,
+    book: ContractAddress,
+) -> (PolicyConfig, Array<felt252>) {
+    let mut config = base_config(session_public_key, pool, seal);
+    config.seal_mode = 2;
+    config.book_seal = book;
+    let nodes = siblings();
+    let leaf = run_leaf(
+        POLICY_ID,
+        state_from_config(config),
+        AGREEMENT_HIGH,
+        AGREEMENT_LOW,
+        MANIFEST_HIGH,
+        MANIFEST_LOW,
+        NULLIFIER_HIGH,
+        NULLIFIER_LOW,
+    );
+    config.authorized_runs_root = merkle_root(leaf, 0, nodes.span());
+    (config, nodes)
+}
+
+fn configure_universal(
+    account: ContractAddress,
+    session_public_key: felt252,
+    pool: ContractAddress,
+    seal: ContractAddress,
+    book: ContractAddress,
+) -> Array<felt252> {
+    let (config, nodes) = configured_universal_policy(session_public_key, pool, seal, book);
+    start_cheat_caller_address(account, account);
+    IPayoPolicyAccountDispatcher { contract_address: account }
+        .configure_policy(POLICY_ID, config);
+    start_mock_call(seal, selector!("register_direct_settlement_source"), ());
+    start_mock_call(seal, selector!("finalize_settlement"), ());
+    start_mock_call(book, selector!("get_authorized_source_seal"), seal);
+    nodes
+}
+
+fn universal_pool_calldata(
+    target: ContractAddress,
+    run_high: u128,
+    run_low: u128,
+    release_high: u128,
+    release_low: u128,
+    book_high: u128,
+    book_low: u128,
+    duplicate: bool,
+) -> Array<felt252> {
+    let callback = array![
+        run_high.into(), run_low.into(), release_high.into(), release_low.into(),
+        book_high.into(), book_low.into(),
+    ];
+    let invoke = ServerAction::Invoke(
+        InvokeInput { contract_address: target, calldata: callback.span() },
+    );
+    let note = ServerAction::EmitEncNoteCreated(
+        EncNoteCreated { note_id: 0xabc, packed_value: 0xdef },
+    );
+    let mut encoded = array![];
+    if duplicate {
+        array![note, invoke, invoke].span().serialize(ref encoded);
+    } else {
+        array![note, invoke].span().serialize(ref encoded);
+    }
     let screening: Option<ScreeningAttestation> = Option::None;
     screening.serialize(ref encoded);
     encoded
@@ -567,6 +641,153 @@ fn policy_account_rejects_an_external_pool_invoke_during_payment() {
         NULLIFIER_LOW,
     );
     let execution = outside_execution(account, 705, calldata.span());
+    let signature = sign_outside(account, @execution, session);
+    ISRC9_V2Dispatcher { contract_address: account }
+        .execute_from_outside_v2(execution, signature.span());
+}
+
+#[test]
+fn universal_policy_executes_one_exact_authorized_book_callback() {
+    let owner = StarkCurveKeyPairImpl::generate();
+    let session = StarkCurveKeyPairImpl::generate();
+    let account = deploy_policy_account(owner.public_key);
+    let pool = address(0x220);
+    let seal = address(0x320);
+    let book = address(0x420);
+    let nodes = configure_universal(account, session.public_key, pool, seal, book);
+    start_mock_call(pool, selector!("apply_actions"), ());
+    let pool_data = universal_pool_calldata(
+        book, NULLIFIER_HIGH, NULLIFIER_LOW, 0, 0, 91, 92, false,
+    );
+    let calldata = intent_calldata(
+        nodes.span(), pool_data.span(), array![0xa, 0xb].span(),
+        MANIFEST_HIGH, MANIFEST_LOW, NULLIFIER_HIGH, NULLIFIER_LOW,
+    );
+    let execution = outside_execution(account, 720, calldata.span());
+    let signature = sign_outside(account, @execution, session);
+    ISRC9_V2Dispatcher { contract_address: account }
+        .execute_from_outside_v2(execution, signature.span());
+    let policy = IPayoPolicyAccountDispatcher { contract_address: account }.get_policy(POLICY_ID);
+    assert(policy.used_call_count == 1, 'universal call not consumed');
+    assert(
+        !IPayoPolicyAccountDispatcher { contract_address: account }
+            .is_run_available(2, NULLIFIER_HIGH, NULLIFIER_LOW),
+        'universal replay available',
+    );
+}
+
+#[test]
+#[should_panic(expected: 'PAYO_POLICY_POOL_ACTION')]
+fn universal_policy_rejects_a_missing_book_callback() {
+    let owner = StarkCurveKeyPairImpl::generate();
+    let session = StarkCurveKeyPairImpl::generate();
+    let account = deploy_policy_account(owner.public_key);
+    let pool = address(0x221);
+    let seal = address(0x321);
+    let book = address(0x421);
+    let nodes = configure_universal(account, session.public_key, pool, seal, book);
+    let pool_data = pool_calldata(
+        seal, AGREEMENT_HIGH, AGREEMENT_LOW, MANIFEST_HIGH, MANIFEST_LOW,
+        POLICY_HIGH, POLICY_LOW, NULLIFIER_HIGH, NULLIFIER_LOW, false,
+    );
+    let calldata = intent_calldata(
+        nodes.span(), pool_data.span(), array![0xa, 0xb].span(),
+        MANIFEST_HIGH, MANIFEST_LOW, NULLIFIER_HIGH, NULLIFIER_LOW,
+    );
+    let execution = outside_execution(account, 721, calldata.span());
+    let signature = sign_outside(account, @execution, session);
+    ISRC9_V2Dispatcher { contract_address: account }
+        .execute_from_outside_v2(execution, signature.span());
+}
+
+#[test]
+#[should_panic(expected: 'PAYO_POLICY_POOL_ACTION')]
+fn universal_policy_rejects_a_substituted_book_target() {
+    let owner = StarkCurveKeyPairImpl::generate();
+    let session = StarkCurveKeyPairImpl::generate();
+    let account = deploy_policy_account(owner.public_key);
+    let pool = address(0x222);
+    let seal = address(0x322);
+    let book = address(0x422);
+    let nodes = configure_universal(account, session.public_key, pool, seal, book);
+    let pool_data = universal_pool_calldata(
+        address(0x423), NULLIFIER_HIGH, NULLIFIER_LOW, 0, 0, 91, 92, false,
+    );
+    let calldata = intent_calldata(
+        nodes.span(), pool_data.span(), array![0xa, 0xb].span(),
+        MANIFEST_HIGH, MANIFEST_LOW, NULLIFIER_HIGH, NULLIFIER_LOW,
+    );
+    let execution = outside_execution(account, 722, calldata.span());
+    let signature = sign_outside(account, @execution, session);
+    ISRC9_V2Dispatcher { contract_address: account }
+        .execute_from_outside_v2(execution, signature.span());
+}
+
+#[test]
+#[should_panic(expected: 'PAYO_POLICY_POOL_ACTION')]
+fn universal_policy_rejects_mutated_book_calldata() {
+    let owner = StarkCurveKeyPairImpl::generate();
+    let session = StarkCurveKeyPairImpl::generate();
+    let account = deploy_policy_account(owner.public_key);
+    let pool = address(0x223);
+    let seal = address(0x323);
+    let book = address(0x423);
+    let nodes = configure_universal(account, session.public_key, pool, seal, book);
+    let pool_data = universal_pool_calldata(
+        book, NULLIFIER_HIGH + 1, NULLIFIER_LOW, 0, 0, 91, 92, false,
+    );
+    let calldata = intent_calldata(
+        nodes.span(), pool_data.span(), array![0xa, 0xb].span(),
+        MANIFEST_HIGH, MANIFEST_LOW, NULLIFIER_HIGH, NULLIFIER_LOW,
+    );
+    let execution = outside_execution(account, 723, calldata.span());
+    let signature = sign_outside(account, @execution, session);
+    ISRC9_V2Dispatcher { contract_address: account }
+        .execute_from_outside_v2(execution, signature.span());
+}
+
+#[test]
+#[should_panic(expected: 'PAYO_POLICY_POOL_ACTION')]
+fn universal_policy_rejects_a_source_seal_substitution() {
+    let owner = StarkCurveKeyPairImpl::generate();
+    let session = StarkCurveKeyPairImpl::generate();
+    let account = deploy_policy_account(owner.public_key);
+    let pool = address(0x224);
+    let seal = address(0x324);
+    let book = address(0x424);
+    let nodes = configure_universal(account, session.public_key, pool, seal, book);
+    start_mock_call(book, selector!("get_authorized_source_seal"), address(0x999));
+    let pool_data = universal_pool_calldata(
+        book, NULLIFIER_HIGH, NULLIFIER_LOW, 0, 0, 91, 92, false,
+    );
+    let calldata = intent_calldata(
+        nodes.span(), pool_data.span(), array![0xa, 0xb].span(),
+        MANIFEST_HIGH, MANIFEST_LOW, NULLIFIER_HIGH, NULLIFIER_LOW,
+    );
+    let execution = outside_execution(account, 724, calldata.span());
+    let signature = sign_outside(account, @execution, session);
+    ISRC9_V2Dispatcher { contract_address: account }
+        .execute_from_outside_v2(execution, signature.span());
+}
+
+#[test]
+#[should_panic(expected: 'PAYO_POLICY_POOL_ACTION')]
+fn universal_policy_rejects_duplicate_book_callbacks() {
+    let owner = StarkCurveKeyPairImpl::generate();
+    let session = StarkCurveKeyPairImpl::generate();
+    let account = deploy_policy_account(owner.public_key);
+    let pool = address(0x225);
+    let seal = address(0x325);
+    let book = address(0x425);
+    let nodes = configure_universal(account, session.public_key, pool, seal, book);
+    let pool_data = universal_pool_calldata(
+        book, NULLIFIER_HIGH, NULLIFIER_LOW, 0, 0, 91, 92, true,
+    );
+    let calldata = intent_calldata(
+        nodes.span(), pool_data.span(), array![0xa, 0xb].span(),
+        MANIFEST_HIGH, MANIFEST_LOW, NULLIFIER_HIGH, NULLIFIER_LOW,
+    );
+    let execution = outside_execution(account, 725, calldata.span());
     let signature = sign_outside(account, @execution, session);
     ISRC9_V2Dispatcher { contract_address: account }
         .execute_from_outside_v2(execution, signature.span());

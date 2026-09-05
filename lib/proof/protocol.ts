@@ -4,6 +4,12 @@ import type { SerializedPayrollIntegrityBuildRequest } from "./input-builder";
 import type { EmploymentAgreement } from "@/lib/domain/obligations";
 import type { ExceptionPublicInputsV2 } from "@/lib/domain/exception-protocol";
 import type { SettlementMatchPublicInputs } from "./settlement-match";
+import type { PayrollBookEntryKind, UniversalPayrollBookEntry } from "@/lib/domain/universal-payroll-book";
+import type {
+  ExternalAttestationProofInput,
+  VestingTransitionInputBuild,
+  VestingTransitionPublicInputs,
+} from "./vesting-transition-input";
 
 export const PAYROLL_INTEGRITY_CIRCUIT_URL = "/circuits/payroll_integrity-v1.json";
 export const PAYROLL_INTEGRITY_CIRCUIT_SHA256 =
@@ -55,7 +61,15 @@ export const SETTLEMENT_MATCH_VERIFICATION_KEY_URL =
   "/circuits/settlement_match-v8.vk.hex";
 export const SETTLEMENT_MATCH_VERIFICATION_KEY_SHA256 =
   "0x4dba54029e3b3b507baad28f6f4f416b9eca9651f98cbad9312d91a637528e23";
+export const VESTING_TRANSITION_CIRCUIT_URL = "/circuits/vesting_transition-v3.json";
+export const VESTING_TRANSITION_CIRCUIT_SHA256 =
+  "0xbb1a8029e604de7b47a28f2ab7dc49f7a3859bc0c3c66b4bf502bdb1b943aec6";
+export const VESTING_TRANSITION_VERIFICATION_KEY_URL =
+  "/circuits/vesting_transition-v3.vk.hex";
+export const VESTING_TRANSITION_VERIFICATION_KEY_SHA256 =
+  "0xafad41c9d11ec920fe9cb091b04dc4ed092d2dfee561444a95b2af855ae80a20";
 export const PAYROLL_INTEGRITY_PUBLIC_INPUT_COUNT = 17;
+export const VESTING_TRANSITION_PUBLIC_INPUT_COUNT = 58;
 export const PAYO_EXCEPTION_PUBLIC_INPUT_COUNT = 23;
 export const PAYO_SETTLEMENT_MATCH_PUBLIC_INPUT_COUNT = 11;
 // Starknet Mainnet accepts at most 5,000 invoke calldata felts. PAYO's
@@ -96,6 +110,16 @@ export type EncryptedPayrollWitness = {
   advancedBuildInput: {
     payroll: SerializedPayrollIntegrityBuildRequest;
     agreements: EmploymentAgreement[];
+    vestingBook?: {
+      ownerAddress: string;
+      bookSealAddress?: string;
+      entryKind?: "ordinary" | "agent";
+      periodStart: string;
+      periodEnd: string;
+      previousStateSalt: string;
+      nextStateSalt: string;
+      attestation?: ExternalAttestationProofInput;
+    };
   };
 } | {
   circuitProfile: "wage_claim" | "wage_remediation";
@@ -103,6 +127,7 @@ export type EncryptedPayrollWitness = {
 } | {
   exceptionCircuitProfile: ExceptionCircuitProfile;
   circuitInput: InputMap;
+  exceptionBookBuild?: VestingTransitionInputBuild;
 };
 
 export type ExceptionCircuitProfile =
@@ -146,6 +171,29 @@ export type PayrollIntegrityShardProof = {
   publicInputs: PayrollIntegrityPublicInputs;
 };
 
+export type VestingTransitionShardProof = {
+  shardIndex: 0 | 1;
+  proof: Uint8Array;
+  proofCalldata: string[];
+  calldataHash: string;
+  publicInputs: VestingTransitionPublicInputs;
+};
+
+export type VestingBookProof = {
+  proofVersion: 3;
+  entryKind: PayrollBookEntryKind;
+  circuitSha256: string;
+  verificationKeySha256: string;
+  provingTimeMs: number;
+  scheduleId: `0x${string}`;
+  previousStateCommitment: `0x${string}`;
+  nextStateCommitment: `0x${string}`;
+  releaseNullifier: `0x${string}`;
+  bookEntry: UniversalPayrollBookEntry;
+  bookEntryCommitment: `0x${string}`;
+  shards: [VestingTransitionShardProof, VestingTransitionShardProof];
+};
+
 export type ProofWorkerProgress = {
   version: 1;
   type: "proof-progress";
@@ -161,6 +209,7 @@ export type ProofWorkerSuccess = {
   shards: [PayrollIntegrityShardProof, PayrollIntegrityShardProof];
   circuitSha256: string;
   provingTimeMs: number;
+  vestingBook?: VestingBookProof;
 };
 
 export type SettlementMatchProofChunk = {
@@ -200,6 +249,7 @@ export type ExceptionProofWorkerSuccess = {
   proof: ExceptionCircuitProof;
   circuitSha256: string;
   provingTimeMs: number;
+  vestingBook?: VestingBookProof;
 };
 
 export type PayoProofWorkerSuccess = ProofWorkerSuccess | ExceptionProofWorkerSuccess;

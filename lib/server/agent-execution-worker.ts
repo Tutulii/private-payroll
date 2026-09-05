@@ -71,6 +71,12 @@ const defaultDependencies: AgentExecutionWorkerDependencies = {
 
 function errorCode(error: unknown, fallback: string): string {
   if (error instanceof AgentExecutionDriverError) return error.code;
+  // Low-level adapters intentionally throw opaque machine codes. Preserve only
+  // that strict, privacy-safe form so receipts remain actionable without ever
+  // leaking RPC responses, URLs, ciphertext, or private execution data.
+  if (error instanceof Error && /^[A-Z][A-Z0-9_]{2,79}$/.test(error.message)) {
+    return error.message;
+  }
   return fallback;
 }
 

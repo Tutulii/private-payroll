@@ -1,0 +1,24 @@
+[package]
+name = "vesting_integration"
+version = "0.1.0"
+edition = "2024_07"
+
+[dependencies]
+starknet = "2.16.1"
+garaga = { git = "https://github.com/keep-starknet-strange/garaga.git", tag = "v1.1.0" }
+payo_contracts = { path = ".." }
+vesting_verifier_v3 = { path = "../vesting_verifier_v3" }
+
+[dev-dependencies]
+snforge_std = { git = "https://github.com/foundry-rs/starknet-foundry.git", tag = "v0.57.0" }
+
+[target-defaults.test]
+build-external-contracts = [
+  "payo_contracts::policy_registry::PayoPolicyRegistry",
+  "payo_contracts::tenant_obligation_registry::PayoTenantObligationRootRegistry",
+  "payo_contracts::vesting_book_seal::PayoVestingBookSeal",
+  "vesting_verifier_v3::honk_verifier::PayoVestingBookV3Verifier",
+  "vesting_verifier_v3::vesting_bundle_verifier::PayoVestingBookV3BundleVerifier",
+]
+
+[lib]

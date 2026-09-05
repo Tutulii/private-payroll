@@ -28,6 +28,7 @@ import {
 import { executeAuthorizedRemediationPayment } from "./remediation-payment";
 import { hashProofCalldata } from "@/lib/proof/starknet-calldata";
 import { WAGE_REMEDIATION_VNEXT_CIRCUIT_SHA256 } from "@/lib/proof/protocol";
+import { mockExceptionBookProof } from "@/lib/proof/vesting-transition-test-support";
 
 const organizationId = "0198ddf0-9c00-7000-8000-0000000000b1";
 const owner = generateVaultPrincipal("owner:wage-remediation-v7-test");
@@ -395,6 +396,15 @@ describe("durable Remediation v7 client binding", () => {
         calldataHash: hashProofCalldata(proofCalldata),
         publicInputs: prepared.build.publicInputs,
       },
+      vestingBook: mockExceptionBookProof({
+        source: prepared.build.publicInputs,
+        entryKind: "remediation",
+        bookSealAddress: "0x456",
+        sourceSealAddress: "0x12345",
+        ownerAddress: prepared.bookOwnerAddress,
+        runNullifier: prepared.privateRecord.claimFact.runNullifier,
+        payment: { token: prepared.privateRecord.token, amountAtomic: prepared.privateRecord.amountAtomic },
+      }),
     };
     const order: string[] = [];
     const client = {
@@ -420,6 +430,7 @@ describe("durable Remediation v7 client binding", () => {
       prepared,
       principal: owner,
       proverBaseUrl: "https://prover.invalid",
+      bookSealAddress: "0x456",
     });
     expect(order).toEqual(["remediation", "prove", "proof", "authorize"]);
     expect(result.proofBundle.proofVersion).toBe("7");
@@ -427,7 +438,10 @@ describe("durable Remediation v7 client binding", () => {
       .toMatchObject({ profile: "wage_remediation_v7" });
     expect(client.enqueueExceptionAuthorization).toHaveBeenCalledWith({
       proofBundleId: prepared.create.proofBundleId,
-      proofCalldata,
+      request: {
+        proofCalldata,
+        vestingBook: expect.objectContaining({ entryKind: "remediation" }),
+      },
     });
   });
 
@@ -466,6 +480,15 @@ describe("durable Remediation v7 client binding", () => {
         calldataHash: hashProofCalldata(proofCalldata),
         publicInputs: prepared.build.publicInputs,
       },
+      vestingBook: mockExceptionBookProof({
+        source: prepared.build.publicInputs,
+        entryKind: "remediation",
+        bookSealAddress: "0x456",
+        sourceSealAddress: "0x12345",
+        ownerAddress: prepared.bookOwnerAddress,
+        runNullifier: prepared.privateRecord.claimFact.runNullifier,
+        payment: { token: prepared.privateRecord.token, amountAtomic: prepared.privateRecord.amountAtomic },
+      }),
     };
     const proofResult = await proveAndAuthorizeWageRemediationV2({
       client: {
@@ -479,6 +502,7 @@ describe("durable Remediation v7 client binding", () => {
       prepared,
       principal: owner,
       proverBaseUrl: "https://prover.invalid",
+      bookSealAddress: "0x456",
     });
     const summary = {
       id: prepared.create.id,
@@ -549,8 +573,10 @@ describe("durable Remediation v7 client binding", () => {
     const prepareSubmit = vi.fn().mockImplementation(async (_workflow, recipients, action) => {
       order.push("preflight");
       expect(recipients).toEqual([{ address: prepared.privateRecord.recipientAddress, amount: "1", token: "USDC" }]);
-      expect(action.calldata).toHaveLength(7);
-      expect(action.calldata[0]).toBe("0x3");
+      expect(action).toHaveLength(2);
+      expect(action[0].calldata).toHaveLength(7);
+      expect(action[0].calldata[0]).toBe("0x3");
+      expect(BigInt(action[1].contract)).toBe(0x456n);
       return async () => {
         order.push("wallet");
         return "0xfeed";
@@ -567,6 +593,8 @@ describe("durable Remediation v7 client binding", () => {
         remediation: summary,
         principal: owner,
         sealAddress: "0x12345",
+        bookSealAddress: "0x456",
+        chainId: "0x1",
         prepareSubmit: vi.fn().mockRejectedValue(new Error(
           "The shielded USDC treasury does not cover this wage remediation.",
         )),
@@ -579,6 +607,8 @@ describe("durable Remediation v7 client binding", () => {
         remediation: summary,
         principal: owner,
         sealAddress: "0x12345",
+        bookSealAddress: "0x456",
+        chainId: "0x1",
         prepareSubmit,
       })).resolves.toMatchObject({ transactionHash: "0xfeed", replayed: false });
     } finally {

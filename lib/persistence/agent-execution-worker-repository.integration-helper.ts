@@ -173,6 +173,36 @@ export function registerAgentExecutionWorkerRepositoryIntegrationTests(): void {
     });
   });
 
+  it("keeps an admitted execution leaseable after its five-minute intent window", async () => {
+    await fixture();
+    const [first] = await leaseAgentExecutions("agent-worker-long-proof-a", 1, start);
+    await markAgentExecutionPreparing(first, start);
+    await deferAgentExecution(first, {
+      errorCode: "DIRECT_PAYROLL_PROOF_PENDING",
+      preSubmission: true,
+    }, start);
+
+    // A real PayrollIntegrity proof can exceed five minutes. The intent was
+    // valid when atomically admitted, and the bounded reservation remains
+    // active, so proof polling must continue rather than fail reauthorization.
+    const afterIntentExpiry = new Date(start.getTime() + 6 * 60_000);
+    const [retry] = await leaseAgentExecutions(
+      "agent-worker-long-proof-b",
+      1,
+      afterIntentExpiry,
+    );
+    expect(retry).toMatchObject({
+      state: "preparing",
+      attempts: 2,
+    });
+    expect((await getDatabase().select().from(agentExecutions))[0]).toMatchObject({
+      state: "preparing",
+      errorCode: "DIRECT_PAYROLL_PROOF_PENDING",
+    });
+    expect((await getDatabase().select().from(capabilityReservations))[0].state)
+      .toBe("reserved");
+  });
+
   it("releases pre-submission capacity on a permanent preparation failure", async () => {
     await fixture();
     const [job] = await leaseAgentExecutions("agent-worker-proof-failure", 1, start);

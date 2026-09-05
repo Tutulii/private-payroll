@@ -52,6 +52,7 @@ describe("policy-account configuration call", () => {
         "0x999",
         "0xaaa",
         "0x0",
+        "0x0",
         "0x2",
         "0x1",
         `0x${(policyRoot >> 128n).toString(16)}`,
@@ -69,7 +70,7 @@ describe("policy-account configuration call", () => {
       ],
     });
     expect(JSON.stringify(call)).not.toContain("private");
-    expect(call.calldata).toHaveLength(19);
+    expect(call.calldata).toHaveLength(20);
   });
 
   it("builds exact owner-only pause, rotation and revocation self-calls", () => {

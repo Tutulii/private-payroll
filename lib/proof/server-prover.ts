@@ -16,6 +16,14 @@ import { decryptVaultRecord, type EncryptedVaultRecord, type VaultPrincipalKeyPa
 import { buildAdvancedObligationInputs } from "./advanced-obligation-input";
 import { buildPayrollIntegrityInputsFromSerialized } from "./input-builder";
 import { mapExceptionPublicInputsV2 } from "@/lib/domain/exception-protocol";
+import { derivePayrollBookTotalsSalt } from "@/lib/domain/universal-payroll-book";
+import {
+  buildPayrollBookEntryInputs,
+  buildVestingTransitionInputs,
+  mapVestingTransitionPublicInputs,
+  PAYO_VESTING_TRANSITION_PUBLIC_INPUT_COUNT,
+  type VestingTransitionInputBuild,
+} from "./vesting-transition-input";
 import {
   buildSettlementMatchInputs,
   settlementTransactionReference,
@@ -45,6 +53,8 @@ import {
   WAGE_CLAIM_VNEXT_VERIFICATION_KEY_SHA256,
   WAGE_REMEDIATION_VNEXT_CIRCUIT_SHA256,
   WAGE_REMEDIATION_VNEXT_VERIFICATION_KEY_SHA256,
+  VESTING_TRANSITION_CIRCUIT_SHA256,
+  VESTING_TRANSITION_VERIFICATION_KEY_SHA256,
   type ExceptionCircuitProfile,
   type ExceptionProofWorkerSuccess,
   type EncryptedPayrollWitness,
@@ -52,6 +62,8 @@ import {
   type PayrollIntegrityShardProof,
   type ProofWorkerSuccess,
   type SettlementMatchProofWorkerSuccess,
+  type VestingBookProof,
+  type VestingTransitionShardProof,
 } from "./protocol";
 import {
   decodeVerificationKeyHex,
@@ -60,6 +72,7 @@ import {
   serializePayrollPublicInputs,
   serializeExceptionPublicInputs,
   serializeSettlementMatchPublicInputs,
+  serializeVestingTransitionPublicInputs,
 } from "./starknet-calldata";
 import { parseProverThreadCount } from "./prover-runtime";
 
@@ -109,7 +122,7 @@ async function loadPinnedSettlementBb(): Promise<string> {
   return settlementBbReady;
 }
 
-type CircuitProfile = "payroll" | "advanced" | "wage_claim" | "wage_remediation";
+type CircuitProfile = "payroll" | "advanced" | "vesting" | "wage_claim" | "wage_remediation";
 
 async function loadExceptionPinnedAssets(profile: ExceptionCircuitProfile): Promise<PinnedAssets> {
   const configuration = profile === "obligation_snapshot_v5" ? {
@@ -162,6 +175,11 @@ async function loadPinnedAssets(profile: CircuitProfile): Promise<PinnedAssets> 
     verificationKeyPath: "public/circuits/advanced_obligation-v2.vk.hex",
     circuitSha256: ADVANCED_OBLIGATION_CIRCUIT_SHA256,
     verificationKeySha256: ADVANCED_OBLIGATION_VERIFICATION_KEY_SHA256,
+  } : profile === "vesting" ? {
+    circuitPath: "public/circuits/vesting_transition-v3.json",
+    verificationKeyPath: "public/circuits/vesting_transition-v3.vk.hex",
+    circuitSha256: VESTING_TRANSITION_CIRCUIT_SHA256,
+    verificationKeySha256: VESTING_TRANSITION_VERIFICATION_KEY_SHA256,
   } : profile === "wage_claim" ? {
     circuitPath: "public/circuits/wage_claim-v3.json",
     verificationKeyPath: "public/circuits/wage_claim-v3.vk.hex",
@@ -338,6 +356,86 @@ async function proveLinkedCircuit(input: {
     witnessToErase?.fill(0);
     input.circuitInputs[0] = {};
     input.circuitInputs[1] = {};
+    await backend.destroy();
+  }
+}
+
+async function proveVestingBookCircuit(input: {
+  assets: PinnedAssets;
+  build: VestingTransitionInputBuild;
+}): Promise<VestingBookProof> {
+  const noir = new Noir(input.assets.circuit);
+  const backend = new UltraHonkBackend(input.assets.circuit.bytecode, {
+    backend: BackendType.Wasm,
+    threads: parseProverThreadCount(process.env.PAYO_PROVER_THREADS),
+    memory: { maximum: PAYROLL_SERVER_WASM_MAXIMUM_PAGES },
+  });
+  const startedAt = performance.now();
+  let witnessToErase: Uint8Array | undefined;
+  try {
+    const shards: VestingTransitionShardProof[] = [];
+    let commonPublicInputs: readonly string[] | undefined;
+    for (const shardIndex of [0, 1] as const) {
+      const { witness } = await noir.execute(input.build.circuitInputs[shardIndex]);
+      witnessToErase = witness;
+      input.build.circuitInputs[shardIndex] = {};
+      const proofData = await backend.generateProof(witness, { keccakZK: true });
+      witness.fill(0);
+      witnessToErase = undefined;
+      if (!await backend.verifyProof(proofData, { keccakZK: true })) {
+        throw new Error(`VestingBook proof shard ${shardIndex} failed local verification.`);
+      }
+      const shardIndexPosition = PAYO_VESTING_TRANSITION_PUBLIC_INPUT_COUNT - 1;
+      if (proofData.publicInputs.length !== PAYO_VESTING_TRANSITION_PUBLIC_INPUT_COUNT
+        || BigInt(proofData.publicInputs[shardIndexPosition]) !== BigInt(shardIndex)) {
+        throw new Error(`VestingBook proof shard ${shardIndex} returned an invalid public ABI.`);
+      }
+      if (commonPublicInputs) {
+        for (let index = 0; index < shardIndexPosition; index += 1) {
+          if (BigInt(commonPublicInputs[index]) !== BigInt(proofData.publicInputs[index])) {
+            throw new Error("VestingBook proof shards returned different state bindings.");
+          }
+        }
+      } else {
+        commonPublicInputs = proofData.publicInputs;
+      }
+      const publicInputs = mapVestingTransitionPublicInputs(proofData.publicInputs);
+      const proofCalldata = normalizeGaragaProofCalldata(getZKHonkCallData(
+        proofData.proof,
+        serializeVestingTransitionPublicInputs(proofData.publicInputs),
+        input.assets.verificationKey,
+      ));
+      if (proofCalldata.length > PAYO_MAX_PROOF_CALLDATA_FELTS) {
+        throw new Error(
+          `VestingBook proof shard ${shardIndex} has ${proofCalldata.length} calldata felts; Starknet submissions permit at most ${PAYO_MAX_PROOF_CALLDATA_FELTS}.`,
+        );
+      }
+      shards.push({
+        shardIndex,
+        proof: proofData.proof,
+        proofCalldata,
+        calldataHash: hashProofCalldata(proofCalldata),
+        publicInputs,
+      });
+    }
+    return {
+      proofVersion: 3,
+      entryKind: input.build.entryKind,
+      circuitSha256: input.assets.circuitSha256,
+      verificationKeySha256: VESTING_TRANSITION_VERIFICATION_KEY_SHA256,
+      provingTimeMs: Math.round(performance.now() - startedAt),
+      scheduleId: input.build.scheduleId,
+      previousStateCommitment: input.build.previousStateCommitment,
+      nextStateCommitment: input.build.nextStateCommitment,
+      releaseNullifier: input.build.releaseNullifier,
+      bookEntry: input.build.bookEntry,
+      bookEntryCommitment: input.build.bookEntryCommitment,
+      shards: shards as [VestingTransitionShardProof, VestingTransitionShardProof],
+    };
+  } finally {
+    witnessToErase?.fill(0);
+    input.build.circuitInputs[0] = {};
+    input.build.circuitInputs[1] = {};
     await backend.destroy();
   }
 }
@@ -603,18 +701,58 @@ export async function provePayoExceptionOnSelfHostedNode(input: {
   }
   const profile = payload.exceptionCircuitProfile;
   const circuitInput = payload.circuitInput;
+  const exceptionBookBuild = payload.exceptionBookBuild;
+  if (exceptionBookBuild && profile === "obligation_snapshot_v5") {
+    throw new Error("An obligation snapshot cannot append a payroll-book entry.");
+  }
   payload = { circuitInputs: [{}, {}] };
   const result = await proveExceptionCircuit({
     assets: await loadExceptionPinnedAssets(profile),
     circuitInput,
     profile,
   });
+  const vestingBook = exceptionBookBuild
+    ? await proveVestingBookCircuit({
+        assets: await loadPinnedAssets("vesting"),
+        build: exceptionBookBuild,
+      })
+    : undefined;
+  if (vestingBook) {
+    const source = result.proof.publicInputs;
+    const book = vestingBook.shards[0].publicInputs;
+    const expectedKind = profile === "wage_claim_v6" ? 3n : 4n;
+    const pairs: Array<[string, string]> = [
+      [book.agreementRootHigh, source.agreementRootHigh],
+      [book.agreementRootLow, source.agreementRootLow],
+      [book.manifestRootHigh, source.manifestRootHigh],
+      [book.manifestRootLow, source.manifestRootLow],
+      [book.policyRootHigh, source.policyRootHigh],
+      [book.policyRootLow, source.policyRootLow],
+      [book.fxRootHigh, source.fxRootHigh],
+      [book.fxRootLow, source.fxRootLow],
+      [book.subjectNullifierHigh, source.subjectNullifierHigh],
+      [book.subjectNullifierLow, source.subjectNullifierLow],
+      [book.parentFactHigh, source.parentFactCommitmentHigh],
+      [book.parentFactLow, source.parentFactCommitmentLow],
+      [book.factHigh, source.factCommitmentHigh],
+      [book.factLow, source.factCommitmentLow],
+      [book.sourceSealAddress, source.sealAddress],
+      [book.sourceProofVersion, source.proofVersion],
+      [book.validityStart, source.validityStart],
+      [book.validityExpiry, source.validityExpiry],
+    ];
+    if (BigInt(book.entryKind) !== expectedKind
+      || pairs.some(([left, right]) => BigInt(left) !== BigInt(right))) {
+      throw new Error("The generated payroll-book proof is not bound to its exception proof.");
+    }
+  }
   return {
     version: 2,
     type: "exception-proof-complete",
     requestId: input.requestId,
     scheme: "ultra_keccak_zk_honk",
     ...result,
+    ...(vestingBook ? { vestingBook } : {}),
   };
 }
 
@@ -628,11 +766,54 @@ export async function provePayrollOnSelfHostedNode(input: {
 
   let payload = decryptVaultRecord<EncryptedPayrollWitness>(input.encryptedWitness, input.principal);
   if ("advancedBuildInput" in payload) {
-    const payroll = await buildPayrollIntegrityInputsFromSerialized(payload.advancedBuildInput.payroll);
+    const request = payload.advancedBuildInput;
+    const payroll = await buildPayrollIntegrityInputsFromSerialized(request.payroll);
     const advanced = buildAdvancedObligationInputs({
       payroll,
-      agreements: payload.advancedBuildInput.agreements,
+      agreements: request.agreements,
     });
+    let vestingBuild: VestingTransitionInputBuild | undefined;
+    if (request.vestingBook) {
+      const privateVesting = request.agreements.filter((agreement) =>
+        agreement.agreementVersion === "payo-agreement-v2"
+          && agreement.paymentPlan.kind === "private_vesting");
+      if (privateVesting.length > 1) {
+        throw new Error("A stateful vesting payroll can release exactly one private schedule per run.");
+      }
+      const periodStart = BigInt(request.vestingBook.periodStart);
+      const periodEnd = BigInt(request.vestingBook.periodEnd);
+      const totalsSalt = derivePayrollBookTotalsSalt({
+        organizationSecret: request.payroll.organizationSecret,
+        runNullifier: payroll.runNullifier,
+      });
+      vestingBuild = privateVesting.length === 1
+        ? await buildVestingTransitionInputs({
+            payroll,
+            agreement: privateVesting[0],
+            ownerAddress: request.vestingBook.ownerAddress,
+            bookSealAddress: request.vestingBook.bookSealAddress,
+            periodStart,
+            periodEnd,
+            previousStateSalt: request.vestingBook.previousStateSalt,
+            nextStateSalt: request.vestingBook.nextStateSalt,
+            totalsSalt,
+            ...(request.vestingBook.attestation
+              ? { attestation: request.vestingBook.attestation }
+              : {}),
+          })
+        : await buildPayrollBookEntryInputs({
+            payroll,
+            ownerAddress: request.vestingBook.ownerAddress,
+            bookSealAddress: request.vestingBook.bookSealAddress,
+            periodStart,
+            periodEnd,
+            entryKind: request.vestingBook.entryKind ?? "ordinary",
+            totalsSalt,
+            ...(request.vestingBook.attestation
+              ? { attestation: request.vestingBook.attestation }
+              : {}),
+          });
+    }
     payload = { circuitInputs: [{}, {}] };
     payroll.witness.circuitInputs = [{}, {}];
     const mergedProof = await proveLinkedCircuit({
@@ -640,6 +821,12 @@ export async function provePayrollOnSelfHostedNode(input: {
       circuitInputs: advanced.witness.circuitInputs,
       label: "AdvancedPayrollIntegrity",
     });
+    const vestingBook = vestingBuild
+      ? await proveVestingBookCircuit({
+          assets: await loadPinnedAssets("vesting"),
+          build: vestingBuild,
+        })
+      : undefined;
     return {
       version: 1,
       type: "proof-complete",
@@ -647,7 +834,8 @@ export async function provePayrollOnSelfHostedNode(input: {
       scheme: "ultra_keccak_zk_honk",
       shards: mergedProof.shards,
       circuitSha256: ADVANCED_OBLIGATION_CIRCUIT_SHA256,
-      provingTimeMs: mergedProof.provingTimeMs,
+      provingTimeMs: mergedProof.provingTimeMs + (vestingBook?.provingTimeMs ?? 0),
+      ...(vestingBook ? { vestingBook } : {}),
     };
   }
   if ("circuitProfile" in payload) {

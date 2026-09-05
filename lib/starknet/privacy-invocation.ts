@@ -15,6 +15,7 @@ const MAX_SPAN = 12_000;
 type Hex = `0x${string}`;
 type Felt = { bigint: bigint; hex: Hex };
 type Cursor = { values: readonly unknown[]; index: number; label: string };
+type ExternalInvocation = { contractAddress: Hex; calldata: Hex[] };
 
 export type DirectPrivacySettlementEvidence = {
   senderAddress: Hex;
@@ -85,6 +86,34 @@ function takeSpan(cursor: Cursor, label: string): Felt[] {
   return output;
 }
 
+function canonicalExternalInvocation(
+  value: { contractAddress: string; calldata: readonly string[] },
+  label: string,
+): ExternalInvocation {
+  const contractAddress = felt(value.contractAddress, label + " target");
+  if (contractAddress.bigint === 0n) throw new Error(label + " target is zero.");
+  if (!Array.isArray(value.calldata) || value.calldata.length > MAX_SPAN) {
+    throw new Error(label + " calldata is outside its canonical range.");
+  }
+  return {
+    contractAddress: contractAddress.hex,
+    calldata: value.calldata.map((entry, index) =>
+      felt(entry, label + " calldata " + index).hex),
+  };
+}
+
+function assertExternalInvocation(
+  actual: ExternalInvocation,
+  expected: ExternalInvocation,
+  label: string,
+): void {
+  if (
+    BigInt(actual.contractAddress) !== BigInt(expected.contractAddress)
+    || actual.calldata.length !== expected.calldata.length
+    || actual.calldata.some((entry, index) => BigInt(entry) !== BigInt(expected.calldata[index]))
+  ) throw new Error(label + " was substituted.");
+}
+
 function invocationRecord(value: unknown): Record<string, unknown> {
   const outer = asRecord(value, "Privacy SDK proof invocation");
   return asRecord(outer.invocation, "Privacy SDK signed invocation");
@@ -95,7 +124,10 @@ function parseCreateNotes(input: {
   poolAddress: string;
   policyAccountAddress: string;
   viewingKey: string;
-}): Array<Omit<SettlementPayrollNote, "position" | "noteId" | "packedValue">> {
+}): {
+  created: Array<Omit<SettlementPayrollNote, "position" | "noteId" | "packedValue">>;
+  externalInvocations: ExternalInvocation[];
+} {
   const signed = invocationRecord(input.invocation);
   sameFelt(signed.sender_address, input.poolAddress, "Privacy SDK invocation sender");
   if (!Array.isArray(signed.calldata)) {
@@ -134,6 +166,7 @@ function parseCreateNotes(input: {
   if (actionCount < 1) throw new Error("Privacy SDK invocation contains no actions.");
 
   const created: Array<Omit<SettlementPayrollNote, "position" | "noteId" | "packedValue">> = [];
+  const externalInvocations: ExternalInvocation[] = [];
   for (let actionIndex = 0; actionIndex < actionCount; actionIndex += 1) {
     const variant = boundedNumber(
       take(inner, "action " + actionIndex + " variant"),
@@ -189,23 +222,31 @@ function parseCreateNotes(input: {
     } else if (variant === 7) {
       for (const field of ["recipient", "token", "amount", "random"]) take(inner, "Withdraw " + field);
     } else if (variant === 8) {
-      take(inner, "InvokeExternal target");
-      takeSpan(inner, "InvokeExternal calldata");
+      const contractAddress = take(inner, "InvokeExternal target");
+      if (contractAddress.bigint === 0n) {
+        throw new Error("Privacy SDK InvokeExternal target is zero.");
+      }
+      externalInvocations.push({
+        contractAddress: contractAddress.hex,
+        calldata: takeSpan(inner, "InvokeExternal calldata").map((entry) => entry.hex),
+      });
     } else {
       take(inner, "ComputeAndInvoke target");
       takeSpan(inner, "ComputeAndInvoke compute data");
       takeSpan(inner, "ComputeAndInvoke invoke data");
+      throw new Error("Autonomous settlement forbids computed external pool invocations.");
     }
   }
   if (inner.index !== inner.values.length) {
     throw new Error("Privacy SDK client-action serialization has trailing calldata.");
   }
-  return created;
+  return { created, externalInvocations };
 }
 
 function parseServerActions(
   poolCalldata: readonly unknown[],
-): { canonical: Hex[]; emitted: SettlementEmittedNote[] } {
+  expectedExternalInvocation?: ExternalInvocation,
+): { canonical: Hex[]; emitted: SettlementEmittedNote[]; externalInvocations: ExternalInvocation[] } {
   const canonical = poolCalldata.map((value, index) =>
     felt(value, "Privacy SDK pool calldata " + index).hex);
   const cursor: Cursor = { values: canonical, index: 0, label: "Privacy SDK server actions" };
@@ -216,6 +257,7 @@ function parseServerActions(
   );
   if (actionCount < 1) throw new Error("Privacy SDK prover emitted no server actions.");
   const emitted: SettlementEmittedNote[] = [];
+  const externalInvocations: ExternalInvocation[] = [];
   for (let actionIndex = 0; actionIndex < actionCount; actionIndex += 1) {
     const variant = boundedNumber(
       take(cursor, "action " + actionIndex + " variant"),
@@ -240,7 +282,19 @@ function parseServerActions(
     } else if (variant === 9) {
       take(cursor, "EmitNoteUsed nullifier");
     } else if (variant === 10) {
-      throw new Error("Autonomous settlement forbids external pool invocations.");
+      if (!expectedExternalInvocation) {
+        throw new Error("Autonomous settlement forbids external pool invocations.");
+      }
+      const invocation = {
+        contractAddress: take(cursor, "Invoke target").hex,
+        calldata: takeSpan(cursor, "Invoke calldata").map((entry) => entry.hex),
+      };
+      assertExternalInvocation(
+        invocation,
+        expectedExternalInvocation,
+        "Privacy SDK server book callback",
+      );
+      externalInvocations.push(invocation);
     } else {
       throw new Error("Privacy SDK prover emitted a forbidden public or unsupported server action.");
     }
@@ -248,7 +302,7 @@ function parseServerActions(
   if (take(cursor, "screening option").bigint !== 1n || cursor.index !== cursor.values.length) {
     throw new Error("Autonomous private payroll requires an exact empty screening attestation.");
   }
-  return { canonical, emitted };
+  return { canonical, emitted, externalInvocations };
 }
 
 /**
@@ -263,6 +317,7 @@ export function extractDirectPrivacySettlementEvidence(input: {
   chainId: string;
   poolCalldata: readonly unknown[];
   payrollLineCount: number;
+  expectedExternalInvocation?: { contractAddress: string; calldata: readonly string[] };
 }): DirectPrivacySettlementEvidence {
   if (
     !Number.isInteger(input.payrollLineCount)
@@ -271,8 +326,24 @@ export function extractDirectPrivacySettlementEvidence(input: {
   ) {
     throw new Error("Settlement payroll line count must be 1–50.");
   }
-  const creates = parseCreateNotes(input);
-  const server = parseServerActions(input.poolCalldata);
+  const expectedExternalInvocation = input.expectedExternalInvocation
+    ? canonicalExternalInvocation(input.expectedExternalInvocation, "Expected payroll-book callback")
+    : undefined;
+  const client = parseCreateNotes(input);
+  const creates = client.created;
+  const server = parseServerActions(input.poolCalldata, expectedExternalInvocation);
+  const expectedInvocationCount = expectedExternalInvocation ? 1 : 0;
+  if (
+    client.externalInvocations.length !== expectedInvocationCount
+    || server.externalInvocations.length !== expectedInvocationCount
+  ) throw new Error("Privacy SDK did not bind exactly the expected payroll-book callback.");
+  if (expectedExternalInvocation) {
+    assertExternalInvocation(
+      client.externalInvocations[0],
+      expectedExternalInvocation,
+      "Privacy SDK client book callback",
+    );
+  }
   if (creates.length !== server.emitted.length) {
     throw new Error("Privacy SDK proof output does not cover every encrypted note exactly once.");
   }

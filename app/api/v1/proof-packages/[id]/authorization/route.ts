@@ -5,6 +5,7 @@ import {
   getExceptionAuthorizationJob,
 } from "@/lib/persistence/exception-authorization-repository";
 import { requirePrincipal } from "@/lib/server/auth";
+import { getPayoDeploymentConfig, getPayoVestingBookConfig } from "@/lib/server/payo-deployment";
 import { apiFailure, readJson } from "@/lib/server/http";
 
 type AuthorizationContext = { params: Promise<{ id: string }> };
@@ -26,10 +27,15 @@ export async function POST(request: Request, context: AuthorizationContext) {
     const principal = await requirePrincipal(request);
     const { id } = await context.params;
     const body = exceptionAuthorizationRequestSchema.parse(await readJson(request));
+    const deployment = getPayoDeploymentConfig();
+    const book = getPayoVestingBookConfig();
     const authorization = await enqueueExceptionAuthorization({
       proofBundleId: uuidV7Schema.parse(id),
-      proofCalldata: body.proofCalldata,
+      request: body,
       principal,
+      chainId: deployment.chainId,
+      exceptionSealAddress: deployment.sealAddress,
+      bookSealAddress: book.sealAddress,
     });
     return Response.json(
       { authorization },

@@ -139,6 +139,7 @@ export async function leaseAgentExecutions(
         if (preSubmission && (reservation.state !== "reserved" || reservation.expiresAt <= now)) {
           throw new Error("RESERVATION_INACTIVE");
         }
+        if (reservation.createdAt > now) throw new Error("RESERVATION_TIME_INVALID");
         if (!preSubmission && reservation.state !== "committed") {
           throw new Error("RESERVATION_NOT_COMMITTED");
         }
@@ -160,7 +161,18 @@ export async function leaseAgentExecutions(
             principalId: capability.principalId,
             capabilityHash: capability.capabilityHash,
           });
-          const authorization = authorizePaymentBatch(signedCapability.capability, request.intents, now);
+          // Intent expiry is an admission boundary, not a proof-runtime
+          // deadline. The request already passed an atomic, serialized policy
+          // check when this reservation was created; replay that exact decision
+          // at its admission timestamp. Current capability revocation/expiry,
+          // reservation expiry, and run-version drift are checked above. Using
+          // `now` here killed valid Mainnet jobs whenever proof generation took
+          // longer than the intent's five-minute anti-replay window.
+          const authorization = authorizePaymentBatch(
+            signedCapability.capability,
+            request.intents,
+            reservation.createdAt,
+          );
           if (!authorization.allowed || authorization.requiresApproval) {
             throw new Error("AGENT_EXECUTION_REAUTHORIZATION_DENIED");
           }

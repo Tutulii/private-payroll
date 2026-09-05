@@ -43,6 +43,7 @@ const capability: AgentCapability = {
 const deployment = {
   chainId: "0x534e5f5345504f4c4941" as const,
   sealAddress: "0x444" as const,
+  bookSealAddress: "0x445" as const,
   poolAddress: "0x333" as const,
   policyAccountClassHash: "0xabc" as const,
   policyAccountAddress: "0x111" as const,
@@ -78,12 +79,13 @@ describe("direct privacy account provisioning plan", () => {
     expect(plan.config).toMatchObject({
       policyAccountAddress: "0x111",
       policyId: "0x222",
-      sealMode: 0,
+      sealMode: 2,
       proofVersion: 2,
       schemaVersion: 1,
       maxCallCount: 1,
       poolAddress: "0x333",
       sealAddress: "0x444",
+      bookSealAddress: "0x445",
     });
     const authorization = plan.authorizedRuns[0];
     const leaf = computePolicyRunLeaf({

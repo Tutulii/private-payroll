@@ -122,6 +122,25 @@ export const payoPhase4ArtifactDefinitions = Object.freeze({
   }),
 });
 
+
+export const payoVestingBookArtifactDefinitions = Object.freeze({
+  vestingVerifier: Object.freeze({
+    sierra: "contracts/vesting_verifier_v3/target/dev/vesting_verifier_v3_PayoVestingBookV3Verifier.contract_class.json",
+    casm: "contracts/vesting_verifier_v3/target/dev/vesting_verifier_v3_PayoVestingBookV3Verifier.compiled_contract_class.json",
+    sourceDirectory: "contracts/vesting_verifier_v3",
+  }),
+  vestingBundle: Object.freeze({
+    sierra: "contracts/vesting_verifier_v3/target/dev/vesting_verifier_v3_PayoVestingBookV3BundleVerifier.contract_class.json",
+    casm: "contracts/vesting_verifier_v3/target/dev/vesting_verifier_v3_PayoVestingBookV3BundleVerifier.compiled_contract_class.json",
+    sourceDirectory: "contracts/vesting_verifier_v3",
+  }),
+  vestingBookSeal: Object.freeze({
+    sierra: "contracts/target/dev/payo_contracts_PayoVestingBookSeal.contract_class.json",
+    casm: "contracts/target/dev/payo_contracts_PayoVestingBookSeal.compiled_contract_class.json",
+    sourceDirectory: "contracts",
+  }),
+});
+
 async function filesRecursively(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   const nested = await Promise.all(entries.map((entry) => {
@@ -325,6 +344,41 @@ export async function readAllPayoPhase4DeployArtifacts() {
     Object.keys(payoPhase4ArtifactDefinitions).map(async (name) => [
       name,
       await readPayoPhase4DeployArtifact(name),
+    ]),
+  );
+  return Object.fromEntries(entries);
+}
+
+export async function assertFreshPayoVestingBookDeployArtifacts() {
+  await assertFreshDefinitions(payoVestingBookArtifactDefinitions);
+}
+
+export async function readPayoVestingBookDeployArtifact(name) {
+  const definition = payoVestingBookArtifactDefinitions[name];
+  if (!definition) throw new Error(`Unknown PAYO VestingBook artifact ${name}.`);
+  const [sierraSource, casmSource] = await Promise.all([
+    readFile(resolve(repositoryRoot, definition.sierra), "utf8"),
+    readFile(resolve(repositoryRoot, definition.casm), "utf8"),
+  ]);
+  const sierra = JSON.parse(sierraSource);
+  const casm = JSON.parse(casmSource);
+  return {
+    name,
+    definition,
+    sierra,
+    casm,
+    classHash: num.toHex(BigInt(hash.computeContractClassHash(sierra))),
+    compiledClassHash: num.toHex(BigInt(hash.computeCompiledClassHash(casm))),
+    sierraSha256: sha256(sierraSource),
+    casmSha256: sha256(casmSource),
+  };
+}
+
+export async function readAllPayoVestingBookDeployArtifacts() {
+  const entries = await Promise.all(
+    Object.keys(payoVestingBookArtifactDefinitions).map(async (name) => [
+      name,
+      await readPayoVestingBookDeployArtifact(name),
     ]),
   );
   return Object.fromEntries(entries);

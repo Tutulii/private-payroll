@@ -288,6 +288,20 @@
       "when": 1788186864969,
       "tag": "0040_wise_donald_blake",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1788501873775,
+      "tag": "0041_stale_gambit",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1788530489117,
+      "tag": "0042_huge_bulldozer",
+      "breakpoints": true
     }
   ]
 }

@@ -123,6 +123,38 @@ describe("structured agent execution worker", () => {
     }), expect.any(Date));
   });
 
+  it("surfaces privacy-safe adapter codes but hides arbitrary exception text", async () => {
+    const coded = dependencies();
+    await expect(processAgentExecution({
+      job: baseJob,
+      driver: driver({
+        prepareAndVerify: vi.fn(async () => {
+          throw new Error("AGENT_PROVER_UNREACHABLE");
+        }),
+      }),
+      dependencies: coded,
+    })).resolves.toBe("preparing");
+    expect(coded.defer).toHaveBeenCalledWith(baseJob, expect.objectContaining({
+      errorCode: "AGENT_PROVER_UNREACHABLE",
+      permanent: false,
+      preSubmission: true,
+    }), expect.any(Date));
+
+    const opaque = dependencies();
+    await expect(processAgentExecution({
+      job: baseJob,
+      driver: driver({
+        prepareAndVerify: vi.fn(async () => {
+          throw new Error("fetch https://secret.invalid failed for encrypted payload");
+        }),
+      }),
+      dependencies: opaque,
+    })).resolves.toBe("preparing");
+    expect(opaque.defer).toHaveBeenCalledWith(baseJob, expect.objectContaining({
+      errorCode: "AGENT_PREPARATION_FAILED",
+    }), expect.any(Date));
+  });
+
   it("never resubmits when the original submission outcome is unknown", async () => {
     const deps = dependencies();
     const executionDriver = driver({ recoverSubmission: vi.fn(async () => null) });

@@ -50,6 +50,7 @@ export function buildConfigurePolicyCall(configInput: DirectPrivacyAccountConfig
       config.sessionPublicKey,
       config.poolAddress,
       config.sealAddress,
+      config.bookSealAddress ?? "0x0",
       felt(config.sealMode),
       felt(config.proofVersion),
       felt(config.schemaVersion),

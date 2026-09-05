@@ -92,7 +92,7 @@ describe("policy-owner signer client", () => {
     const configuration: Call = {
       contractAddress: "0x111",
       entrypoint: "configure_policy",
-      calldata: Array.from({ length: 19 }, (_value, index) => `0x${(index + 1).toString(16)}`),
+      calldata: Array.from({ length: 20 }, (_value, index) => `0x${(index + 1).toString(16)}`),
     };
     await expect(client().estimatePolicy(configuration)).resolves.toEqual({
       blockNumber: 42,
@@ -116,7 +116,7 @@ describe("policy-owner signer client", () => {
     const configuration: Call = {
       contractAddress: "0x111",
       entrypoint: "configure_policy",
-      calldata: Array.from({ length: 19 }, (_value, index) => `0x${(index + 1).toString(16)}`),
+      calldata: Array.from({ length: 20 }, (_value, index) => `0x${(index + 1).toString(16)}`),
     };
     await expect(client().configurePolicy(configuration)).resolves.toEqual({ replayed: true });
   });

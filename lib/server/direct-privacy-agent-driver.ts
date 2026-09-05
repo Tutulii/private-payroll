@@ -955,6 +955,7 @@ async function prepareSdkExecution(
       assertDirectPrivacySdkResult({ result: sdkResult, poolAddress: context.config.poolAddress });
       const poolCalldata = sdkResult.callAndProof.call.calldata;
       if (!poolCalldata) throw new Error("DIRECT_POOL_CALLDATA_MISSING");
+      const expectedExternalInvocation = plan.actions.invoke?.callBuilder();
       const settlementEvidence = extractDirectPrivacySettlementEvidence({
         invocation,
         poolAddress: context.config.poolAddress,
@@ -963,6 +964,7 @@ async function prepareSdkExecution(
         chainId: context.config.chainId,
         poolCalldata,
         payrollLineCount: job.request.intents.length,
+        ...(expectedExternalInvocation ? { expectedExternalInvocation } : {}),
       });
       const settlementWitness = settlementMatchWitnessSchema.parse({
         version: "payo-settlement-match-witness-v1",

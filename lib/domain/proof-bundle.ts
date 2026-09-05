@@ -16,7 +16,10 @@ import {
   WAGE_CLAIM_VNEXT_VERIFICATION_KEY_SHA256,
   WAGE_REMEDIATION_VNEXT_CIRCUIT_SHA256,
   WAGE_REMEDIATION_VNEXT_VERIFICATION_KEY_SHA256,
+  VESTING_TRANSITION_CIRCUIT_SHA256,
+  VESTING_TRANSITION_VERIFICATION_KEY_SHA256,
 } from "@/lib/proof/protocol";
+import { universalPayrollBookEntrySchema } from "./universal-payroll-book";
 import { commitmentSchema, starknetAddressSchema, uuidV7Schema } from "./records";
 
 export const starknetFeltSchema = z.string().regex(/^0x(?:0|[1-9a-fA-F][0-9a-fA-F]{0,62})$/);
@@ -225,12 +228,6 @@ export const proofVerificationRequestSchema = z.object({
 
 export type ProofVerificationRequest = z.infer<typeof proofVerificationRequestSchema>;
 
-export const exceptionAuthorizationRequestSchema = z.object({
-  proofCalldata: exceptionProofCalldataSchema,
-}).strict();
-
-export type ExceptionAuthorizationRequest = z.infer<typeof exceptionAuthorizationRequestSchema>;
-
 export const payrollAuthorizationRequestSchema = z.object({
   payrollProofBundleId: uuidV7Schema,
   snapshotProofBundleId: uuidV7Schema,
@@ -239,3 +236,109 @@ export const payrollAuthorizationRequestSchema = z.object({
 }).strict();
 
 export type PayrollAuthorizationRequest = z.infer<typeof payrollAuthorizationRequestSchema>;
+
+export const vestingTransitionPublicInputsSchema = z.object({
+  chainId: starknetFeltSchema,
+  sealAddress: starknetAddressSchema,
+  proofVersion: z.literal("3"),
+  schemaVersion: z.literal("1"),
+  entryKind: z.enum(["0", "1", "2", "3", "4"]),
+  agreementRootHigh: uintStringSchema,
+  agreementRootLow: uintStringSchema,
+  manifestRootHigh: uintStringSchema,
+  manifestRootLow: uintStringSchema,
+  policyRootHigh: uintStringSchema,
+  policyRootLow: uintStringSchema,
+  fxRootHigh: uintStringSchema,
+  fxRootLow: uintStringSchema,
+  runNullifierHigh: uintStringSchema,
+  runNullifierLow: uintStringSchema,
+  subjectNullifierHigh: uintStringSchema,
+  subjectNullifierLow: uintStringSchema,
+  parentFactHigh: uintStringSchema,
+  parentFactLow: uintStringSchema,
+  factHigh: uintStringSchema,
+  factLow: uintStringSchema,
+  ownerAddress: uintStringSchema,
+  sourceSealAddress: uintStringSchema,
+  sourceProofVersion: uintStringSchema,
+  attestationRootHigh: uintStringSchema,
+  attestationRootLow: uintStringSchema,
+  shard0ContributorCount: uintStringSchema,
+  shard1ContributorCount: uintStringSchema,
+  totalsDisclosed: z.enum(["0", "1"]),
+  totalsCommitmentHigh: uintStringSchema,
+  totalsCommitmentLow: uintStringSchema,
+  shard0StrkGross: uintStringSchema,
+  shard0StrkDeductions: uintStringSchema,
+  shard0StrkNet: uintStringSchema,
+  shard0UsdcGross: uintStringSchema,
+  shard0UsdcDeductions: uintStringSchema,
+  shard0UsdcNet: uintStringSchema,
+  shard1StrkGross: uintStringSchema,
+  shard1StrkDeductions: uintStringSchema,
+  shard1StrkNet: uintStringSchema,
+  shard1UsdcGross: uintStringSchema,
+  shard1UsdcDeductions: uintStringSchema,
+  shard1UsdcNet: uintStringSchema,
+  scheduleIdHigh: uintStringSchema,
+  scheduleIdLow: uintStringSchema,
+  previousStateHigh: uintStringSchema,
+  previousStateLow: uintStringSchema,
+  nextStateHigh: uintStringSchema,
+  nextStateLow: uintStringSchema,
+  releaseNullifierHigh: uintStringSchema,
+  releaseNullifierLow: uintStringSchema,
+  bookEntryHigh: uintStringSchema,
+  bookEntryLow: uintStringSchema,
+  periodStart: uintStringSchema,
+  periodEnd: uintStringSchema,
+  validityStart: uintStringSchema,
+  validityExpiry: uintStringSchema,
+  shardIndex: z.enum(["0", "1"]),
+}).strict();
+
+const vestingAuthorizationShardSchema = z.object({
+  shardIndex: z.union([z.literal(0), z.literal(1)]),
+  proofCalldata: payrollProofCalldataSchema,
+  calldataHash: starknetFeltSchema,
+  publicInputs: vestingTransitionPublicInputsSchema,
+}).strict();
+
+export const vestingBookProofSubmissionSchema = z.object({
+  proofVersion: z.literal(3),
+  entryKind: z.enum(["ordinary", "vesting", "agent", "claim", "remediation"]),
+  circuitSha256: z.literal(VESTING_TRANSITION_CIRCUIT_SHA256),
+  verificationKeySha256: z.literal(VESTING_TRANSITION_VERIFICATION_KEY_SHA256),
+  scheduleId: commitmentSchema,
+  previousStateCommitment: commitmentSchema,
+  nextStateCommitment: commitmentSchema,
+  releaseNullifier: commitmentSchema,
+  bookEntry: universalPayrollBookEntrySchema,
+  bookEntryCommitment: commitmentSchema,
+  shards: z.tuple([vestingAuthorizationShardSchema, vestingAuthorizationShardSchema]),
+}).strict().superRefine((proof, context) => {
+  if (
+    proof.shards[0].shardIndex !== 0
+    || proof.shards[1].shardIndex !== 1
+    || proof.shards[0].publicInputs.shardIndex !== "0"
+    || proof.shards[1].publicInputs.shardIndex !== "1"
+  ) {
+    context.addIssue({ code: "custom", path: ["shards"], message: "Vesting proof shards are not ordered." });
+  }
+});
+
+export const exceptionAuthorizationRequestSchema = z.object({
+  proofCalldata: exceptionProofCalldataSchema,
+  vestingBook: vestingBookProofSubmissionSchema,
+}).strict();
+
+export type ExceptionAuthorizationRequest = z.infer<typeof exceptionAuthorizationRequestSchema>;
+
+export const vestingAuthorizationRequestSchema = z.object({
+  payrollProofBundleId: uuidV7Schema,
+  payrollShards: z.tuple([payrollProofCalldataSchema, payrollProofCalldataSchema]),
+  vestingBook: vestingBookProofSubmissionSchema,
+}).strict();
+
+export type VestingAuthorizationRequest = z.infer<typeof vestingAuthorizationRequestSchema>;

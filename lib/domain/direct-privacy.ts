@@ -177,7 +177,7 @@ export const directPrivacyAccountConfigSchema = z.object({
   policyAccountAddress: feltSchema,
   policyId: feltSchema,
   sessionPublicKey: feltSchema,
-  sealMode: z.union([z.literal(0), z.literal(1)]),
+  sealMode: z.union([z.literal(0), z.literal(1), z.literal(2)]),
   proofVersion: z.number().int().positive(),
   schemaVersion: z.number().int().positive(),
   payrollPolicyRoot: commitmentSchema,
@@ -193,6 +193,7 @@ export const directPrivacyAccountConfigSchema = z.object({
   maxCallCount: z.number().int().positive().max(4_294_967_295),
   poolAddress: feltSchema,
   sealAddress: feltSchema,
+  bookSealAddress: feltSchema.optional(),
   tokenAddresses: z.object({
     STRK: feltSchema,
     USDC: feltSchema,

@@ -1,0 +1,69 @@
+{
+  "plan": {
+    "schemaVersion": "payo-private-exit-mainnet-plan-v1",
+    "generatedAt": "2026-09-05T03:19:58.765Z",
+    "network": "starknet-mainnet",
+    "chainId": "0x534e5f4d41494e",
+    "deployerAddress": "0x126a7a572cf8935d069af937e9f7b27a24949e271e1fbccfe4de0c0d8dc8ea9",
+    "upstream": {
+      "repository": "https://github.com/starkware-libs/starknet-privacy",
+      "commit": "bc75e4bac71ad0ce10c6e63effc33b5b25131a4f",
+      "contract": "EkuboSwapAnonymizer"
+    },
+    "deployment": {
+      "address": "0x6737a6cdde0e0c4f39d88ec7301e1db8d7c46ffed35ade0ee9a56ed87ab784",
+      "classHash": "0x2a4ac595283d4d64b9952f5ef5c0da1775bfdb7c9d92237524a21dd8d19ebd7",
+      "salt": "0x7061796f2d707269766174652d657869742d656b75626f2d7631",
+      "constructorCalldata": [],
+      "unique": false
+    },
+    "evidence": {
+      "path": "evidence/block5-private-exit-upstream.json",
+      "upstreamLockSha256": "3c7980bc3eb3eaedd5469dd6b0ea6234f3df842ca7ad4dc681811208c7de2396",
+      "anonymizerSourceSha256": "74bea293185e6daae620159717547104549bc477aee22557e4da14a22dda55c4",
+      "integrationSourceSha256": "642e7f67ea6f196e9fce8b9b77c0722ddabe065548fea72618fa13467f234d39",
+      "releaseArtifactSha256": "2e92b97500f201b3478dedaa945a01351744dd5ab55bc11d848dab04467f3648"
+    },
+    "releaseRequirements": {
+      "classDeclared": true,
+      "emptyConstructor": true,
+      "exactPrivacyInvokeAbi": true,
+      "deployedClassHashReadback": true,
+      "configureOnlyAfterReadback": true,
+      "tinyReadyWalletCanaryRequired": true
+    }
+  },
+  "observedAtBlock": 14382689,
+  "reviewedClass": {
+    "classHash": "0x2a4ac595283d4d64b9952f5ef5c0da1775bfdb7c9d92237524a21dd8d19ebd7",
+    "contractClassVersion": "0.1.0",
+    "emptyConstructor": true,
+    "exactPrivacyInvokeAbi": true
+  },
+  "mutationSubmitted": false,
+  "feeEstimate": {
+    "observedAt": "2026-09-05T04:54:21.242Z",
+    "alreadyDeployed": false,
+    "nonce": "0x66",
+    "feeFri": "83765866841584179",
+    "feeStrk": "0.083765866841584179",
+    "balanceFri": "505966086733170101951",
+    "balanceStrk": "505.966086733170101951",
+    "currentlyFunded": true,
+    "resourceBounds": {
+      "l2_gas": {
+        "max_amount": "1783921",
+        "max_price_per_unit": "46946386515"
+      },
+      "l1_gas": {
+        "max_amount": "0",
+        "max_price_per_unit": "136646395840810"
+      },
+      "l1_data_gas": {
+        "max_amount": "336",
+        "max_price_per_unit": "51256140949"
+      }
+    },
+    "mutationSubmitted": false
+  }
+}

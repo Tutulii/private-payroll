@@ -31,6 +31,7 @@ export const ENCRYPTED_RECORD_TYPES = [
   "settlement",
   "receipt",
   "disclosure-grant",
+  "payroll-report",
   "agent-capability",
   "wage-claim",
   "remediation",

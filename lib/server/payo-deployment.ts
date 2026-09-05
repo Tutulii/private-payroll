@@ -15,6 +15,11 @@ export type PayoRegistryConfig = {
   obligationRegistryAddress: string;
 };
 
+export type PayoVestingBookConfig = {
+  chainId: string;
+  sealAddress: string;
+};
+
 function configuredAddress(privateName: string, publicName: string, label: string): string {
   const privateValue = process.env[privateName];
   const publicValue = process.env[publicName];
@@ -45,6 +50,18 @@ export function getPayoRegistryConfig(): PayoRegistryConfig {
       "PAYO_OBLIGATION_REGISTRY_ADDRESS",
       "NEXT_PUBLIC_PAYO_OBLIGATION_REGISTRY_ADDRESS",
       "The PAYO obligation registry",
+    ),
+  };
+}
+
+export function getPayoVestingBookConfig(): PayoVestingBookConfig {
+  const deployment = getPayoDeploymentConfig();
+  return {
+    chainId: deployment.chainId,
+    sealAddress: configuredAddress(
+      "PAYO_VESTING_BOOK_SEAL_ADDRESS",
+      "NEXT_PUBLIC_PAYO_VESTING_BOOK_SEAL_ADDRESS",
+      "The PAYO vesting and payroll-book seal",
     ),
   };
 }
@@ -89,38 +106,59 @@ export function getPayoDeploymentConfig(): PayoDeploymentConfig {
  */
 export function getPayoPayrollProofDeployments(): readonly PayoDeploymentConfig[] {
   const primary = getPayoDeploymentConfig();
-  const privateAgentSeal = process.env.PAYO_AGENT_SEAL_ADDRESS?.trim();
-  const publicAgentSeal = process.env.NEXT_PUBLIC_PAYO_AGENT_SEAL_ADDRESS?.trim();
-  if (!privateAgentSeal && !publicAgentSeal) return [primary];
-  if (!privateAgentSeal || !publicAgentSeal) {
-    throw new ApiError(
-      503,
-      "The autonomous PAYO seal server and browser configuration is incomplete.",
-      "PAYO_AGENT_SEAL_CONFIG_INCOMPLETE",
-    );
-  }
-  let canonicalPrivateAgent: string;
-  let canonicalPublicAgent: string;
-  try {
-    canonicalPrivateAgent = validateAndParseAddress(privateAgentSeal);
-    canonicalPublicAgent = validateAndParseAddress(publicAgentSeal);
-  } catch {
-    throw new ApiError(
-      503,
-      "The configured autonomous PAYO seal address is invalid.",
-      "PAYO_AGENT_SEAL_CONFIG_INVALID",
-    );
-  }
-  if (BigInt(canonicalPrivateAgent) !== BigInt(canonicalPublicAgent)) {
-    throw new ApiError(
-      503,
-      "Server and browser autonomous PAYO seal addresses do not match.",
-      "PAYO_AGENT_SEAL_CONFIG_MISMATCH",
-    );
-  }
-  if (BigInt(canonicalPrivateAgent) === BigInt(primary.sealAddress)) return [primary];
-  return [
-    primary,
-    { chainId: primary.chainId, sealAddress: canonicalPrivateAgent },
-  ];
+  const deployments: PayoDeploymentConfig[] = [primary];
+
+  const appendOptionalSeal = (input: {
+    privateName: string;
+    publicName: string;
+    label: string;
+    codePrefix: string;
+  }) => {
+    const privateValue = process.env[input.privateName]?.trim();
+    const publicValue = process.env[input.publicName]?.trim();
+    if (!privateValue && !publicValue) return;
+    if (!privateValue || !publicValue) {
+      throw new ApiError(
+        503,
+        `${input.label} server and browser configuration is incomplete.`,
+        `${input.codePrefix}_CONFIG_INCOMPLETE`,
+      );
+    }
+    let canonicalPrivate: string;
+    let canonicalPublic: string;
+    try {
+      canonicalPrivate = validateAndParseAddress(privateValue);
+      canonicalPublic = validateAndParseAddress(publicValue);
+    } catch {
+      throw new ApiError(
+        503,
+        `${input.label} address is invalid.`,
+        `${input.codePrefix}_CONFIG_INVALID`,
+      );
+    }
+    if (BigInt(canonicalPrivate) !== BigInt(canonicalPublic)) {
+      throw new ApiError(
+        503,
+        `${input.label} server and browser addresses do not match.`,
+        `${input.codePrefix}_CONFIG_MISMATCH`,
+      );
+    }
+    if (!deployments.some(({ sealAddress }) => BigInt(sealAddress) === BigInt(canonicalPrivate))) {
+      deployments.push({ chainId: primary.chainId, sealAddress: canonicalPrivate });
+    }
+  };
+
+  appendOptionalSeal({
+    privateName: "PAYO_AGENT_SEAL_ADDRESS",
+    publicName: "NEXT_PUBLIC_PAYO_AGENT_SEAL_ADDRESS",
+    label: "The autonomous PAYO seal",
+    codePrefix: "PAYO_AGENT_SEAL",
+  });
+  appendOptionalSeal({
+    privateName: "PAYO_VESTING_BOOK_SEAL_ADDRESS",
+    publicName: "NEXT_PUBLIC_PAYO_VESTING_BOOK_SEAL_ADDRESS",
+    label: "The PAYO vesting and payroll-book seal",
+    codePrefix: "PAYO_VESTING_BOOK_SEAL",
+  });
+  return deployments;
 }

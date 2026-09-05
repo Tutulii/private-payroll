@@ -10,6 +10,10 @@ import { toCircuitFxSnapshot, type FxSnapshot } from "@/lib/domain/fx";
 import type { ExceptionToken } from "@/lib/domain/exception-protocol";
 import { generateUuidV7 } from "@/lib/domain/records";
 import {
+  deriveExceptionBookTotalsSalt,
+  utcAnnualPayrollBookPeriod,
+} from "@/lib/domain/universal-payroll-book";
+import {
   wageRemediationCreateSchema,
   wageRemediationPrivateSchema,
   type WageRemediationSummary,
@@ -27,7 +31,11 @@ import {
   createProofCommitter,
 } from "@/lib/proof/commitments";
 import { randomCommitmentSalt } from "@/lib/proof/input-builder";
-import { prepareEncryptedExceptionProofBundle } from "./proof-bundle";
+import { buildExceptionPayrollBookEntryInputs } from "@/lib/proof/vesting-transition-input";
+import {
+  prepareEncryptedExceptionProofBundle,
+  prepareVestingBookProofSubmission,
+} from "./proof-bundle";
 import type { PayoClient } from "./payo-client";
 
 function witnessHex(value: readonly number[]): `0x${string}` {
@@ -277,7 +285,13 @@ export async function prepareWageRemediationV2(input: {
     validityExpiry: privateRecord.validityExpiry,
     envelope,
   });
-  return { privateRecord, create, build, proofRecipients: recipients };
+  return {
+    privateRecord,
+    create,
+    build,
+    proofRecipients: recipients,
+    bookOwnerAddress: claim.remediationWitness.snapshot.ownerAddress,
+  };
 }
 
 
@@ -404,6 +418,7 @@ export async function proveAndAuthorizeWageRemediationV2(input: {
   prepared: Awaited<ReturnType<typeof prepareWageRemediationV2>>;
   principal: VaultPrincipalKeyPair;
   proverBaseUrl: string;
+  bookSealAddress: string;
   onStage?: (stage: "persisting_remediation" | "proving" | "persisting_proof" | "authorizing") => void;
 }) {
   const { prepared } = input;
@@ -420,9 +435,33 @@ export async function proveAndAuthorizeWageRemediationV2(input: {
 
   input.onStage?.("proving");
   const requestId = generateUuidV7();
+  const period = utcAnnualPayrollBookPeriod(prepared.build.publicInputs.validityStart);
+  const exceptionBookBuild = await buildExceptionPayrollBookEntryInputs({
+    source: prepared.build.publicInputs,
+    entryKind: "remediation",
+    bookSealAddress: input.bookSealAddress,
+    sourceSealAddress: prepared.build.publicInputs.sealAddress,
+    ownerAddress: prepared.bookOwnerAddress,
+    runNullifier: prepared.privateRecord.claimFact.runNullifier,
+    periodStart: period.periodStart,
+    periodEnd: period.periodEnd,
+    totalsSalt: deriveExceptionBookTotalsSalt({
+      privateSecret: prepared.privateRecord.remediationSecret,
+      subjectNullifier: prepared.privateRecord.remediationSubjectNullifier,
+    }),
+    claimFact: prepared.privateRecord.claimFact,
+    remediation: {
+      remediationSecret: prepared.privateRecord.remediationSecret,
+      recipientCommitment: prepared.privateRecord.recipientCommitment,
+      amountAtomic: prepared.privateRecord.amountAtomic,
+      referenceValueAtomic: prepared.privateRecord.referenceValueAtomic,
+      actionSalt: prepared.privateRecord.actionSalt,
+    },
+  });
   const encryptedWitness = encryptVaultRecord({
     exceptionCircuitProfile: "wage_remediation_v7",
     circuitInput: prepared.build.circuitInputs,
+    exceptionBookBuild,
   }, {
     schemaVersion: 1,
     organizationId: prepared.create.organizationId,
@@ -435,8 +474,8 @@ export async function proveAndAuthorizeWageRemediationV2(input: {
     encryptedWitness,
     principal: input.principal,
   });
-  if (proof.profile !== "wage_remediation_v7") {
-    throw new Error("The prover returned a different exception profile.");
+  if (proof.profile !== "wage_remediation_v7" || proof.vestingBook?.entryKind !== "remediation") {
+    throw new Error("The prover omitted or changed the Remediation v7 payroll-book proof.");
   }
 
   input.onStage?.("persisting_proof");
@@ -454,7 +493,10 @@ export async function proveAndAuthorizeWageRemediationV2(input: {
   input.onStage?.("authorizing");
   const { authorization } = await input.client.enqueueExceptionAuthorization({
     proofBundleId: prepared.create.proofBundleId,
-    proofCalldata: proof.proof.proofCalldata,
+    request: {
+      proofCalldata: proof.proof.proofCalldata,
+      vestingBook: prepareVestingBookProofSubmission(proof.vestingBook),
+    },
   });
   return { remediation: stored.remediation, proof, proofBundle, authorization };
 }

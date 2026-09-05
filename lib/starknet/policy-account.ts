@@ -28,7 +28,7 @@ export type PolicyRunBinding = {
 
 export type PolicyLeafContext = PolicyScopeCommitments & {
   policyId: string;
-  sealMode: 0 | 1;
+  sealMode: 0 | 1 | 2;
   proofVersion: number;
   schemaVersion: number;
   payrollPolicyRoot: `0x${string}`;

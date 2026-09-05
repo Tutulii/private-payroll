@@ -27,6 +27,7 @@ import {
 } from "../starknet/starknet-wallet";
 import { useAppShell } from "../ui/app-shell";
 import { usePayoVault } from "../vault/payo-vault";
+import { PrivateExitCard } from "./private-exit-card";
 
 export default function WalletPage() {
   const { notify } = useAppShell();
@@ -206,6 +207,8 @@ export default function WalletPage() {
           <div className="tier-note"><Sparkles size={17} /><span><strong>Existing workspaces stay recoverable</strong><small>Your encrypted recovery file can prove ownership and link this Ready account without exposing its key.</small></span></div>
         </aside>
       </section>
+
+      <PrivateExitCard />
 
       <section className="wallet-agent-strip reveal reveal--five">
         <div className="agent-access__icon"><Bot size={25} /><Zap size={12} /></div>

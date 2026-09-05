@@ -3,7 +3,15 @@ import { dirname, resolve } from "node:path";
 import { expect, test, type Page } from "playwright/test";
 import { hash } from "starknet";
 import { createPayoPublicIdentity } from "@/lib/client/proof-package-files";
-import { generateVaultPrincipal, type VaultPrincipal } from "@/lib/crypto/vault";
+import {
+  generateVaultPrincipal,
+  type VaultPrincipal,
+} from "@/lib/crypto/vault";
+import { deriveDirectStrk20ReportingIdentity } from "@/lib/crypto/reporting-identity";
+import {
+  STARKNET_MAINNET_CHAIN_ID,
+  STRK20_MAINNET_POOL_ADDRESS,
+} from "@/lib/starknet/deployment";
 import {
   createRecipientEncryptedProofPackage,
   proofPackagePublicInputsHash,
@@ -20,14 +28,54 @@ const COMMITMENTS = {
 };
 
 const workflows = [
-  { name: "Recurring worker", plan: "recurring", option: "Recurring payroll", token: "USDC" },
-  { name: "Checkpoint worker", plan: "checkpoint_stream", option: "Checkpoint stream", token: "USDC" },
-  { name: "Milestone worker", plan: "milestone", option: "Approved milestone", token: "USDC" },
-  { name: "Vesting worker", plan: "private_vesting", option: "Private vesting release", token: "USDC" },
-  { name: "Final pay worker", plan: "final_pay", option: "Final pay / offboarding", token: "USDC" },
-  { name: "Adjustment worker", plan: "approved_adjustment", option: "Approved pay adjustment", token: "USDC" },
-  { name: "Statutory worker", plan: "statutory_classification", option: "Recurring payroll", token: "USDC" },
-  { name: "FX-floor worker", plan: "fx_floor", option: "Recurring payroll", token: "STRK" },
+  {
+    name: "Recurring worker",
+    plan: "recurring",
+    option: "Recurring payroll",
+    token: "USDC",
+  },
+  {
+    name: "Checkpoint worker",
+    plan: "checkpoint_stream",
+    option: "Checkpoint stream",
+    token: "USDC",
+  },
+  {
+    name: "Milestone worker",
+    plan: "milestone",
+    option: "Approved milestone",
+    token: "USDC",
+  },
+  {
+    name: "Vesting worker",
+    plan: "private_vesting",
+    option: "Private vesting release",
+    token: "USDC",
+  },
+  {
+    name: "Final pay worker",
+    plan: "final_pay",
+    option: "Final pay / offboarding",
+    token: "USDC",
+  },
+  {
+    name: "Adjustment worker",
+    plan: "approved_adjustment",
+    option: "Approved pay adjustment",
+    token: "USDC",
+  },
+  {
+    name: "Statutory worker",
+    plan: "statutory_classification",
+    option: "Recurring payroll",
+    token: "USDC",
+  },
+  {
+    name: "FX-floor worker",
+    plan: "fx_floor",
+    option: "Recurring payroll",
+    token: "STRK",
+  },
 ] as const;
 
 type BrowserWorkflow = {
@@ -78,8 +126,22 @@ function proofPackageBrowserFixture() {
     packageVersion: "payo-recipient-proof-package-v1",
     grant,
     journal: [
-      { date: "2026-08-26", accountCode: "WAGE_REMEDIATION_EXPENSE", debitAtomic: "2500000", creditAtomic: "0", token: "USDC", memo: "Proof-bound private wage remediation" },
-      { date: "2026-08-26", accountCode: "PRIVATE_TREASURY", debitAtomic: "0", creditAtomic: "2500000", token: "USDC", memo: "Private remediation settlement" },
+      {
+        date: "2026-08-26",
+        accountCode: "WAGE_REMEDIATION_EXPENSE",
+        debitAtomic: "2500000",
+        creditAtomic: "0",
+        token: "USDC",
+        memo: "Proof-bound private wage remediation",
+      },
+      {
+        date: "2026-08-26",
+        accountCode: "PRIVATE_TREASURY",
+        debitAtomic: "0",
+        creditAtomic: "2500000",
+        token: "USDC",
+        memo: "Private remediation settlement",
+      },
     ],
     proofPackage: {
       packageVersion: "payo-proof-package-v1",
@@ -102,7 +164,11 @@ function proofPackageBrowserFixture() {
       verificationTransactionHash: "0x456",
       checkedAt: "2026-08-26T00:03:00.000Z",
     },
-    starknetReceipt: { transactionHash: "0x789", state: "finalized", confirmationDepth: 12 },
+    starknetReceipt: {
+      transactionHash: "0x789",
+      state: "finalized",
+      confirmationDepth: 12,
+    },
     disclosedFields: {
       exception: {
         workflowType: "wage_remediation",
@@ -153,7 +219,8 @@ type EvidenceState = {
 
 async function evidenceState(page: Page): Promise<EvidenceState> {
   return page.evaluate(() => {
-    if (!window.__PAYO_BROWSER_EVIDENCE__) throw new Error("The gated browser-evidence adapter is unavailable.");
+    if (!window.__PAYO_BROWSER_EVIDENCE__)
+      throw new Error("The gated browser-evidence adapter is unavailable.");
     return window.__PAYO_BROWSER_EVIDENCE__.exportState() as EvidenceState;
   });
 }
@@ -164,11 +231,15 @@ async function addContributor(
   index: number,
   kind: "human" | "agent" = "human",
 ) {
-  await page.getByRole("button", { name: "Add contributor", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Add contributor", exact: true })
+    .click();
   const form = page.locator("form.team-add-form");
   await form.getByLabel("Display name").fill(workflow.name);
   await form.getByLabel("Kind").selectOption(kind);
-  await form.getByLabel("Registered Starknet address").fill(`0x${(0x500 + index).toString(16)}`);
+  await form
+    .getByLabel("Registered Starknet address")
+    .fill(`0x${(0x500 + index).toString(16)}`);
   await form.getByLabel("Private token").selectOption(workflow.token);
   await form.getByLabel("Jurisdiction").fill("US");
   const identity = createPayoPublicIdentity(
@@ -185,13 +256,19 @@ async function addContributor(
   const submit = form.getByRole("button", { name: "Encrypt contributor" });
   await expect(submit).toBeEnabled();
   await submit.click();
-  await expect(page.locator(".member-card").filter({ hasText: workflow.name })).toBeVisible();
+  await expect(
+    page.locator(".member-card").filter({ hasText: workflow.name }),
+  ).toBeVisible();
 }
 
-async function answerClassification(form: ReturnType<Page["locator"]>, answer: "yes" | "no") {
+async function answerClassification(
+  form: ReturnType<Page["locator"]>,
+  answer: "yes" | "no",
+) {
   const selectors = form.locator(".team-add-form__classification select");
   await expect(selectors).toHaveCount(6);
-  for (let index = 0; index < 6; index += 1) await selectors.nth(index).selectOption(answer);
+  for (let index = 0; index < 6; index += 1)
+    await selectors.nth(index).selectOption(answer);
 }
 
 async function fillAgreement(
@@ -202,10 +279,14 @@ async function fillAgreement(
   const card = page.locator(".member-card").filter({ hasText: workflow.name });
   await card.getByRole("button", { name: /encrypted agreement/i }).click();
   const form = page.locator("form.team-add-form");
-  await form.getByLabel("Payment plan").selectOption({ label: workflow.option });
+  await form
+    .getByLabel("Payment plan")
+    .selectOption({ label: workflow.option });
 
   if (kind === "agent") {
-    await expect(form.getByLabel("Classification")).toHaveValue("agent_service");
+    await expect(form.getByLabel("Classification")).toHaveValue(
+      "agent_service",
+    );
   } else if (workflow.plan === "statutory_classification") {
     await form.getByLabel("Classification").selectOption("employee");
     await answerClassification(form, "yes");
@@ -213,35 +294,64 @@ async function fillAgreement(
     await answerClassification(form, "no");
   }
 
-  if (["recurring", "statutory_classification", "fx_floor"].includes(workflow.plan)) {
-    await form.getByLabel("Private amount").fill(workflow.plan === "statutory_classification" ? "10" : "1");
-    if (workflow.plan === "fx_floor") await form.getByLabel("Optional USD value floor").fill("0.2");
+  if (
+    ["recurring", "statutory_classification", "fx_floor"].includes(
+      workflow.plan,
+    )
+  ) {
+    await form
+      .getByLabel("Private amount")
+      .fill(workflow.plan === "statutory_classification" ? "10" : "1");
+    if (workflow.plan === "fx_floor")
+      await form.getByLabel("Optional USD value floor").fill("0.2");
   }
-  if (workflow.plan === "checkpoint_stream" || workflow.plan === "private_vesting") {
+  if (
+    workflow.plan === "checkpoint_stream" ||
+    workflow.plan === "private_vesting"
+  ) {
     await form.getByLabel("Total committed value").fill("1");
   }
   if (workflow.plan === "checkpoint_stream") {
-    await form.getByLabel("Checkpoint attestation commitment").fill(COMMITMENTS.attestation);
+    await form
+      .getByLabel("Checkpoint attestation commitment")
+      .fill(COMMITMENTS.attestation);
   }
-  if (workflow.plan === "milestone" || workflow.plan === "approved_adjustment") {
-    const amountLabel = workflow.plan === "milestone" ? "Private amount" : "Private adjustment amount";
-    await form.getByLabel(amountLabel).fill(workflow.plan === "milestone" ? "0.3" : "0.25");
+  if (
+    workflow.plan === "milestone" ||
+    workflow.plan === "approved_adjustment"
+  ) {
+    const amountLabel =
+      workflow.plan === "milestone"
+        ? "Private amount"
+        : "Private adjustment amount";
+    await form
+      .getByLabel(amountLabel)
+      .fill(workflow.plan === "milestone" ? "0.3" : "0.25");
   }
-  if (["milestone", "approved_adjustment", "final_pay"].includes(workflow.plan)) {
-    const obligationLabel = workflow.plan === "final_pay"
-      ? "Offboarding obligation commitment"
-      : workflow.plan === "approved_adjustment"
-        ? "Adjustment obligation commitment"
-        : "Milestone commitment";
+  if (
+    ["milestone", "approved_adjustment", "final_pay"].includes(workflow.plan)
+  ) {
+    const obligationLabel =
+      workflow.plan === "final_pay"
+        ? "Offboarding obligation commitment"
+        : workflow.plan === "approved_adjustment"
+          ? "Adjustment obligation commitment"
+          : "Milestone commitment";
     await form.getByLabel(obligationLabel).fill(COMMITMENTS.milestone);
     await form.getByLabel("Approver commitment").fill(COMMITMENTS.approver);
-    await form.getByLabel("Approval evidence commitment").fill(COMMITMENTS.attestation);
+    await form
+      .getByLabel("Approval evidence commitment")
+      .fill(COMMITMENTS.attestation);
   }
   if (workflow.plan === "approved_adjustment") {
-    await form.getByLabel("Adjustment reason commitment").fill(COMMITMENTS.adjustment);
+    await form
+      .getByLabel("Adjustment reason commitment")
+      .fill(COMMITMENTS.adjustment);
   }
   if (workflow.plan === "final_pay") {
-    await form.getByLabel("Termination reason commitment").fill(COMMITMENTS.termination);
+    await form
+      .getByLabel("Termination reason commitment")
+      .fill(COMMITMENTS.termination);
     await form.getByLabel("Ordinary pay").fill("0.1");
     await form.getByRole("textbox", { name: "Accrued leave" }).fill("0.02");
     await form.getByLabel("Notice pay").fill("0.03");
@@ -251,74 +361,153 @@ async function fillAgreement(
     await form.getByRole("checkbox", { name: "Severance" }).check();
   }
 
-  const submit = form.getByRole("button", { name: "Encrypt proof-bound agreement" });
+  const submit = form.getByRole("button", {
+    name: "Encrypt proof-bound agreement",
+  });
   await expect(submit).toBeEnabled();
   await submit.click();
-  await expect(card.getByRole("button", { name: "Update encrypted agreement" })).toBeVisible();
+  if (workflow.plan === "private_vesting") {
+    await expect(
+      card.getByLabel(`Private vesting status for ${workflow.name}`),
+    ).toBeVisible();
+    await expect(card).toContainText("Immutable proof-bound vesting terms");
+  } else {
+    await expect(
+      card.getByRole("button", { name: "Update encrypted agreement" }),
+    ).toBeVisible();
+  }
 }
 
-test("all Phase 3 production controls create encrypted, proof-bound browser evidence", async ({ page }, testInfo) => {
+test("all Phase 3 production controls create encrypted, proof-bound browser evidence", async ({
+  page,
+}, testInfo) => {
+  testInfo.setTimeout(420_000);
   await page.goto("/payo-browser-evidence/team");
-  await expect(page.getByRole("heading", { name: /People and agents/ })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /People and agents/ }),
+  ).toBeVisible();
   await page.evaluate(() => window.__PAYO_BROWSER_EVIDENCE__?.reset());
   await page.reload();
 
-  for (const [index, workflow] of workflows.entries()) await addContributor(page, workflow, index);
+  for (const [index, workflow] of workflows.entries())
+    await addContributor(page, workflow, index);
   for (const workflow of workflows) await fillAgreement(page, workflow);
 
+  const vestingCard = page
+    .locator(".member-card")
+    .filter({ hasText: "Vesting worker" });
+  const vestingStatus = vestingCard.getByLabel(
+    "Private vesting status for Vesting worker",
+  );
+  await expect(vestingStatus).toContainText("Vested / released");
+  await expect(vestingStatus).toContainText("Available");
+  await expect(vestingCard).toContainText(
+    "Immutable proof-bound vesting terms",
+  );
+
   const teamState = await evidenceState(page);
-  const agreements = teamState.records.filter(({ recordType }) => recordType === "pay-agreement");
+  const agreements = teamState.records.filter(
+    ({ recordType }) => recordType === "pay-agreement",
+  );
   expect(agreements).toHaveLength(8);
   expect(teamState.schedules).toHaveLength(8);
-  expect(new Set(teamState.schedules.map(({ agreementId }) => agreementId))).toEqual(
-    new Set(agreements.map(({ plaintext }) => (plaintext.agreement as { id: string }).id)),
+  expect(
+    new Set(teamState.schedules.map(({ agreementId }) => agreementId)),
+  ).toEqual(
+    new Set(
+      agreements.map(
+        ({ plaintext }) => (plaintext.agreement as { id: string }).id,
+      ),
+    ),
   );
-  expect(teamState.schedules.every(({ scheduleCommitment }) => /^0x[0-9a-f]{64}$/.test(scheduleCommitment))).toBe(true);
-  expect(new Set(agreements.map(({ plaintext }) =>
-    (plaintext.agreement as { paymentPlan: { kind: string } }).paymentPlan.kind))).toEqual(new Set([
-      "recurring",
-      "checkpoint_stream",
-      "milestone",
-      "private_vesting",
-    ]));
-  expect(agreements.some(({ plaintext }) =>
-    Boolean((plaintext.agreement as { adjustment?: unknown }).adjustment))).toBe(true);
-  expect(agreements.some(({ plaintext }) =>
-    Boolean((plaintext.agreement as { termination?: unknown }).termination))).toBe(true);
-  const statutory = agreements.find(({ plaintext }) =>
-    (plaintext.agreement as { classification: string }).classification === "employee");
+  expect(
+    teamState.schedules.every(({ scheduleCommitment }) =>
+      /^0x[0-9a-f]{64}$/.test(scheduleCommitment),
+    ),
+  ).toBe(true);
+  expect(
+    new Set(
+      agreements.map(
+        ({ plaintext }) =>
+          (plaintext.agreement as { paymentPlan: { kind: string } }).paymentPlan
+            .kind,
+      ),
+    ),
+  ).toEqual(
+    new Set(["recurring", "checkpoint_stream", "milestone", "private_vesting"]),
+  );
+  expect(
+    agreements.some(({ plaintext }) =>
+      Boolean((plaintext.agreement as { adjustment?: unknown }).adjustment),
+    ),
+  ).toBe(true);
+  expect(
+    agreements.some(({ plaintext }) =>
+      Boolean((plaintext.agreement as { termination?: unknown }).termination),
+    ),
+  ).toBe(true);
+  const statutory = agreements.find(
+    ({ plaintext }) =>
+      (plaintext.agreement as { classification: string }).classification ===
+      "employee",
+  );
   expect(statutory).toBeTruthy();
   const fxFloor = agreements.find(({ plaintext }) =>
-    Boolean((plaintext.agreement as { fxProtection?: unknown }).fxProtection));
+    Boolean((plaintext.agreement as { fxProtection?: unknown }).fxProtection),
+  );
   expect(fxFloor).toBeTruthy();
-  expect((fxFloor!.plaintext.agreement as { settlementToken: string }).settlementToken).toBe("STRK");
-  expect((fxFloor!.plaintext.agreement as { fxProtection: { minimumReferenceAtomic: string } }).fxProtection.minimumReferenceAtomic)
-    .toBe("200000");
+  expect(
+    (fxFloor!.plaintext.agreement as { settlementToken: string })
+      .settlementToken,
+  ).toBe("STRK");
+  expect(
+    (
+      fxFloor!.plaintext.agreement as {
+        fxProtection: { minimumReferenceAtomic: string };
+      }
+    ).fxProtection.minimumReferenceAtomic,
+  ).toBe("200000");
   for (const record of agreements) {
     const envelope = JSON.stringify(record.envelope);
-    const agreement = record.plaintext.agreement as { earningsAtomic: string[] };
-    for (const amount of agreement.earningsAtomic) expect(envelope).not.toContain(amount);
+    const agreement = record.plaintext.agreement as {
+      earningsAtomic: string[];
+    };
+    for (const amount of agreement.earningsAtomic)
+      expect(envelope).not.toContain(amount);
   }
 
-  const recurring = agreements.find(({ plaintext }) =>
-    (plaintext.agreement as { paymentPlan: { kind: string }; classification: string }).paymentPlan.kind === "recurring"
-      && (plaintext.agreement as { classification: string }).classification === "contractor");
+  const recurring = agreements.find(
+    ({ plaintext }) =>
+      (
+        plaintext.agreement as {
+          paymentPlan: { kind: string };
+          classification: string;
+        }
+      ).paymentPlan.kind === "recurring" &&
+      (plaintext.agreement as { classification: string }).classification ===
+        "contractor",
+  );
   expect(recurring).toBeTruthy();
   const recurringAgreement = recurring!.plaintext.agreement as { id: string };
   const runId = "018f1000-0000-7000-8000-000000000034";
-  await page.evaluate(({ runId, agreementId }) => {
-    window.__PAYO_BROWSER_EVIDENCE__?.setRuns([{
-      id: runId,
-      cycleId: "phase3-browser-exception",
-      state: "confirmed",
-      dueAt: "2026-08-26T00:00:00.000Z",
-      updatedAt: "2026-08-26T00:01:00.000Z",
-      transactionHash: "0x789",
-      fxRoot: `0x${"77".repeat(32)}`,
-      obligationSnapshotPlanId: "018f1000-0000-7000-8000-000000000037",
-      lines: [{ agreementId }],
-    }]);
-  }, { runId, agreementId: recurringAgreement.id });
+  await page.evaluate(
+    ({ runId, agreementId }) => {
+      window.__PAYO_BROWSER_EVIDENCE__?.setRuns([
+        {
+          id: runId,
+          cycleId: "phase3-browser-exception",
+          state: "confirmed",
+          dueAt: "2026-08-26T00:00:00.000Z",
+          updatedAt: "2026-08-26T00:01:00.000Z",
+          transactionHash: "0x789",
+          fxRoot: `0x${"77".repeat(32)}`,
+          obligationSnapshotPlanId: "018f1000-0000-7000-8000-000000000037",
+          lines: [{ agreementId }],
+        },
+      ]);
+    },
+    { runId, agreementId: recurringAgreement.id },
+  );
 
   const proofStatusSelector = hash.getSelectorFromName("get_run_status");
   await page.route("**/browser-rpc", async (route) => {
@@ -330,35 +519,43 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
     const callsProofStatus = JSON.stringify(request.params ?? null)
       .toLowerCase()
       .includes(proofStatusSelector.toLowerCase());
-    const result = request.method === "starknet_chainId"
-      ? "0x1"
-      : request.method === "starknet_call"
-        ? [callsProofStatus ? "0x5" : "0x1"]
-        : {
-          type: "INVOKE",
-          transaction_hash: "0x456",
-          actual_fee: { amount: "0x0", unit: "FRI" },
-          finality_status: "ACCEPTED_ON_L2",
-          execution_status: "SUCCEEDED",
-          messages_sent: [],
-          events: [{
-            from_address: "0x123",
-            keys: [hash.getSelectorFromName("SealedShardVerified"), "0x9", "0xa", "0x1"],
-            data: [],
-          }],
-          execution_resources: {
-            steps: 1,
-            memory_holes: 0,
-            range_check_builtin_applications: 0,
-            pedersen_builtin_applications: 0,
-            poseidon_builtin_applications: 0,
-            ec_op_builtin_applications: 0,
-            ecdsa_builtin_applications: 0,
-            bitwise_builtin_applications: 0,
-            keccak_builtin_applications: 0,
-            segment_arena_builtin: 0,
-          },
-        };
+    const result =
+      request.method === "starknet_chainId"
+        ? "0x1"
+        : request.method === "starknet_call"
+          ? [callsProofStatus ? "0x5" : "0x1"]
+          : {
+              type: "INVOKE",
+              transaction_hash: "0x456",
+              actual_fee: { amount: "0x0", unit: "FRI" },
+              finality_status: "ACCEPTED_ON_L2",
+              execution_status: "SUCCEEDED",
+              messages_sent: [],
+              events: [
+                {
+                  from_address: "0x123",
+                  keys: [
+                    hash.getSelectorFromName("SealedShardVerified"),
+                    "0x9",
+                    "0xa",
+                    "0x1",
+                  ],
+                  data: [],
+                },
+              ],
+              execution_resources: {
+                steps: 1,
+                memory_holes: 0,
+                range_check_builtin_applications: 0,
+                pedersen_builtin_applications: 0,
+                poseidon_builtin_applications: 0,
+                ec_op_builtin_applications: 0,
+                ecdsa_builtin_applications: 0,
+                bitwise_builtin_applications: 0,
+                keccak_builtin_applications: 0,
+                segment_arena_builtin: 0,
+              },
+            };
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
@@ -373,60 +570,144 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
   const workerProtection = page.locator(".wage-vnext-section").filter({
     hasText: "Your protected paydays",
   });
-  for (const claimType of ["Missing obligation", "Below FX floor", "Incomplete final pay"]) {
-    await expect(workerProtection.getByRole("button", { name: claimType })).toBeVisible();
+  for (const claimType of [
+    "Missing obligation",
+    "Below FX floor",
+    "Incomplete final pay",
+  ]) {
+    await expect(
+      workerProtection.getByRole("button", { name: claimType }),
+    ).toBeVisible();
   }
-  await workerProtection.getByRole("button", { name: "Missing obligation" }).click();
-  await expect(page.locator(".private-exception-feedback--error")).toContainText(
-    "Connect Ready on Starknet Mainnet",
-  );
+  await workerProtection
+    .getByRole("button", { name: "Missing obligation" })
+    .click();
+  await expect(
+    page.locator(".private-exception-feedback--error"),
+  ).toContainText("Connect Ready on Starknet Mainnet");
 
-  const employerEvidence = page.getByRole("button", { name: "Register payroll evidence" });
+  const employerEvidence = page.getByRole("button", {
+    name: "Register payroll evidence",
+  });
   await expect(employerEvidence).toBeVisible();
   await employerEvidence.click();
-  await expect(page.locator(".private-exception-feedback--error")).toContainText("Connect the snapshot-owner Ready wallet");
+  await expect(
+    page.locator(".private-exception-feedback--error"),
+  ).toContainText("Connect the snapshot-owner Ready wallet");
 
   const identityDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "Share my public identity" }).click();
-  expect((await identityDownload).suggestedFilename()).toMatch(/^payo-public-identity-[0-9a-f]{8}\.json$/);
+  expect((await identityDownload).suggestedFilename()).toMatch(
+    /^payo-public-identity-[0-9a-f]{8}\.json$/,
+  );
 
-  await page.getByRole("button", { name: "Create scoped proof package" }).click();
+  await page
+    .getByRole("button", { name: "Create scoped proof package" })
+    .click();
   const disclosureForm = page.locator("form.receipt-disclosure-form").first();
-  const externalIdentity = createPayoPublicIdentity(generateVaultPrincipal("browser-external-recipient"));
+  const externalIdentity = createPayoPublicIdentity(
+    generateVaultPrincipal("browser-external-recipient"),
+  );
   await disclosureForm.locator("input.proof-package-file-input").setInputFiles({
     name: "payo-public-identity.json",
     mimeType: "application/json",
     buffer: Buffer.from(`${JSON.stringify(externalIdentity)}\n`),
   });
-  await expect(disclosureForm.getByLabel("Recipient PAYO principal ID")).toHaveValue(externalIdentity.principalId);
-  await expect(disclosureForm.getByText(/Validated identity file/)).toContainText(externalIdentity.fingerprint.slice(0, 8));
-  await page.getByRole("button", { name: "Create scoped proof package" }).click();
+  await expect(
+    disclosureForm.getByLabel("Recipient PAYO principal ID"),
+  ).toHaveValue(externalIdentity.principalId);
+  await expect(
+    disclosureForm.getByText(/Validated identity file/),
+  ).toContainText(externalIdentity.fingerprint.slice(0, 8));
+  await page
+    .getByRole("button", { name: "Create scoped proof package" })
+    .click();
 
-  await page.locator("input.proof-package-file-input").first().setInputFiles({
-    name: "not-a-payo-package.json",
-    mimeType: "application/json",
-    buffer: Buffer.from('{"format":"unsupported"}\n'),
-  });
+  await page
+    .locator("input.proof-package-file-input")
+    .first()
+    .setInputFiles({
+      name: "not-a-payo-package.json",
+      mimeType: "application/json",
+      buffer: Buffer.from('{"format":"unsupported"}\n'),
+    });
   await expect(page.locator(".proof-package-failure")).toContainText("Invalid");
 
   const encryptedProofPackage = proofPackageBrowserFixture();
-  await page.locator("input.proof-package-file-input").first().setInputFiles({
-    name: "payo-wage-remediation-employer-20260826.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(`${JSON.stringify(encryptedProofPackage)}\n`),
-  });
+  await page
+    .locator("input.proof-package-file-input")
+    .first()
+    .setInputFiles({
+      name: "payo-wage-remediation-employer-20260826.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(`${JSON.stringify(encryptedProofPackage)}\n`),
+    });
   const inspector = page.locator(".proof-package-inspector");
   await expect(inspector).toBeVisible();
   await expect(inspector).toContainText("Private wage remediation");
   await expect(inspector).toContainText("Missing obligation");
   await expect(inspector).toContainText("2.5 USDC");
   await expect(inspector).toContainText("On-chain proof verified");
-  await expect(inspector).toContainText("current revocation and issuer identity require a fresh authenticated record");
+  await expect(inspector).toContainText(
+    "current revocation and issuer identity require a fresh authenticated record",
+  );
 
-  await expect(page.getByRole("button", { name: "Legacy drafting closed" }))
-    .toBeDisabled();
-  await expect(page.getByRole("button", { name: "Legacy remediation closed" }))
-    .toBeDisabled();
+  const complianceBook = page.locator(".payroll-report-card");
+  await expect(
+    complianceBook.getByRole("heading", { name: /Complete to the chain/ }),
+  ).toBeVisible();
+  await expect(
+    complianceBook.getByLabel("Report").locator("option"),
+  ).toHaveText([
+    "Employer · complete payroll book",
+    "Tax authority · fully disclosed book",
+    "Worker · encrypted self-service source",
+  ]);
+  await expect(
+    complianceBook.getByRole("button", {
+      name: "Verify, encrypt and download",
+    }),
+  ).toBeDisabled();
+  await expect(complianceBook).toContainText(
+    "One omitted, duplicated or changed payroll makes export fail",
+  );
+  await expect(complianceBook.locator(".familiar-tax-formats > span")).toHaveText([
+    "W-2-style",
+    "P60-style",
+    "T4-style",
+  ]);
+  await expect(complianceBook).toContainText(
+    "One canonical verified-income schema",
+  );
+  await complianceBook.locator("form.receipt-disclosure-form select").first().selectOption("worker_statement");
+  await complianceBook.locator("form.receipt-disclosure-form select").nth(1).selectOption({ index: 1 });
+  const reportingIdentity = deriveDirectStrk20ReportingIdentity({
+    viewingKey: "0x123456",
+    context: {
+      chainId: STARKNET_MAINNET_CHAIN_ID,
+      poolAddress: STRK20_MAINNET_POOL_ADDRESS,
+      recipientAddress: "0x500",
+    },
+    createdAt: new Date("2026-09-05T00:00:00.000Z"),
+  }).identity;
+    await complianceBook.locator("form.receipt-disclosure-form input.proof-package-file-input").setInputFiles({
+    name: "payo-strk20-reporting-identity.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(`${JSON.stringify(reportingIdentity)}\n`),
+  });
+  await expect(complianceBook).toContainText("Direct STRK20 identity");
+  await expect(complianceBook).toContainText("PAYO cannot access Ready's STRK20 viewing key");
+  await expect(complianceBook.getByText("Direct STRK20 identity tools")).toBeVisible();
+  await expect(
+    complianceBook.getByRole("button", { name: "Verify book & create worker source" }),
+  ).toBeVisible();
+
+  await expect(
+    page.getByRole("button", { name: "Legacy drafting closed" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Legacy remediation closed" }),
+  ).toBeDisabled();
   const activityState = await evidenceState(page);
 
   const agentWorkflow = {
@@ -438,23 +719,41 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
   await page.goto("/payo-browser-evidence/team");
   await addContributor(page, agentWorkflow, 99, "agent");
   await fillAgreement(page, agentWorkflow, "agent");
-  const agentCard = page.locator(".member-card").filter({ hasText: agentWorkflow.name });
-  await agentCard.getByRole("button", { name: "Issue one-run autonomy" }).click();
-  await expect(agentCard.getByRole("button", { name: "Revoke bounded autonomy" })).toBeVisible();
-  await expect(page.locator(".access-footnote")).toContainText("1 active encrypted capability");
+  const agentCard = page
+    .locator(".member-card")
+    .filter({ hasText: agentWorkflow.name });
+  await agentCard
+    .getByRole("button", { name: "Issue one-run autonomy" })
+    .click();
+  await expect(
+    agentCard.getByRole("button", { name: "Revoke bounded autonomy" }),
+  ).toBeVisible();
+  await expect(page.locator(".access-footnote")).toContainText(
+    "1 active encrypted capability",
+  );
 
-  const capabilityRow = page.locator(".agent-capability-row").filter({ hasText: agentWorkflow.name });
+  const capabilityRow = page
+    .locator(".agent-capability-row")
+    .filter({ hasText: agentWorkflow.name });
   await expect(capabilityRow).toContainText("POLICY ACCOUNT REQUIRED");
   await expect(capabilityRow).toContainText("1 STRK");
   await expect(capabilityRow).toContainText("max 1 calls");
   await capabilityRow.getByRole("button", { name: "Issue MCP key" }).click();
   await expect(page.locator(".agent-connect")).toContainText("Capability");
-  await expect(page.getByRole("button", { name: "Copy scoped MCP configuration" })).toBeEnabled();
+  await expect(
+    page.getByRole("button", { name: "Copy scoped MCP configuration" }),
+  ).toBeEnabled();
   await capabilityRow.getByRole("button", { name: "Revoke MCP keys" }).click();
-  await expect(page.locator(".agent-connect")).toContainText("Issue from an active capability below");
-  await capabilityRow.getByRole("button", { name: "Revoke capability" }).click();
+  await expect(page.locator(".agent-connect")).toContainText(
+    "Issue from an active capability below",
+  );
+  await capabilityRow
+    .getByRole("button", { name: "Revoke capability" })
+    .click();
   await expect(capabilityRow).toContainText("REVOKED");
-  await expect(page.locator(".access-footnote")).toContainText("0 active encrypted capabilities");
+  await expect(page.locator(".access-footnote")).toContainText(
+    "0 active encrypted capabilities",
+  );
   const phase4State = await evidenceState(page);
 
   const artifact = {
@@ -469,8 +768,13 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
       "Below FX floor",
       "Incomplete final pay",
       "Register payroll evidence",
+      "W-2/P60/T4-style verified income evidence",
     ],
-    workflowPlans: workflows.map(({ name, plan, option }) => ({ name, plan, option })),
+    workflowPlans: workflows.map(({ name, plan, option }) => ({
+      name,
+      plan,
+      option,
+    })),
     teamState,
     activityState,
     checks: {
@@ -486,13 +790,22 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
       liveProofSealStateCheck: true,
       clientEncryptedRoundTrips: true,
       statutoryFxClassificationProfile: true,
+      statefulVestingStatusRendered: true,
+      completeComplianceBookControlsRendered: true,
+      workerControlledReportingIdentityRendered: true,
+      familiarTaxEvidenceFormatsRendered: true,
       legacyDraftingClosed: true,
     },
   };
   const outputPath = testInfo.outputPath("phase3-rendered-browser-origin.json");
   await mkdir(dirname(outputPath), { recursive: true });
-  await writeFile(outputPath, `${JSON.stringify(artifact, null, 2)}\n`, { mode: 0o600 });
-  await testInfo.attach("phase3-rendered-browser-origin", { path: outputPath, contentType: "application/json" });
+  await writeFile(outputPath, `${JSON.stringify(artifact, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  await testInfo.attach("phase3-rendered-browser-origin", {
+    path: outputPath,
+    contentType: "application/json",
+  });
 
   const phase4Artifact = {
     schemaVersion: "payo.phase4.rendered-browser-origin.v1",
@@ -510,15 +823,34 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
       productionRouteUnavailable: process.env.NODE_ENV !== "production",
     },
   };
-  const phase4OutputPath = testInfo.outputPath("phase4-rendered-browser-origin.json");
-  await writeFile(phase4OutputPath, `${JSON.stringify(phase4Artifact, null, 2)}\n`, { mode: 0o600 });
-  await testInfo.attach("phase4-rendered-browser-origin", { path: phase4OutputPath, contentType: "application/json" });
+  const phase4OutputPath = testInfo.outputPath(
+    "phase4-rendered-browser-origin.json",
+  );
+  await writeFile(
+    phase4OutputPath,
+    `${JSON.stringify(phase4Artifact, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+  await testInfo.attach("phase4-rendered-browser-origin", {
+    path: phase4OutputPath,
+    contentType: "application/json",
+  });
 
   if (process.env.PAYO_BROWSER_EVIDENCE_WRITE === "1") {
-    const committedPath = resolve("evidence/phase3-devnet-fixtures/rendered-browser-ui-origin.json");
+    const committedPath = resolve(
+      "evidence/phase3-devnet-fixtures/rendered-browser-ui-origin.json",
+    );
     await mkdir(dirname(committedPath), { recursive: true });
-    await writeFile(committedPath, `${JSON.stringify(artifact, null, 2)}\n`, { mode: 0o600 });
-    const phase4CommittedPath = resolve("evidence/phase4-rendered-browser-ui-origin.json");
-    await writeFile(phase4CommittedPath, `${JSON.stringify(phase4Artifact, null, 2)}\n`, { mode: 0o600 });
+    await writeFile(committedPath, `${JSON.stringify(artifact, null, 2)}\n`, {
+      mode: 0o600,
+    });
+    const phase4CommittedPath = resolve(
+      "evidence/phase4-rendered-browser-ui-origin.json",
+    );
+    await writeFile(
+      phase4CommittedPath,
+      `${JSON.stringify(phase4Artifact, null, 2)}\n`,
+      { mode: 0o600 },
+    );
   }
 });

@@ -16,6 +16,8 @@ import {
   payrollStatementCommitmentV2,
 } from "@/lib/domain/exception-protocol";
 import { prepareEncryptedAgentCapability } from "@/lib/client/agent-capabilities";
+import { prepareVestingBookProofSubmission } from "@/lib/client/proof-bundle";
+import { mockExceptionBookProof } from "@/lib/proof/vesting-transition-test-support";
 import { encryptCapabilityPolicy } from "@/lib/server/capability-policy-crypto";
 import {
   issueAgentAccessToken,
@@ -64,6 +66,7 @@ import { registerDirectPrivacyPreparationRepositoryIntegrationTests } from "./di
 import { registerDirectPrivacySubmissionRepositoryIntegrationTests } from "./direct-privacy-submission-repository.integration-helper";
 import { registerDirectPrivacyReconciliationRepositoryIntegrationTests } from "./direct-privacy-reconciliation-repository.integration-helper";
 import { registerDirectPrivacyPayrollAuthorizationRepositoryIntegrationTests } from "./direct-privacy-payroll-authorization-repository.integration-helper";
+import { registerVestingAuthorizationRepositoryIntegrationTests } from "./vesting-authorization-repository.integration-helper";
 import {
   reserveCapabilityPayment,
   transitionCapabilityReservation,
@@ -110,6 +113,7 @@ import {
   storeEncryptedPayrollIntegrityBundle,
 } from "./proof-bundle-repository";
 import {
+  advanceExceptionAuthorizationJob,
   completeExceptionAuthorizationJob,
   deferExceptionAuthorizationJob,
   enqueueExceptionAuthorization,
@@ -219,6 +223,7 @@ async function resetDatabase() {
       ready_principal_links,
       ready_auth_challenges,
       payroll_authorization_jobs,
+      vesting_authorization_jobs,
       exception_authorization_jobs,
       wage_remediations,
       worker_claims,
@@ -535,6 +540,32 @@ function combineRoot(high: string, low: string): `0x${string}` {
   return `0x${BigInt(high).toString(16).padStart(32, "0")}${BigInt(low).toString(16).padStart(32, "0")}`;
 }
 
+async function persistExceptionAuthorizationSteps(input: {
+  workerId: string;
+  steps: readonly { step: "source" | "book_begin" | "book_transition0" | "book_transition1" | "book_finalize"; hash: string }[];
+  startedAt: Date;
+}) {
+  let timestamp = input.startedAt;
+  let [lease] = await leaseExceptionAuthorizationJobs(input.workerId, 1, timestamp);
+  if (!lease) throw new Error("Expected an exception authorization lease.");
+  for (let index = 0; index < input.steps.length; index += 1) {
+    const current = input.steps[index]!;
+    expect(lease.activeStep).toBe(current.step);
+    await recordExceptionAuthorizationSubmission(lease, current.step, current.hash, timestamp);
+    timestamp = new Date(timestamp.getTime() + 2_000);
+    [lease] = await leaseExceptionAuthorizationJobs(input.workerId, 1, timestamp);
+    if (!lease) throw new Error("Expected an exception confirmation lease.");
+    const next = input.steps[index + 1];
+    if (next) {
+      await advanceExceptionAuthorizationJob(lease, next.step, timestamp);
+      timestamp = new Date(timestamp.getTime() + 1);
+      [lease] = await leaseExceptionAuthorizationJobs(input.workerId, 1, timestamp);
+      if (!lease) throw new Error("Expected an advanced exception authorization lease.");
+    }
+  }
+  return { lease, timestamp };
+}
+
 databaseSuite("PostgreSQL durability integration", () => {
   registerAgentExecutionRepositoryIntegrationTests();
   registerAgentExecutionApprovalRepositoryIntegrationTests();
@@ -544,6 +575,7 @@ databaseSuite("PostgreSQL durability integration", () => {
   registerDirectPrivacySubmissionRepositoryIntegrationTests();
   registerDirectPrivacyReconciliationRepositoryIntegrationTests();
   registerDirectPrivacyPayrollAuthorizationRepositoryIntegrationTests();
+  registerVestingAuthorizationRepositoryIntegrationTests();
   beforeEach(async () => {
     process.env.DATABASE_URL = testDatabaseUrl;
     process.env.PAYO_DB_POOL_SIZE = "8";
@@ -1278,6 +1310,18 @@ databaseSuite("PostgreSQL durability integration", () => {
       chainId: `0x${BigInt(fixture.publicInputs.chainId).toString(16)}`,
       sealAddress: `0x${BigInt(fixture.publicInputs.sealAddress).toString(16)}`,
     };
+    const bookSealAddress = "0x456";
+    const claimAuthorizationRequest = {
+      proofCalldata: fixture.proofCalldata,
+      vestingBook: prepareVestingBookProofSubmission(mockExceptionBookProof({
+        source: fixture.publicInputs,
+        entryKind: "claim",
+        bookSealAddress,
+        sourceSealAddress: deployment.sealAddress,
+        ownerAddress: owner.walletAddress!,
+        runNullifier,
+      })),
+    };
     await expect(storeEncryptedPayrollIntegrityBundle({
       bundle,
       deployment,
@@ -1302,19 +1346,28 @@ databaseSuite("PostgreSQL durability integration", () => {
     })).rejects.toMatchObject({ code: "WORKER_CLAIM_FORBIDDEN" });
     await expect(enqueueExceptionAuthorization({
       proofBundleId,
-      proofCalldata: fixture.proofCalldata,
+      request: claimAuthorizationRequest,
       principal: outsider,
+      chainId: deployment.chainId,
+      exceptionSealAddress: deployment.sealAddress,
+      bookSealAddress,
     })).rejects.toMatchObject({ code: "WORKER_CLAIM_FORBIDDEN" });
     await expect(enqueueExceptionAuthorization({
       proofBundleId,
-      proofCalldata: fixture.proofCalldata,
+      request: claimAuthorizationRequest,
       principal: owner,
+      chainId: deployment.chainId,
+      exceptionSealAddress: deployment.sealAddress,
+      bookSealAddress,
     })).rejects.toMatchObject({ code: "WORKER_CLAIM_FORBIDDEN" });
 
     await expect(enqueueExceptionAuthorization({
       proofBundleId,
-      proofCalldata: fixture.proofCalldata,
+      request: claimAuthorizationRequest,
       principal: worker,
+      chainId: deployment.chainId,
+      exceptionSealAddress: deployment.sealAddress,
+      bookSealAddress,
     })).resolves.toMatchObject({
       workflowType: "wage_claim",
       subjectRecordId: claimId,
@@ -1325,29 +1378,39 @@ databaseSuite("PostgreSQL durability integration", () => {
     expect(await getDatabase().select().from(exceptionAuthorizationJobs)).toHaveLength(1);
 
     const firstLeaseAt = new Date(Date.now() + 10_000);
-    const [firstLease] = await leaseExceptionAuthorizationJobs("claim-v6-relayer", 1, firstLeaseAt);
-    expect(firstLease).toMatchObject({ proofBundleId, transactionHash: null });
-    await recordExceptionAuthorizationSubmission(firstLease, "0xc600", firstLeaseAt);
-    const [confirmationLease] = await leaseExceptionAuthorizationJobs(
-      "claim-v6-relayer",
-      1,
-      new Date(firstLeaseAt.getTime() + 2_000),
-    );
-    expect(confirmationLease).toMatchObject({ proofBundleId, transactionHash: "0xc600" });
+    const claimLifecycle = await persistExceptionAuthorizationSteps({
+      workerId: "claim-v6-relayer",
+      startedAt: firstLeaseAt,
+      steps: [
+        { step: "source", hash: "0xc600" },
+        { step: "book_begin", hash: "0xc601" },
+        { step: "book_transition0", hash: "0xc602" },
+        { step: "book_transition1", hash: "0xc603" },
+        { step: "book_finalize", hash: "0xc604" },
+      ],
+    });
+    expect(claimLifecycle.lease).toMatchObject({
+      proofBundleId,
+      transactionHash: "0xc604",
+      bookFinalizeTransactionHash: "0xc604",
+    });
     await completeExceptionAuthorizationJob(
-      confirmationLease,
-      new Date(firstLeaseAt.getTime() + 3_000),
+      claimLifecycle.lease,
+      new Date(claimLifecycle.timestamp.getTime() + 1_000),
     );
     expect((await getDatabase().select().from(workerClaims))[0].state).toBe("accepted");
     expect((await getDatabase().select().from(proofBundles))[0]).toMatchObject({
       id: proofBundleId,
       verificationState: "onchain_verified",
-      verificationTransactionHash: "0xc600",
+      verificationTransactionHash: "0xc604",
     });
     await expect(enqueueExceptionAuthorization({
       proofBundleId,
-      proofCalldata: fixture.proofCalldata,
+      request: claimAuthorizationRequest,
       principal: worker,
+      chainId: deployment.chainId,
+      exceptionSealAddress: deployment.sealAddress,
+      bookSealAddress,
     })).resolves.toMatchObject({ state: "complete", replayed: true });
     expect(await getDatabase().select().from(obligationClaimAccessGrants)).toHaveLength(1);
 
@@ -1466,15 +1529,33 @@ databaseSuite("PostgreSQL durability integration", () => {
       principal: owner,
     })).resolves.toMatchObject({ id: remediationProofBundleId });
 
+    const remediationAuthorizationRequest = {
+      proofCalldata: remediationFixture.proofCalldata,
+      vestingBook: prepareVestingBookProofSubmission(mockExceptionBookProof({
+        source: remediationFixture.publicInputs,
+        entryKind: "remediation",
+        bookSealAddress,
+        sourceSealAddress: deployment.sealAddress,
+        ownerAddress: owner.walletAddress!,
+        runNullifier,
+        payment: { token: "USDC", amountAtomic: "1000000" },
+      })),
+    };
     await expect(enqueueExceptionAuthorization({
       proofBundleId: remediationProofBundleId,
-      proofCalldata: remediationFixture.proofCalldata,
+      request: remediationAuthorizationRequest,
       principal: worker,
+      chainId: deployment.chainId,
+      exceptionSealAddress: deployment.sealAddress,
+      bookSealAddress,
     })).rejects.toMatchObject({ code: "ORG_FORBIDDEN" });
     await expect(enqueueExceptionAuthorization({
       proofBundleId: remediationProofBundleId,
-      proofCalldata: remediationFixture.proofCalldata,
+      request: remediationAuthorizationRequest,
       principal: owner,
+      chainId: deployment.chainId,
+      exceptionSealAddress: deployment.sealAddress,
+      bookSealAddress,
     })).resolves.toMatchObject({
       workflowType: "wage_remediation",
       subjectRecordId: remediationId,
@@ -1498,31 +1579,29 @@ databaseSuite("PostgreSQL durability integration", () => {
       .toMatchObject({ state: "failed", lastErrorCode: "EXCEPTION_AUTHORIZATION_TIMEOUT" });
     await expect(enqueueExceptionAuthorization({
       proofBundleId: remediationProofBundleId,
-      proofCalldata: remediationFixture.proofCalldata,
+      request: remediationAuthorizationRequest,
       principal: owner,
+      chainId: deployment.chainId,
+      exceptionSealAddress: deployment.sealAddress,
+      bookSealAddress,
     })).resolves.toMatchObject({
       state: "pending",
       replayed: false,
       requeued: true,
     });
-    const [remediationLease] = await leaseExceptionAuthorizationJobs(
-      "remediation-v7-relayer",
-      1,
-      new Date(remediationLeaseAt.getTime() + 1_000),
-    );
-    await recordExceptionAuthorizationSubmission(
-      remediationLease,
-      "0xc700",
-      new Date(remediationLeaseAt.getTime() + 1_000),
-    );
-    const [remediationConfirmation] = await leaseExceptionAuthorizationJobs(
-      "remediation-v7-relayer",
-      1,
-      new Date(remediationLeaseAt.getTime() + 3_000),
-    );
+    const remediationLifecycle = await persistExceptionAuthorizationSteps({
+      workerId: "remediation-v7-relayer",
+      startedAt: new Date(remediationLeaseAt.getTime() + 1_000),
+      steps: [
+        { step: "source", hash: "0xc700" },
+        { step: "book_begin", hash: "0xc701" },
+        { step: "book_transition0", hash: "0xc702" },
+        { step: "book_transition1", hash: "0xc703" },
+      ],
+    });
     await completeExceptionAuthorizationJob(
-      remediationConfirmation,
-      new Date(remediationLeaseAt.getTime() + 4_000),
+      remediationLifecycle.lease,
+      new Date(remediationLifecycle.timestamp.getTime() + 1_000),
     );
     expect((await getDatabase().select().from(wageRemediations))[0])
       .toMatchObject({ state: "authorized", authorizedAt: expect.any(Date) });

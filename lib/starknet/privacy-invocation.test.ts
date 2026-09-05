@@ -99,4 +99,36 @@ describe("pinned Privacy SDK settlement evidence", () => {
       poolCalldata: ["0x1", "0xa", "0x999", "0x1", "0xabc", "0x1"],
     })).toThrow("forbids external pool invocations");
   });
+
+  it("accepts only the exact proof-bound payroll-book callback", () => {
+    const callback = { contractAddress: "0x999", calldata: ["0xabc", "0xdef"] };
+    const withClientCallback = invocation([
+      policyAccount,
+      viewingKey,
+      "0x4",
+      ...clientActions.slice(1),
+      "0x8", callback.contractAddress, "0x2", ...callback.calldata,
+    ]);
+    const withServerCallback = [
+      "0x6",
+      ...poolCalldata.slice(1, -1),
+      "0xa", callback.contractAddress, "0x2", ...callback.calldata,
+      "0x1",
+    ];
+    expect(parse({
+      invocation: withClientCallback,
+      poolCalldata: withServerCallback,
+      expectedExternalInvocation: callback,
+    }).payrollNotes).toHaveLength(1);
+    expect(() => parse({
+      invocation: withClientCallback,
+      poolCalldata: withServerCallback,
+      expectedExternalInvocation: { ...callback, calldata: ["0xabc", "0xdee"] },
+    })).toThrow("server book callback was substituted");
+    expect(() => parse({
+      invocation: withClientCallback,
+      poolCalldata: withServerCallback,
+      expectedExternalInvocation: { ...callback, contractAddress: "0x998" },
+    })).toThrow("server book callback was substituted");
+  });
 });

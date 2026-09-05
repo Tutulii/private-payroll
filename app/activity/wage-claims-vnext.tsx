@@ -193,13 +193,16 @@ export function WageClaimsVNextCard() {
     }
     const sealAddress = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS?.trim();
     const proverBaseUrl = process.env.NEXT_PUBLIC_PAYO_PROVER_URL?.trim();
+    const bookSealAddress = process.env.NEXT_PUBLIC_PAYO_VESTING_BOOK_SEAL_ADDRESS?.trim();
     if (!sealAddress) throw new Error("The PAYO exception seal is not configured.");
     if (!proverBaseUrl) throw new Error("The private PAYO prover is not configured.");
+    if (!bookSealAddress) throw new Error("The universal PAYO payroll-book seal is not configured.");
     return {
       client: vault.client,
       principal: vault.session.principal,
       chainId: starknet.chainId,
       sealAddress,
+      bookSealAddress,
       proverBaseUrl,
     };
   };
@@ -250,6 +253,7 @@ export function WageClaimsVNextCard() {
         prepared,
         principal: runtime.principal,
         proverBaseUrl: runtime.proverBaseUrl,
+        bookSealAddress: runtime.bookSealAddress,
         onStage: (value) => setStage({
           persisting_claim: "Saving the worker-owned claim",
           proving: "Generating Claim v6 ZK proof",
@@ -367,6 +371,7 @@ export function WageClaimsVNextCard() {
         prepared,
         principal: runtime.principal,
         proverBaseUrl: runtime.proverBaseUrl,
+        bookSealAddress: runtime.bookSealAddress,
         onStage: (value) => setStage({
           persisting_remediation: "Saving the exact remediation action",
           proving: "Generating Remediation v7 ZK proof",
@@ -414,6 +419,7 @@ export function WageClaimsVNextCard() {
           prepared,
           principal: runtime.principal,
           proverBaseUrl: runtime.proverBaseUrl,
+          bookSealAddress: runtime.bookSealAddress,
           onStage: (value) => setStage(value === "proving"
             ? "Generating Remediation v7 ZK proof"
             : "Recovering the durable remediation"),
@@ -436,6 +442,8 @@ export function WageClaimsVNextCard() {
           remediation,
           principal: runtime.principal,
           sealAddress: runtime.sealAddress,
+          bookSealAddress: runtime.bookSealAddress,
+          chainId: runtime.chainId,
           prepareSubmit: starknet.prepareProofBoundException,
           onStage: (value) => setStage({
             loading: "Checking exact authorized payment",

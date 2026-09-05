@@ -14,6 +14,8 @@ import {
   SETTLEMENT_MATCH_CIRCUIT_SHA256,
   SETTLEMENT_MATCH_VERIFICATION_KEY_SHA256,
   STARKNET_MAX_INVOKE_CALLDATA_FELTS,
+  VESTING_TRANSITION_CIRCUIT_SHA256,
+  VESTING_TRANSITION_VERIFICATION_KEY_SHA256,
   payrollProverBackendOptions,
   safeProofFailure,
 } from "./protocol";
@@ -65,6 +67,21 @@ describe("proof-worker privacy protocol", () => {
       .toBe(ADVANCED_OBLIGATION_CIRCUIT_SHA256);
     expect(`0x${createHash("sha256").update(verificationKey).digest("hex")}`)
       .toBe(ADVANCED_OBLIGATION_VERIFICATION_KEY_SHA256);
+    expect(verificationKey).toHaveLength(1_888);
+  });
+
+  it("pins the VestingBook v3 circuit and proof-bound verification key", () => {
+    const circuit = readFileSync(
+      new URL("../../public/circuits/vesting_transition-v3.json", import.meta.url),
+    );
+    const verificationKey = decodeVerificationKeyHex(readFileSync(
+      new URL("../../public/circuits/vesting_transition-v3.vk.hex", import.meta.url),
+      "utf8",
+    ));
+    expect("0x" + createHash("sha256").update(circuit).digest("hex"))
+      .toBe(VESTING_TRANSITION_CIRCUIT_SHA256);
+    expect("0x" + createHash("sha256").update(verificationKey).digest("hex"))
+      .toBe(VESTING_TRANSITION_VERIFICATION_KEY_SHA256);
     expect(verificationKey).toHaveLength(1_888);
   });
 

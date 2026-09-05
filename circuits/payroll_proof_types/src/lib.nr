@@ -10,6 +10,7 @@ pub global PROOF_DOMAIN_AGREEMENT: Field = 3;
 pub global PROOF_DOMAIN_PAYROLL_LINE: Field = 4;
 pub global PROOF_DOMAIN_CLAIM_OBLIGATION: Field = 8;
 pub global PROOF_DOMAIN_REMEDIATION_ACTION: Field = 9;
+pub global PROOF_DOMAIN_EXTERNAL_ATTESTATION: Field = 10;
 pub global PROOF_EMPTY_LEAF: Field = 0x168758332d5b3e2d13be8048c8011b454590e06c44bce7f702f09103eef5a373;
 pub global ZERO_BYTES: [u8; 32] = [0; 32];
 
@@ -235,6 +236,11 @@ pub fn proof_remediation_action(
         claim[0], claim[1], recipient[0], recipient[1], token as Field,
         amount_atomic as Field, action_salt[0], action_salt[1],
     ])
+}
+
+pub fn proof_external_attestation_leaf(commitment: [u8; 32]) -> Field {
+    let limbs = bytes_as_fields(commitment);
+    proof_hash(PROOF_DOMAIN_EXTERNAL_ATTESTATION, [limbs[0], limbs[1]])
 }
 
 pub fn gross(agreement: AgreementWitness) -> u128 {

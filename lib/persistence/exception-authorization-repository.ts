@@ -5,12 +5,18 @@ import { hashCanonicalJson } from "@/lib/crypto/digest";
 import {
   exceptionProofCalldataSchema,
   exceptionProofBundleMetadataSchema,
+  exceptionAuthorizationRequestSchema,
+  vestingBookProofSubmissionSchema,
+  type ExceptionAuthorizationRequest,
 } from "@/lib/domain/proof-bundle";
 import { generateUuidV7 } from "@/lib/domain/records";
+import type { ExceptionCircuitProof, VestingBookProof } from "@/lib/proof/protocol";
 import {
   hashProofCalldata,
   parseExceptionPublicInputsFromGaragaCalldata,
+  parseVestingTransitionPublicInputsFromGaragaCalldata,
 } from "@/lib/proof/starknet-calldata";
+import { buildBeginExceptionBookAuthorizationCall } from "@/lib/starknet/payo-vesting-book";
 import type { AuthenticatedPrincipal } from "@/lib/server/auth";
 import { ApiError } from "@/lib/server/auth";
 import { getDatabase } from "./db";
@@ -20,6 +26,7 @@ import {
   exceptionAuthorizationJobs,
   obligationClaimAccessGrants,
   organizationMembers,
+  obligationSnapshotPlans,
   proofBundles,
   wageRemediations,
   workerClaims,
@@ -67,14 +74,106 @@ function assertPublicInputs(
   }
 }
 
+function asExceptionBookProof(
+  request: ReturnType<typeof exceptionAuthorizationRequestSchema.parse>,
+): VestingBookProof {
+  const book = vestingBookProofSubmissionSchema.parse(request.vestingBook);
+  const shards = book.shards.map((shard) => {
+    const publicInputs = parseVestingTransitionPublicInputsFromGaragaCalldata(
+      shard.proofCalldata,
+    );
+    const mismatch = (Object.keys(shard.publicInputs) as Array<keyof typeof shard.publicInputs>)
+      .find((key) => BigInt(shard.publicInputs[key]) !== BigInt(publicInputs[key]));
+    if (mismatch) {
+      throw new ApiError(
+        400,
+        `Payroll-book shard ${shard.shardIndex} changed public input ${mismatch}.`,
+        "PROOF_PUBLIC_INPUT_MISMATCH",
+      );
+    }
+    if (BigInt(hashProofCalldata(shard.proofCalldata)) !== BigInt(shard.calldataHash)) {
+      throw new ApiError(
+        400,
+        `Payroll-book shard ${shard.shardIndex} calldata hash is invalid.`,
+        "PROOF_CALLDATA_HASH_MISMATCH",
+      );
+    }
+    return {
+      shardIndex: shard.shardIndex,
+      proof: new Uint8Array(),
+      proofCalldata: shard.proofCalldata,
+      calldataHash: shard.calldataHash,
+      publicInputs,
+    };
+  }) as VestingBookProof["shards"];
+  return {
+    ...book,
+    scheduleId: book.scheduleId as `0x${string}`,
+    previousStateCommitment: book.previousStateCommitment as `0x${string}`,
+    nextStateCommitment: book.nextStateCommitment as `0x${string}`,
+    releaseNullifier: book.releaseNullifier as `0x${string}`,
+    bookEntryCommitment: book.bookEntryCommitment as `0x${string}`,
+    provingTimeMs: 0,
+    shards,
+  };
+}
+
+function publicJob(job: typeof exceptionAuthorizationJobs.$inferSelect, input: {
+  replayed?: boolean;
+  requeued?: boolean;
+} = {}) {
+  return {
+    id: job.id,
+    organizationId: job.organizationId,
+    runId: job.runId,
+    proofBundleId: job.proofBundleId,
+    workflowType: job.workflowType,
+    subjectRecordId: job.subjectRecordId,
+    state: job.state,
+    activeStep: job.activeStep,
+    transactionHash: job.transactionHash,
+    sourceTransactionHash: job.sourceTransactionHash,
+    bookBeginTransactionHash: job.bookBeginTransactionHash,
+    bookTransitionShard0TransactionHash: job.bookTransitionShard0TransactionHash,
+    bookTransitionShard1TransactionHash: job.bookTransitionShard1TransactionHash,
+    bookFinalizeTransactionHash: job.bookFinalizeTransactionHash,
+    attempts: job.attempts,
+    lastErrorCode: job.lastErrorCode,
+    lastErrorMessage: job.lastErrorMessage,
+    authorizedAt: job.authorizedAt?.toISOString() ?? null,
+    createdAt: job.createdAt.toISOString(),
+    updatedAt: job.updatedAt.toISOString(),
+    replayed: input.replayed,
+    requeued: input.requeued,
+  };
+}
+
 export async function enqueueExceptionAuthorization(input: {
   proofBundleId: string;
-  proofCalldata: string[];
+  request: ExceptionAuthorizationRequest;
   principal: AuthenticatedPrincipal;
+  chainId: string;
+  exceptionSealAddress: string;
+  bookSealAddress: string;
 }) {
-  const proofCalldata = exceptionProofCalldataSchema.parse(input.proofCalldata);
+  const request = exceptionAuthorizationRequestSchema.parse(input.request);
+  const proofCalldata = exceptionProofCalldataSchema.parse(request.proofCalldata);
   const calculatedHash = hashProofCalldata(proofCalldata);
   const actualInputs = parseExceptionPublicInputsFromGaragaCalldata(proofCalldata);
+  const vestingBook = asExceptionBookProof(request);
+  const sourceProof: ExceptionCircuitProof = {
+    proof: new Uint8Array(),
+    proofCalldata,
+    calldataHash: calculatedHash,
+    publicInputs: actualInputs,
+  };
+  buildBeginExceptionBookAuthorizationCall({
+    sealAddress: input.bookSealAddress,
+    exceptionSealAddress: input.exceptionSealAddress,
+    chainId: input.chainId,
+    sourceProof,
+    vestingBook,
+  });
   const database = getDatabase();
   return database.transaction(async (transaction) => {
     const [bundle] = await transaction
@@ -198,6 +297,35 @@ export async function enqueueExceptionAuthorization(input: {
       }
       routedWageRemediation = remediation;
     }
+    const sourceClaimId = routedWorkerClaim?.id ?? routedWageRemediation?.workerClaimId;
+    const [bookOwner] = sourceClaimId
+      ? await transaction.select({
+          ownerAddress: obligationSnapshotPlans.ownerAddress,
+          organizationId: obligationSnapshotPlans.organizationId,
+          runId: obligationSnapshotPlans.runId,
+        }).from(workerClaims)
+          .innerJoin(
+            obligationClaimAccessGrants,
+            eq(obligationClaimAccessGrants.id, workerClaims.claimAccessGrantId),
+          )
+          .innerJoin(
+            obligationSnapshotPlans,
+            eq(obligationSnapshotPlans.id, obligationClaimAccessGrants.snapshotPlanId),
+          )
+          .where(eq(workerClaims.id, sourceClaimId))
+          .limit(1)
+          .for("update")
+      : [];
+    if (!bookOwner
+      || bookOwner.organizationId !== bundle.organizationId
+      || bookOwner.runId !== bundle.runId
+      || BigInt(bookOwner.ownerAddress) !== BigInt(vestingBook.bookEntry.ownerAddress)) {
+      throw new ApiError(
+        409,
+        "The payroll-book owner differs from the protected payday owner.",
+        "EXCEPTION_BOOK_OWNER_MISMATCH",
+      );
+    }
     const [existing] = await transaction
       .select()
       .from(exceptionAuthorizationJobs)
@@ -212,10 +340,16 @@ export async function enqueueExceptionAuthorization(input: {
       if (existing.proofBundleId !== bundle.id) {
         throw new ApiError(409, "This exception subject already uses another proof bundle.", "PROOF_JOB_CONFLICT");
       }
+      if (!existing.transitionMetadata
+        || hashCanonicalJson(vestingBookProofSubmissionSchema.parse(existing.transitionMetadata))
+          !== hashCanonicalJson(request.vestingBook)) {
+        throw new ApiError(409, "This exception subject already uses another payroll-book proof.", "PROOF_JOB_CONFLICT");
+      }
       if (existing.state === "dead") {
         const now = new Date();
         const [requeued] = await transaction.update(exceptionAuthorizationJobs).set({
           proofCalldata,
+          transitionMetadata: request.vestingBook,
           state: "pending",
           transactionHash: null,
           attempts: 0,
@@ -240,7 +374,7 @@ export async function enqueueExceptionAuthorization(input: {
             updatedAt: now,
           }).where(eq(wageRemediations.id, routedWageRemediation.id));
         }
-        return { ...requeued, proofCalldata: undefined, replayed: false, requeued: true };
+        return publicJob(requeued, { replayed: false, requeued: true });
       }
       if (routedWorkerClaim && existing.state !== "complete") {
         await transaction.update(workerClaims).set({
@@ -254,7 +388,7 @@ export async function enqueueExceptionAuthorization(input: {
           updatedAt: new Date(),
         }).where(eq(wageRemediations.id, routedWageRemediation.id));
       }
-      return { ...existing, proofCalldata: undefined, replayed: true, requeued: false };
+      return publicJob(existing, { replayed: true, requeued: false });
     }
     const id = generateUuidV7();
     const [job] = await transaction.insert(exceptionAuthorizationJobs).values({
@@ -265,6 +399,7 @@ export async function enqueueExceptionAuthorization(input: {
       workflowType: bundle.proofType,
       subjectRecordId: bundle.subjectRecordId,
       proofCalldata,
+      transitionMetadata: request.vestingBook,
     }).returning();
     if (routedWorkerClaim) {
       await transaction.update(workerClaims).set({
@@ -290,10 +425,25 @@ export async function enqueueExceptionAuthorization(input: {
         workflowType: bundle.proofType,
         subjectRecordId: bundle.subjectRecordId,
         calldataHash: calculatedHash,
+        bookEntryCommitment: vestingBook.bookEntryCommitment,
+        entryKind: vestingBook.entryKind,
       },
     });
-    return { ...job, proofCalldata: undefined, replayed: false, requeued: false };
+    return publicJob(job, { replayed: false, requeued: false });
   });
+}
+
+export type ExceptionAuthorizationStep =
+  | "source"
+  | "book_begin"
+  | "book_transition0"
+  | "book_transition1"
+  | "book_finalize";
+
+function authorizationStep(value: string): ExceptionAuthorizationStep {
+  if (value === "source" || value === "book_begin" || value === "book_transition0"
+    || value === "book_transition1" || value === "book_finalize") return value;
+  throw new Error("Stored exception authorization step is invalid.");
 }
 
 export type LeasedExceptionAuthorizationJob = {
@@ -304,9 +454,17 @@ export type LeasedExceptionAuthorizationJob = {
   workflowType: "wage_claim" | "wage_remediation";
   subjectRecordId: string;
   attempts: number;
+  activeStep: ExceptionAuthorizationStep;
   transactionHash: string | null;
+  sourceTransactionHash: string | null;
+  bookBeginTransactionHash: string | null;
+  bookTransitionShard0TransactionHash: string | null;
+  bookTransitionShard1TransactionHash: string | null;
+  bookFinalizeTransactionHash: string | null;
   proofCalldata: string[];
   publicInputs: ReturnType<typeof exceptionProofBundleMetadataSchema.parse>["publicInputs"];
+  sourceProof: ExceptionCircuitProof;
+  vestingBook: VestingBookProof;
   leaseOwner: string;
 };
 
@@ -350,6 +508,14 @@ export async function leaseExceptionAuthorizationJobs(
           .limit(1);
         if (!bundle) throw new Error("Exception authorization references a missing proof bundle.");
         const metadata = exceptionProofBundleMetadataSchema.parse(bundle.proofPackage);
+        const request = exceptionAuthorizationRequestSchema.parse({
+          proofCalldata: job.proofCalldata,
+          vestingBook: job.transitionMetadata,
+        });
+        const parsedProofCalldata = exceptionProofCalldataSchema.parse(request.proofCalldata);
+        const parsedPublicInputs = parseExceptionPublicInputsFromGaragaCalldata(parsedProofCalldata);
+        assertPublicInputs(metadata.publicInputs, parsedPublicInputs);
+        const vestingBook = asExceptionBookProof(request);
         output.push({
           id: job.id,
           organizationId: job.organizationId,
@@ -358,9 +524,22 @@ export async function leaseExceptionAuthorizationJobs(
           workflowType: job.workflowType,
           subjectRecordId: job.subjectRecordId,
           attempts: job.attempts,
+          activeStep: authorizationStep(job.activeStep),
           transactionHash: job.transactionHash,
-          proofCalldata: exceptionProofCalldataSchema.parse(job.proofCalldata),
+          sourceTransactionHash: job.sourceTransactionHash,
+          bookBeginTransactionHash: job.bookBeginTransactionHash,
+          bookTransitionShard0TransactionHash: job.bookTransitionShard0TransactionHash,
+          bookTransitionShard1TransactionHash: job.bookTransitionShard1TransactionHash,
+          bookFinalizeTransactionHash: job.bookFinalizeTransactionHash,
+          proofCalldata: parsedProofCalldata,
           publicInputs: metadata.publicInputs,
+          sourceProof: {
+            proof: new Uint8Array(),
+            proofCalldata: parsedProofCalldata,
+            calldataHash: hashProofCalldata(parsedProofCalldata),
+            publicInputs: parsedPublicInputs,
+          },
+          vestingBook,
           leaseOwner: workerId,
         });
       } catch (error) {
@@ -396,16 +575,30 @@ async function assertLease(
 
 export async function recordExceptionAuthorizationSubmission(
   job: LeasedExceptionAuthorizationJob,
+  submittedStep: ExceptionAuthorizationStep,
   submittedTransactionHash: string,
   now = new Date(),
 ) {
+  if (submittedStep !== job.activeStep) {
+    throw new Error("Exception authorization submitted the wrong durable step.");
+  }
   const hash = transactionHash(submittedTransactionHash);
+  const receiptField = submittedStep === "source"
+    ? { sourceTransactionHash: hash }
+    : submittedStep === "book_begin"
+      ? { bookBeginTransactionHash: hash }
+      : submittedStep === "book_transition0"
+        ? { bookTransitionShard0TransactionHash: hash }
+        : submittedStep === "book_transition1"
+          ? { bookTransitionShard1TransactionHash: hash }
+          : { bookFinalizeTransactionHash: hash };
   const database = getDatabase();
   return database.transaction(async (transaction) => {
     await assertLease(transaction, job);
     const [updated] = await transaction.update(exceptionAuthorizationJobs).set({
       state: "pending",
       transactionHash: hash,
+      ...receiptField,
       attempts: job.attempts + 1,
       availableAt: new Date(now.getTime() + 1_500),
       leaseOwner: null,
@@ -420,8 +613,31 @@ export async function recordExceptionAuthorizationSubmission(
       actorId: "system:exception-relayer",
       action: "exception_authorization.submitted",
       subjectId: job.id,
-      metadata: { workflowType: job.workflowType, transactionHash: hash },
+      metadata: { workflowType: job.workflowType, step: submittedStep, transactionHash: hash },
     });
+    return updated;
+  });
+}
+
+export async function advanceExceptionAuthorizationJob(
+  job: LeasedExceptionAuthorizationJob,
+  nextStep: ExceptionAuthorizationStep,
+  now = new Date(),
+) {
+  const database = getDatabase();
+  return database.transaction(async (transaction) => {
+    await assertLease(transaction, job);
+    const [updated] = await transaction.update(exceptionAuthorizationJobs).set({
+      state: "pending",
+      activeStep: nextStep,
+      transactionHash: null,
+      availableAt: now,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      lastErrorCode: null,
+      lastErrorMessage: null,
+      updatedAt: now,
+    }).where(eq(exceptionAuthorizationJobs.id, job.id)).returning();
     return updated;
   });
 }
@@ -483,11 +699,18 @@ export async function completeExceptionAuthorizationJob(
   job: LeasedExceptionAuthorizationJob,
   now = new Date(),
 ) {
+  const finalizedHash = job.workflowType === "wage_claim"
+    ? job.bookFinalizeTransactionHash ?? job.transactionHash
+    : job.bookTransitionShard1TransactionHash ?? job.transactionHash;
+  if (!finalizedHash) {
+    throw new Error("Exception authorization lacks its final payroll-book transaction.");
+  }
   const database = getDatabase();
   return database.transaction(async (transaction) => {
     await assertLease(transaction, job);
     const [updated] = await transaction.update(exceptionAuthorizationJobs).set({
       state: "complete",
+      transactionHash: finalizedHash,
       authorizedAt: now,
       leaseOwner: null,
       leaseExpiresAt: null,
@@ -497,7 +720,7 @@ export async function completeExceptionAuthorizationJob(
     }).where(eq(exceptionAuthorizationJobs.id, job.id)).returning();
     await transaction.update(proofBundles).set({
       verificationState: "onchain_verified",
-      verificationTransactionHash: job.transactionHash,
+      verificationTransactionHash: finalizedHash,
     }).where(eq(proofBundles.id, job.proofBundleId));
     if (job.workflowType === "wage_claim") {
       await transaction.update(workerClaims).set({
@@ -528,7 +751,13 @@ export async function completeExceptionAuthorizationJob(
       metadata: {
         workflowType: job.workflowType,
         proofBundleId: job.proofBundleId,
-        transactionHash: job.transactionHash,
+        transactionHash: finalizedHash,
+        bookEntryCommitment: job.vestingBook.bookEntryCommitment,
+        sourceTransactionHash: job.sourceTransactionHash,
+        bookBeginTransactionHash: job.bookBeginTransactionHash,
+        bookTransitionShard0TransactionHash: job.bookTransitionShard0TransactionHash,
+        bookTransitionShard1TransactionHash: job.bookTransitionShard1TransactionHash,
+        bookFinalizeTransactionHash: job.bookFinalizeTransactionHash,
       },
     });
     return updated;
@@ -540,22 +769,7 @@ export async function getExceptionAuthorizationJob(
   principal: AuthenticatedPrincipal,
 ) {
   const database = getDatabase();
-  const [job] = await database.select({
-    id: exceptionAuthorizationJobs.id,
-    organizationId: exceptionAuthorizationJobs.organizationId,
-    runId: exceptionAuthorizationJobs.runId,
-    proofBundleId: exceptionAuthorizationJobs.proofBundleId,
-    workflowType: exceptionAuthorizationJobs.workflowType,
-    subjectRecordId: exceptionAuthorizationJobs.subjectRecordId,
-    state: exceptionAuthorizationJobs.state,
-    transactionHash: exceptionAuthorizationJobs.transactionHash,
-    attempts: exceptionAuthorizationJobs.attempts,
-    lastErrorCode: exceptionAuthorizationJobs.lastErrorCode,
-    lastErrorMessage: exceptionAuthorizationJobs.lastErrorMessage,
-    authorizedAt: exceptionAuthorizationJobs.authorizedAt,
-    createdAt: exceptionAuthorizationJobs.createdAt,
-    updatedAt: exceptionAuthorizationJobs.updatedAt,
-  }).from(exceptionAuthorizationJobs)
+  const [job] = await database.select().from(exceptionAuthorizationJobs)
     .where(eq(exceptionAuthorizationJobs.proofBundleId, proofBundleId))
     .limit(1);
   if (!job) throw new ApiError(404, "Exception authorization job not found.", "EXCEPTION_JOB_NOT_FOUND");
@@ -566,7 +780,7 @@ export async function getExceptionAuthorizationJob(
       eq(workerClaims.id, job.subjectRecordId),
       eq(workerClaims.proofBundleId, job.proofBundleId),
     )).limit(1);
-    if (workerClaim?.claimantPrincipalId === principal.principalId) return job;
+    if (workerClaim?.claimantPrincipalId === principal.principalId) return publicJob(job);
   } else {
     const [remediation] = await database.select({
       claimantPrincipalId: wageRemediations.claimantPrincipalId,
@@ -574,8 +788,8 @@ export async function getExceptionAuthorizationJob(
       eq(wageRemediations.id, job.subjectRecordId),
       eq(wageRemediations.proofBundleId, job.proofBundleId),
     )).limit(1);
-    if (remediation?.claimantPrincipalId === principal.principalId) return job;
+    if (remediation?.claimantPrincipalId === principal.principalId) return publicJob(job);
   }
   await requireOrganizationRole(job.organizationId, principal, ["admin", "operator", "reviewer"]);
-  return job;
+  return publicJob(job);
 }

@@ -13,6 +13,7 @@ import {
   type ExceptionProofWorkerSuccess,
 } from "@/lib/proof/protocol";
 import { hashProofCalldata } from "@/lib/proof/starknet-calldata";
+import { mockExceptionBookProof } from "@/lib/proof/vesting-transition-test-support";
 import { buildAdvancedPaymentPlanDraft } from "./advanced-agreement-draft";
 import { storeEncryptedAdvancedAgreement } from "./agreement-directory";
 import { prepareObligationSnapshotPlan } from "./obligation-snapshot-plan";
@@ -128,6 +129,14 @@ function proofFor(
       calldataHash: hashProofCalldata(proofCalldata),
       publicInputs: prepared.build.publicInputs,
     },
+    vestingBook: mockExceptionBookProof({
+      source: prepared.build.publicInputs,
+      entryKind: "claim",
+      bookSealAddress: "0x456",
+      sourceSealAddress: "0x123",
+      ownerAddress: prepared.opened.access.snapshot.ownerAddress,
+      runNullifier: prepared.build.claimFact.runNullifier,
+    }),
   };
 }
 
@@ -239,6 +248,7 @@ describe("worker Claim v6 product binding", () => {
       prepared,
       principal: worker,
       proverBaseUrl: "https://prover.invalid",
+      bookSealAddress: "0x456",
       onStage: (stage) => stages.push(stage),
     });
 
@@ -255,7 +265,10 @@ describe("worker Claim v6 product binding", () => {
     }));
     expect(client.enqueueExceptionAuthorization).toHaveBeenCalledWith({
       proofBundleId: prepared.create.proofBundleId,
-      proofCalldata: proof.proof.proofCalldata,
+      request: {
+        proofCalldata: proof.proof.proofCalldata,
+        vestingBook: expect.objectContaining({ entryKind: "claim" }),
+      },
     });
     expect(decryptVaultRecord(result.proofBundle.envelope, worker))
       .toMatchObject({ profile: "wage_claim_v6" });

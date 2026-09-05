@@ -18,6 +18,7 @@ import {
   hash,
   num,
   outsideExecution,
+  shortString,
 } from "starknet";
 import {
   loadPinnedPrivacySdk,
@@ -37,14 +38,27 @@ import {
   buildPayoSealedPayroll,
   buildVerifySealedShardCall,
 } from "@/lib/starknet/payo-seal";
+import {
+  buildBeginVestingAuthorizationCall,
+  buildVerifyVestingAuthorizationProofCall,
+} from "@/lib/starknet/payo-vesting-book";
 import { buildAuthorizedPolicyRunTree, commitPolicyCapability } from "@/lib/starknet/policy-account";
 import { buildConfigurePolicyCall } from "@/lib/starknet/policy-account-configuration";
 import { buildPayrollIntegrityInputsFromSerialized } from "@/lib/proof/input-builder";
 import {
+  ADVANCED_OBLIGATION_CIRCUIT_SHA256,
   PAYROLL_INTEGRITY_CIRCUIT_SHA256,
+  VESTING_TRANSITION_CIRCUIT_SHA256,
+  VESTING_TRANSITION_VERIFICATION_KEY_SHA256,
   type ProofWorkerSuccess,
+  type VestingBookProof,
 } from "@/lib/proof/protocol";
-import { hashProofCalldata } from "@/lib/proof/starknet-calldata";
+import {
+  hashProofCalldata,
+  orderedPayrollPublicInputs,
+  orderedVestingTransitionPublicInputs,
+} from "@/lib/proof/starknet-calldata";
+import { buildPayrollBookEntryInputs } from "@/lib/proof/vesting-transition-input";
 import { settlementMatchWitnessSchema } from "@/lib/proof/settlement-request";
 import { proveSettlementMatchOnSelfHostedNode } from "@/lib/proof/server-prover";
 import { buildSettlementRoot } from "@/lib/proof/settlement-match";
@@ -70,6 +84,10 @@ const deploymentPath = resolve(
   "circuits/payroll_integrity/target/phase4-devnet-deployment.json",
 );
 const evidencePath = resolve(root, "evidence/phase4-private-payroll-devnet.json");
+const universalBookEvidencePath = resolve(
+  root,
+  "evidence/universal-payroll-book-private-devnet.json",
+);
 const expectedPoolClassHash =
   "0x52107fadffab71bdcbb6b2ccb68ba3e1b5558d94036538053e159d3076ad633";
 const expectedChainId = "0x534e5f5345504f4c4941";
@@ -85,11 +103,12 @@ const ownerPrivateKey =
 const sessionPrivateKey =
   "0x161803398874989484820458683436563811772030917980576";
 
-if (!new Set(["check-artifacts", "deploy", "settle"]).has(action)) {
+if (!new Set(["check-artifacts", "deploy", "settle", "settle-book"]).has(action)) {
   throw new Error(
-    "Usage: tsx scripts/test-phase4-private-payroll-devnet.ts <check-artifacts|deploy|settle>",
+    "Usage: tsx scripts/test-phase4-private-payroll-devnet.ts <check-artifacts|deploy|settle|settle-book>",
   );
 }
+const universalBookMode = action === "settle-book";
 
 type Artifact = {
   sierra: string;
@@ -114,8 +133,8 @@ const artifacts = Object.freeze({
     sources: "contracts",
   },
   obligationRegistry: {
-    sierra: "contracts/target/dev/payo_contracts_PayoObligationRootRegistry.contract_class.json",
-    casm: "contracts/target/dev/payo_contracts_PayoObligationRootRegistry.compiled_contract_class.json",
+    sierra: "contracts/target/dev/payo_contracts_PayoTenantObligationRootRegistry.contract_class.json",
+    casm: "contracts/target/dev/payo_contracts_PayoTenantObligationRootRegistry.compiled_contract_class.json",
     sources: "contracts",
   },
   payrollSeal: {
@@ -132,6 +151,16 @@ const artifacts = Object.freeze({
     sierra: "contracts/settlement_verifier_v8/target/dev/settlement_verifier_v8_PayoSettlementMatchV8Verifier.contract_class.json",
     casm: "contracts/settlement_verifier_v8/target/dev/settlement_verifier_v8_PayoSettlementMatchV8Verifier.compiled_contract_class.json",
     sources: "contracts/settlement_verifier_v8",
+  },
+  vestingBookSeal: {
+    sierra: "contracts/target/dev/payo_contracts_PayoVestingBookSeal.contract_class.json",
+    casm: "contracts/target/dev/payo_contracts_PayoVestingBookSeal.compiled_contract_class.json",
+    sources: "contracts",
+  },
+  lifecycleHarness: {
+    sierra: "contracts/vesting_devnet_harness/target/dev/vesting_devnet_harness_PayoVestingDevnetPublicInputHarness.contract_class.json",
+    casm: "contracts/vesting_devnet_harness/target/dev/vesting_devnet_harness_PayoVestingDevnetPublicInputHarness.compiled_contract_class.json",
+    sources: "contracts/vesting_devnet_harness",
   },
 } satisfies Record<string, Artifact>);
 
@@ -297,6 +326,23 @@ function asScalar(value: unknown): bigint {
   throw new Error(`Expected one scalar value, received ${JSON.stringify(value)}.`);
 }
 
+function asU256(value: unknown): bigint {
+  if (typeof value === "bigint" || typeof value === "number" || typeof value === "string") {
+    return BigInt(value);
+  }
+  if (Array.isArray(value) && value.length === 2) {
+    return BigInt(value[0]) | (BigInt(value[1]) << 128n);
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (record.low !== undefined && record.high !== undefined) {
+      return BigInt(record.low as string | number | bigint)
+        | (BigInt(record.high as string | number | bigint) << 128n);
+    }
+  }
+  throw new Error(`Expected one u256 value, received ${JSON.stringify(value)}.`);
+}
+
 async function createBlocks(count: number): Promise<void> {
   for (let index = 0; index < count; index += 1) {
     await rpc("devnet_createBlock");
@@ -395,6 +441,20 @@ if (action === "deploy") {
   contracts.policyAccount = await deploy(declarations.policyAccount, [
     num.toHex(ec.starkCurve.getStarkKey(ownerPrivateKey)),
   ], "0x7061796f340107");
+  contracts.lifecycleHarness = await deploy(
+    declarations.lifecycleHarness,
+    [],
+    "0x7061796f340108",
+  );
+  contracts.vestingBookSeal = await deploy(declarations.vestingBookSeal, [
+    contracts.pool.address,
+    contracts.policyRegistry.address,
+    contracts.obligationRegistry.address,
+    // Agent-book entries never consult the exception source, but production
+    // construction still forbids a zero dependency.
+    contracts.payrollSeal.address,
+    chainId,
+  ], "0x7061796f340109");
   const policyFeeFunding = await admin.execute({
     contractAddress: strkAddress,
     entrypoint: "transfer",
@@ -430,6 +490,7 @@ if (action === "deploy") {
     chainId: deployment.chainId,
     recipientAddress: deployment.accounts.recipient,
     sealAddress: contracts.payrollSeal.address,
+    bookSealAddress: contracts.vestingBookSeal.address,
     policyAccountAddress: contracts.policyAccount.address,
     validityStart: deployment.proofWindow.validityStart,
     validityExpiry: deployment.proofWindow.validityExpiry,
@@ -438,12 +499,16 @@ if (action === "deploy") {
   process.exit(0);
 }
 
-if (action === "settle") {
+if (action === "settle" || action === "settle-book") {
   const [deployment, privateBuild, shardZeroText, shardOneText, sdk] = await Promise.all([
     readJson(deploymentPath),
     readJson("circuits/payroll_integrity/target/phase4-devnet-payroll-build.json"),
-    readFile(resolve(root, "circuits/payroll_integrity/target/proof_calldata-phase4-devnet-shard-0.txt"), "utf8"),
-    readFile(resolve(root, "circuits/payroll_integrity/target/proof_calldata-phase4-devnet-shard-1.txt"), "utf8"),
+    universalBookMode
+      ? Promise.resolve("")
+      : readFile(resolve(root, "circuits/payroll_integrity/target/proof_calldata-phase4-devnet-shard-0.txt"), "utf8"),
+    universalBookMode
+      ? Promise.resolve("")
+      : readFile(resolve(root, "circuits/payroll_integrity/target/proof_calldata-phase4-devnet-shard-1.txt"), "utf8"),
     loadPinnedPrivacySdk(),
   ]);
   if (deployment.schemaVersion !== "payo.phase4.private-devnet-deployment.v1") {
@@ -472,23 +537,78 @@ if (action === "settle") {
       return num.toHex(BigInt(value)) as `0x${string}`;
     });
   };
-  const proofCalldata = [parseProofCalldata(shardZeroText), parseProofCalldata(shardOneText)] as const;
   const payroll = await buildPayrollIntegrityInputsFromSerialized(privateBuild.serializedBuild);
   payroll.witness.circuitInputs = [{}, {}];
+  if (universalBookMode) {
+    payroll.publicInputs[0].proofVersion = "2";
+    payroll.publicInputs[1].proofVersion = "2";
+  }
+  const proofCalldata: readonly [`0x${string}`[], `0x${string}`[]] = universalBookMode
+    ? [
+        orderedPayrollPublicInputs(payroll.publicInputs[0]).map((value) => num.toHex(BigInt(value)) as `0x${string}`),
+        orderedPayrollPublicInputs(payroll.publicInputs[1]).map((value) => num.toHex(BigInt(value)) as `0x${string}`),
+      ]
+    : [parseProofCalldata(shardZeroText), parseProofCalldata(shardOneText)];
   const payrollProof: ProofWorkerSuccess = {
     version: 1,
     type: "proof-complete",
     requestId: "phase4-devnet-execution",
     scheme: "ultra_keccak_zk_honk",
-    circuitSha256: PAYROLL_INTEGRITY_CIRCUIT_SHA256,
+    circuitSha256: universalBookMode
+      ? ADVANCED_OBLIGATION_CIRCUIT_SHA256
+      : PAYROLL_INTEGRITY_CIRCUIT_SHA256,
     provingTimeMs: 0,
     shards: [0, 1].map((shardIndex) => ({
       shardIndex: shardIndex as 0 | 1,
+      proof: Uint8Array.of(shardIndex + 1),
       proofCalldata: proofCalldata[shardIndex as 0 | 1],
       calldataHash: hashProofCalldata(proofCalldata[shardIndex as 0 | 1]),
       publicInputs: payroll.publicInputs[shardIndex as 0 | 1],
     })) as ProofWorkerSuccess["shards"],
   };
+  let bookInput: Awaited<ReturnType<typeof buildPayrollBookEntryInputs>> | undefined;
+  if (universalBookMode) {
+    if (!deployment.contracts.vestingBookSeal?.address
+      || !deployment.contracts.lifecycleHarness?.address) {
+      throw new Error("The universal-book Devnet topology is not deployed.");
+    }
+    bookInput = await buildPayrollBookEntryInputs({
+      payroll,
+      ownerAddress: admin.address,
+      bookSealAddress: deployment.contracts.vestingBookSeal.address,
+      periodStart: 0n,
+      periodEnd: 20_000n,
+      entryKind: "agent",
+      totalsDisclosure: "public",
+      totalsSalt: `0x${"46".repeat(32)}`,
+    });
+    const bookShards = ([0, 1] as const).map((shardIndex) => {
+      const publicInputs = bookInput!.publicInputs[shardIndex];
+      const calldata = orderedVestingTransitionPublicInputs(publicInputs)
+        .map((value) => num.toHex(BigInt(value)) as `0x${string}`);
+      return {
+        shardIndex,
+        proof: Uint8Array.of(shardIndex + 3),
+        proofCalldata: calldata,
+        calldataHash: hashProofCalldata(calldata),
+        publicInputs,
+      };
+    }) as VestingBookProof["shards"];
+    payrollProof.vestingBook = {
+      proofVersion: 3,
+      entryKind: "agent",
+      circuitSha256: VESTING_TRANSITION_CIRCUIT_SHA256,
+      verificationKeySha256: VESTING_TRANSITION_VERIFICATION_KEY_SHA256,
+      provingTimeMs: 0,
+      scheduleId: bookInput.scheduleId,
+      previousStateCommitment: bookInput.previousStateCommitment,
+      nextStateCommitment: bookInput.nextStateCommitment,
+      releaseNullifier: bookInput.releaseNullifier,
+      bookEntry: bookInput.bookEntry,
+      bookEntryCommitment: bookInput.bookEntryCommitment,
+      shards: bookShards,
+    };
+  }
   const sealedPayroll = buildPayoSealedPayroll({
     sealAddress: deployment.contracts.payrollSeal.address,
     chainId,
@@ -500,11 +620,12 @@ if (action === "settle") {
   const [fxHigh, fxLow] = splitDirectPrivacyRoot(payroll.fxRoot);
   const [nullifierHigh, nullifierLow] = splitDirectPrivacyRoot(payroll.runNullifier);
 
-  const [policyArtifact, obligationArtifact, sealArtifact, policyAccountArtifact] = await Promise.all([
+  const [policyArtifact, obligationArtifact, sealArtifact, policyAccountArtifact, bookSealArtifact] = await Promise.all([
     readJson(artifacts.policyRegistry.sierra),
     readJson(artifacts.obligationRegistry.sierra),
     readJson(artifacts.payrollSeal.sierra),
     readJson(artifacts.policyAccount.sierra),
+    readJson(artifacts.vestingBookSeal.sierra),
   ]);
   const policyRegistry = new Contract({
     abi: policyArtifact.abi,
@@ -521,7 +642,7 @@ if (action === "settle") {
     address: deployment.contracts.payrollSeal.address,
     providerOrAccount: admin,
   });
-  const registryResponse = await admin.execute([
+  const registryCalls = [
     policyRegistry.populate("schedule_policy_root", [
       policyHigh,
       policyLow,
@@ -530,8 +651,10 @@ if (action === "settle") {
     ]),
     policyRegistry.populate("schedule_verifier", [
       0,
-      1,
-      deployment.contracts.integrityBundle.address,
+      universalBookMode ? 2 : 1,
+      universalBookMode
+        ? deployment.contracts.lifecycleHarness.address
+        : deployment.contracts.integrityBundle.address,
       deployment.proofWindow.validityStart - 1,
       deployment.proofWindow.validityExpiry,
     ]),
@@ -548,7 +671,17 @@ if (action === "settle") {
       deployment.proofWindow.validityStart - 1,
       deployment.proofWindow.validityExpiry,
     ]),
-  ], transactionDetails());
+  ];
+  if (universalBookMode) {
+    registryCalls.push(policyRegistry.populate("schedule_verifier", [
+      0,
+      3,
+      deployment.contracts.lifecycleHarness.address,
+      deployment.proofWindow.validityStart - 1,
+      deployment.proofWindow.validityExpiry,
+    ]));
+  }
+  const registryResponse = await admin.execute(registryCalls, transactionDetails());
   await waitFor(registryResponse.transaction_hash);
   await rpc("devnet_setTime", { time: deployment.proofWindow.validityStart });
   const snapshot = privateBuild.serializedBuild.fxSnapshots[0];
@@ -566,7 +699,10 @@ if (action === "settle") {
   const configurationChecks = await Promise.all([
     policyRegistry.call("is_policy_root_valid", [policyHigh, policyLow]),
     policyRegistry.call("is_fx_root_valid", [fxHigh, fxLow]),
-    policyRegistry.call("is_verifier_valid", [0, 1]),
+    policyRegistry.call("is_verifier_valid", [0, universalBookMode ? 2 : 1]),
+    ...(universalBookMode
+      ? [policyRegistry.call("is_verifier_valid", [0, 3])]
+      : []),
     policyRegistry.call("is_verifier_valid", [1, 8]),
     obligationRegistry.call("is_obligation_root_valid", [agreementHigh, agreementLow]),
   ]);
@@ -593,6 +729,47 @@ if (action === "settle") {
   const provenStatus = await payrollSeal.call("get_run_status", [nullifierHigh, nullifierLow]);
   if (BigInt(provenStatus as bigint) !== 2n) {
     throw new Error(`PayrollIntegrity status is ${String(provenStatus)}, expected PROVEN.`);
+  }
+
+  const bookAuthorizationTransactions: string[] = [];
+  let bookSeal: Contract | undefined;
+  if (universalBookMode) {
+    if (!payrollProof.vestingBook || !bookInput) {
+      throw new Error("The universal payroll-book proof was not prepared.");
+    }
+    bookSeal = new Contract({
+      abi: bookSealArtifact.abi,
+      address: deployment.contracts.vestingBookSeal.address,
+      providerOrAccount: admin,
+    });
+    const begin = await admin.execute(buildBeginVestingAuthorizationCall({
+      sealAddress: deployment.contracts.vestingBookSeal.address,
+      chainId,
+      payrollShards: payrollProof.shards,
+      vestingBook: payrollProof.vestingBook,
+    }), transactionDetails());
+    await waitFor(begin.transaction_hash);
+    bookAuthorizationTransactions.push(begin.transaction_hash);
+    const linkedProofs = [
+      ...payrollProof.shards,
+      ...payrollProof.vestingBook.shards,
+    ] as const;
+    for (const [proofKind, proof] of linkedProofs.entries()) {
+      const response = await admin.execute(buildVerifyVestingAuthorizationProofCall({
+        sealAddress: deployment.contracts.vestingBookSeal.address,
+        runNullifierHigh: sealedPayroll.runNullifierHigh,
+        runNullifierLow: sealedPayroll.runNullifierLow,
+        proofKind: proofKind as 0 | 1 | 2 | 3,
+        proofCalldata: proof.proofCalldata,
+      }), transactionDetails());
+      await waitFor(response.transaction_hash);
+      bookAuthorizationTransactions.push(response.transaction_hash);
+    }
+    const pending = await bookSeal.call("get_pending_authorization", [nullifierHigh, nullifierLow]);
+    if (asScalar((pending as { status: unknown }).status) !== 2n
+      || asScalar((pending as { verified_mask: unknown }).verified_mask) !== 15n) {
+      throw new Error("The universal payroll-book authorization did not reach AUTHORIZED.");
+    }
   }
 
   const sdkTesting = await import(pathToFileURL(resolve(sdk.root, "dist/testing/index.js")).href) as any;
@@ -873,8 +1050,8 @@ if (action === "settle") {
   const policyId = "0x5041594f34";
   const policyContext = {
     policyId,
-    sealMode: 0 as const,
-    proofVersion: 1,
+    sealMode: universalBookMode ? 2 as const : 0 as const,
+    proofVersion: universalBookMode ? 2 : 1,
     schemaVersion: 1,
     payrollPolicyRoot: payroll.policyRoot,
     ...scope,
@@ -891,8 +1068,8 @@ if (action === "settle") {
     policyAccountAddress: deployment.contracts.policyAccount.address,
     policyId,
     sessionPublicKey: num.toHex(ec.starkCurve.getStarkKey(sessionPrivateKey)) as `0x${string}`,
-    sealMode: 0,
-    proofVersion: 1,
+    sealMode: universalBookMode ? 2 : 0,
+    proofVersion: universalBookMode ? 2 : 1,
     schemaVersion: 1,
     payrollPolicyRoot: payroll.policyRoot,
     ...scope,
@@ -904,6 +1081,9 @@ if (action === "settle") {
     maxCallCount: 1,
     poolAddress: deployment.contracts.pool.address,
     sealAddress: deployment.contracts.payrollSeal.address,
+    ...(universalBookMode
+      ? { bookSealAddress: deployment.contracts.vestingBookSeal.address }
+      : {}),
     tokenAddresses: {
       STRK: num.toHex(BigInt(PAYROLL_TOKENS.STRK.address)) as `0x${string}`,
       USDC: num.toHex(BigInt(PAYROLL_TOKENS.USDC.address)) as `0x${string}`,
@@ -970,6 +1150,7 @@ if (action === "settle") {
   }
   const poolCalldata = sdkResult.callAndProof.call.calldata;
   if (!poolCalldata) throw new Error("The SDK omitted private settlement calldata.");
+  const expectedExternalInvocation = directPlan.actions.invoke?.callBuilder();
   const settlementEvidence = extractDirectPrivacySettlementEvidence({
     invocation,
     poolAddress: deployment.contracts.pool.address,
@@ -978,6 +1159,7 @@ if (action === "settle") {
     chainId,
     poolCalldata,
     payrollLineCount: 1,
+    ...(expectedExternalInvocation ? { expectedExternalInvocation } : {}),
   });
   if (
     settlementEvidence.payrollNotes.length !== 1
@@ -1078,6 +1260,78 @@ if (action === "settle") {
     );
   }
 
+  let universalBookStateEvidence: null | {
+    owner: string;
+    periodStart: string;
+    periodEnd: string;
+    entryCount: number;
+    contributorCount: string;
+    agentEntryCount: number;
+    strkNetAtomic: string;
+    entryCommitment: string;
+    accumulatorRoot: string;
+  } = null;
+  if (universalBookMode) {
+    if (!bookSeal || !bookInput || !payrollProof.vestingBook) {
+      throw new Error("The universal payroll-book read-back dependencies are missing.");
+    }
+    const owner = num.toHex(BigInt(admin.address));
+    const periodStart = BigInt(bookInput.bookEntry.periodStart);
+    const periodEnd = BigInt(bookInput.bookEntry.periodEnd);
+    const [record, entry, pending] = await Promise.all([
+      bookSeal.call("get_payroll_book", [owner, periodStart, periodEnd]),
+      bookSeal.call("get_payroll_book_entry", [owner, periodStart, periodEnd, 0]),
+      bookSeal.call("get_pending_authorization", [nullifierHigh, nullifierLow]),
+    ]) as [Record<string, unknown>, unknown, Record<string, unknown>];
+    const initialRoot = hash.computePoseidonHashOnElements([
+      shortString.encodeShortString("PAYO_BOOK_V1"),
+      chainId,
+      deployment.contracts.vestingBookSeal.address,
+      owner,
+      periodStart,
+      periodEnd,
+    ]);
+    const expectedRoot = num.toHex(BigInt(hash.computePoseidonHashOnElements([
+      shortString.encodeShortString("PAYO_BOOK_ADD_V1"),
+      initialRoot,
+      payrollProof.vestingBook.shards[0].publicInputs.bookEntryHigh,
+      payrollProof.vestingBook.shards[0].publicInputs.bookEntryLow,
+      0,
+    ])));
+    if (asScalar(pending.status) !== 3n
+      || asScalar(record.exists) !== 1n
+      || asScalar(record.entry_count) !== 1n
+      || asScalar(record.contributor_count) !== 1n
+      || asScalar(record.disclosed_entry_count) !== 1n
+      || asScalar(record.undisclosed_entry_count) !== 0n
+      || asScalar(record.agent_entry_count) !== 1n
+      || asScalar(record.ordinary_entry_count) !== 0n
+      || asScalar(record.vesting_entry_count) !== 0n
+      || asScalar(record.claim_entry_count) !== 0n
+      || asScalar(record.remediation_entry_count) !== 0n
+      || asU256(record.strk_gross) !== BigInt(amountAtomic)
+      || asU256(record.strk_deductions) !== 0n
+      || asU256(record.strk_net) !== BigInt(amountAtomic)
+      || asU256(record.usdc_gross) !== 0n
+      || asU256(record.usdc_deductions) !== 0n
+      || asU256(record.usdc_net) !== 0n
+      || asScalar(record.accumulator_root) !== BigInt(expectedRoot)
+      || asU256(entry) !== BigInt(bookInput.bookEntryCommitment)) {
+      throw new Error("The atomic private payment did not append the exact universal book entry.");
+    }
+    universalBookStateEvidence = {
+      owner,
+      periodStart: periodStart.toString(),
+      periodEnd: periodEnd.toString(),
+      entryCount: Number(asScalar(record.entry_count)),
+      contributorCount: asScalar(record.contributor_count).toString(),
+      agentEntryCount: Number(asScalar(record.agent_entry_count)),
+      strkNetAtomic: asU256(record.strk_net).toString(),
+      entryCommitment: bookInput.bookEntryCommitment,
+      accumulatorRoot: expectedRoot,
+    };
+  }
+
   const policyAccount = new Contract({
     abi: policyAccountArtifact.abi,
     address: deployment.contracts.policyAccount.address,
@@ -1142,9 +1396,25 @@ if (action === "settle") {
     asScalar(await payrollSeal.call("get_run_status", [nullifierHigh, nullifierLow])) !== 3n
     || await privateBalance(bobTransfers) !== recipientAfter
   ) throw new Error("The rejected replay changed finalized state or recipient balance.");
+  if (universalBookMode) {
+    if (!bookSeal || !universalBookStateEvidence) {
+      throw new Error("The universal payroll-book replay check is unavailable.");
+    }
+    const record = await bookSeal.call("get_payroll_book", [
+      universalBookStateEvidence.owner,
+      universalBookStateEvidence.periodStart,
+      universalBookStateEvidence.periodEnd,
+    ]) as Record<string, unknown>;
+    if (asScalar(record.entry_count) !== 1n
+      || asScalar(record.accumulator_root) !== BigInt(universalBookStateEvidence.accumulatorRoot)) {
+      throw new Error("The rejected replay changed the universal payroll book.");
+    }
+  }
 
   const evidence = {
-    schemaVersion: "payo.phase4.private-payroll-devnet.v1",
+    schemaVersion: universalBookMode
+      ? "payo.universal-payroll-book-private-devnet.v1"
+      : "payo.phase4.private-payroll-devnet.v1",
     generatedAt: new Date().toISOString(),
     chainId,
     rpcVersion,
@@ -1179,14 +1449,30 @@ if (action === "settle") {
       tokenApproval: approvalResponse.transaction_hash,
       accountProvisioning: provisioningTransactionHash,
       policyConfiguration: configurationResponse.transaction_hash,
+      ...(universalBookMode
+        ? { bookAuthorization: bookAuthorizationTransactions }
+        : {}),
       atomicPrivatePayrollAndFinalization: settlementResponse.transaction_hash,
     },
     settlementBlockNumber: settlementReceipt.block_number,
     proofs: {
       payrollIntegrity: {
-        circuitSha256: PAYROLL_INTEGRITY_CIRCUIT_SHA256,
+        circuitSha256: payrollProof.circuitSha256,
         shardCalldataHashes: payrollProof.shards.map((shard) => shard.calldataHash),
+        verificationMode: universalBookMode
+          ? "test-only-public-input-harness"
+          : "real-generated-verifier",
       },
+      ...(universalBookMode && payrollProof.vestingBook
+        ? {
+            universalPayrollBook: {
+              circuitSha256: payrollProof.vestingBook.circuitSha256,
+              verificationKeySha256: payrollProof.vestingBook.verificationKeySha256,
+              shardCalldataHashes: payrollProof.vestingBook.shards.map((shard) => shard.calldataHash),
+              verificationMode: "test-only-public-input-harness",
+            },
+          }
+        : {}),
       settlementMatch: {
         circuitSha256: settlementProof.circuitSha256,
         verificationKeySha256: settlementProof.verificationKeySha256,
@@ -1211,8 +1497,18 @@ if (action === "settle") {
       recipientBalanceDeltaExact: true,
       settlementReceiptMatchesProof: true,
       sealFinalized: true,
+      ...(universalBookMode
+        ? {
+            universalBookAuthorizedBeforePayment: true,
+            privatePaymentAndUniversalBookAppendAtomic: true,
+            exactUniversalBookEntryReadBack: true,
+          }
+        : {}),
       replayRejected: true,
     },
+    ...(universalBookStateEvidence
+      ? { universalPayrollBook: universalBookStateEvidence }
+      : {}),
     privateBalanceEvidenceAtomic: {
       recipientBefore: recipientBefore.toString(),
       recipientAfter: recipientAfter.toString(),
@@ -1220,11 +1516,20 @@ if (action === "settle") {
     },
     limitations: [
       "Devnet evidence uses one synthetic STRK payroll line and deterministic local accounts.",
+      ...(universalBookMode
+        ? [
+            "The combined private-payment/book lifecycle uses the test-only public-input harness for deployment-bound v2/v3 authorization; real generated v2/v3 verifier-to-production-seal composition must pass separately in the same gate.",
+          ]
+        : []),
       "The official Privacy Pool integration runs with Devnet transaction-proof verification disabled because Devnet's fake proof facts are wire-incompatible with the pinned pool; this is not full transaction-OS proof evidence.",
       "Mainnet declaration, deployment and public operator addresses remain a Phase 5 release gate.",
     ],
   };
-  await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
+  await writeFile(
+    universalBookMode ? universalBookEvidencePath : evidencePath,
+    `${JSON.stringify(evidence, null, 2)}\n`,
+    { mode: 0o600 },
+  );
   process.stdout.write(`${JSON.stringify(evidence, null, 2)}\n`);
 }
 }

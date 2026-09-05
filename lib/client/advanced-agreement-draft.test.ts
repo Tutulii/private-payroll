@@ -53,4 +53,18 @@ describe("advanced agreement draft", () => {
       totalAtomic: 1_000_000n,
     })).toThrow(/vesting window/i);
   });
+
+
+  it("starts a private vesting schedule at the seal's empty state", () => {
+    const plan = buildAdvancedPaymentPlanDraft({
+      kind: "private_vesting",
+      startsAt: "2026-08-26T08:00:00.000Z",
+      cliffAt: "2026-08-26T09:00:00.000Z",
+      releaseAt: "2026-08-26T10:00:00.000Z",
+      endsAt: "2026-08-26T12:00:00.000Z",
+      totalAtomic: 1_000_000n,
+    });
+
+    expect(plan).toMatchObject({ releasedAtomic: "0", releaseSequence: 0 });
+  });
 });

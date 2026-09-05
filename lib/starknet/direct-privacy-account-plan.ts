@@ -106,7 +106,7 @@ export function buildDirectPrivacyAccountProvisioningPlan(input: {
   const policyId = canonicalAddress(input.request.policyId);
   const context = {
     policyId,
-    sealMode: 0 as const,
+    sealMode: 2 as const,
     proofVersion,
     schemaVersion: 1,
     payrollPolicyRoot,
@@ -122,7 +122,7 @@ export function buildDirectPrivacyAccountProvisioningPlan(input: {
       chainId: input.deployment.chainId,
       policyAccountAddress,
       policyId,
-      sealMode: 0,
+      sealMode: 2,
       proofVersion,
       schemaVersion: 1,
       payrollPolicyRoot,
@@ -135,6 +135,7 @@ export function buildDirectPrivacyAccountProvisioningPlan(input: {
       maxCallCount,
       poolAddress: input.deployment.poolAddress,
       sealAddress: input.deployment.sealAddress,
+      bookSealAddress: input.deployment.bookSealAddress,
       tokenAddresses: input.deployment.tokenAddresses,
     },
     authorizedRuns: input.runs.map((run, index) => ({

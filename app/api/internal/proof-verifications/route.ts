@@ -1,9 +1,10 @@
 import { Account, RpcProvider } from "starknet";
 import { authorizeInternalWorker } from "@/lib/server/internal-auth";
-import { getPayoDeploymentConfig } from "@/lib/server/payo-deployment";
+import { getPayoDeploymentConfig, getPayoVestingBookConfig } from "@/lib/server/payo-deployment";
 import { processExceptionAuthorizationBatch } from "@/lib/server/exception-authorization-relayer";
 import { processPayrollAuthorizationBatch } from "@/lib/server/payroll-authorization-relayer";
 import { processProofVerificationBatch } from "@/lib/server/proof-relayer";
+import { processVestingAuthorizationBatch } from "@/lib/server/vesting-authorization-relayer";
 import { withStarknetRelayerSubmissionLock } from "@/lib/persistence/relayer-lock";
 
 export const runtime = "nodejs";
@@ -86,23 +87,44 @@ export async function POST(request: Request) {
       workerId,
       limit: 2,
     });
-    const exceptionAuthorizations = await processExceptionAuthorizationBatch({
-      rpc,
-      submitter,
-      deployment,
-      workerId,
-      limit: 2,
-    });
+    const bookConfigured = Boolean(
+      process.env.PAYO_VESTING_BOOK_SEAL_ADDRESS
+      || process.env.NEXT_PUBLIC_PAYO_VESTING_BOOK_SEAL_ADDRESS,
+    );
+    const bookDeployment = bookConfigured ? getPayoVestingBookConfig() : null;
+    const exceptionAuthorizations = bookDeployment
+      ? await processExceptionAuthorizationBatch({
+          rpc,
+          submitter,
+          deployment,
+          bookDeployment,
+          workerId,
+          limit: 1,
+        })
+      : { leased: 0, results: [] };
+    const vestingAuthorizations = bookConfigured
+      || process.env.NEXT_PUBLIC_PAYO_VESTING_BOOK_SEAL_ADDRESS
+      ? await processVestingAuthorizationBatch({
+          rpc,
+          submitter,
+          deployment: getPayoVestingBookConfig(),
+          workerId,
+          limit: 1,
+        })
+      : { leased: 0, results: [] };
     return Response.json({
-      leased: proofVerifications.leased + payrollAuthorizations.leased + exceptionAuthorizations.leased,
+      leased: proofVerifications.leased + payrollAuthorizations.leased
+        + exceptionAuthorizations.leased + vestingAuthorizations.leased,
       results: [
         ...proofVerifications.results.map((result) => ({ kind: "payroll_proof", ...result })),
         ...payrollAuthorizations.results.map((result) => ({ kind: "payroll_authorization", ...result })),
         ...exceptionAuthorizations.results.map((result) => ({ kind: "exception_authorization", ...result })),
+        ...vestingAuthorizations.results.map((result) => ({ kind: "vesting_authorization", ...result })),
       ],
       proofVerifications,
       payrollAuthorizations,
       exceptionAuthorizations,
+      vestingAuthorizations,
     });
   } catch {
     return Response.json({

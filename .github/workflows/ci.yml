@@ -78,6 +78,8 @@ jobs:
           npm run phase3:matrix:verify-disclosure
       - name: Verify Phase 4 evidence bindings
         run: npm run phase4:verify-evidence
+      - name: Verify pre-hackathon release evidence bindings
+        run: npm run verify:pre-hackathon
       - run: npm run lint
       - run: npm run verify:status
       - run: npm run build

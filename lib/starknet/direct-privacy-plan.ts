@@ -9,10 +9,14 @@ import {
   type ProofWorkerSuccess,
 } from "@/lib/proof/protocol";
 import { buildPayoSealedPayroll, type PayoSealedPayroll } from "./payo-seal";
+import { buildVestingBookAction } from "./payo-vesting-book";
 
 type PrivacyActions = {
   createNotes: Array<{ recipient: bigint; token: bigint; amount: bigint }>;
   surpluses: Array<{ recipient: bigint; token: bigint; withdraw: false }>;
+  invoke?: {
+    callBuilder: () => { contractAddress: string; calldata: readonly string[] };
+  };
 };
 
 export type DirectPrivacyPlan = {
@@ -89,8 +93,8 @@ export function buildDirectPrivacyPlan(input: {
   payrollProof: ProofWorkerSuccess;
   nowUnixSeconds?: bigint;
 }): DirectPrivacyPlan {
-  if (input.config.sealMode !== 0) {
-    throw new Error("SettlementMatch FINALIZE requires the Phase 4 direct-finalization driver.");
+  if (input.config.sealMode !== 0 && input.config.sealMode !== 2) {
+    throw new Error("SettlementMatch FINALIZE requires the direct-finalization driver.");
   }
   const sealedPayroll = buildPayoSealedPayroll({
     sealAddress: input.config.sealAddress,
@@ -135,6 +139,29 @@ export function buildDirectPrivacyPlan(input: {
   }
   const tokenAddresses = [...new Set(createNotes.map(({ token }) => num.toHex(token)))]
     .sort((left, right) => BigInt(left) < BigInt(right) ? -1 : 1);
+  let invoke: PrivacyActions["invoke"];
+  if (input.config.sealMode === 2) {
+    if (!input.config.bookSealAddress) {
+      throw new Error("Universal agent payroll requires the reviewed payroll-book seal.");
+    }
+    if (!input.payrollProof.vestingBook || input.payrollProof.vestingBook.entryKind !== "agent") {
+      throw new Error("Universal agent payroll requires an agent-kind v3 book proof.");
+    }
+    const callback = buildVestingBookAction({
+      sealAddress: input.config.bookSealAddress,
+      chainId: input.config.chainId,
+      payrollShards: input.payrollProof.shards,
+      vestingBook: input.payrollProof.vestingBook,
+    });
+    invoke = {
+      callBuilder: () => ({
+        contractAddress: callback.contract,
+        calldata: callback.calldata,
+      }),
+    };
+  } else if (input.payrollProof.vestingBook) {
+    throw new Error("Legacy agent mode forbids an unconsumed payroll-book proof.");
+  }
   return {
     actions: {
       createNotes,
@@ -143,6 +170,7 @@ export function buildDirectPrivacyPlan(input: {
         token: BigInt(token),
         withdraw: false as const,
       })),
+      ...(invoke ? { invoke } : {}),
     },
     sealedPayroll,
     tokenAddresses,

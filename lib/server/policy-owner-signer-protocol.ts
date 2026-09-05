@@ -101,6 +101,7 @@ export type PolicySignerConstraints = {
   policyAccountAddress: string;
   poolAddress: string;
   sealAddress: string;
+  bookSealAddress?: string;
   viewingPublicKey: string;
   tokenAddresses: readonly string[];
   maxProofActions: number;
@@ -238,6 +239,7 @@ function assertRestrictedProofActions(
   ) throw new Error("The STRK20 proof action count is outside the isolated signer limit.");
 
   let createdNotes = 0;
+  let bookInvokes = 0;
   for (let index = 0n; index < actionCount; index += 1n) {
     const variant = take(`action ${index} variant`);
     if (variant === 1n) {
@@ -287,6 +289,27 @@ function assertRestrictedProofActions(
       assertNonzero(channelKey, "UseNote channel key");
       assertAllowedToken(token);
       assertU32(noteIndex, "UseNote index");
+    } else if (variant === 8n) {
+      const target = take(`action ${index} InvokeExternal target`);
+      const calldataLength = take(`action ${index} InvokeExternal calldata length`);
+      if (!constraints.bookSealAddress
+        || !sameFelt(target.toString(), constraints.bookSealAddress)
+        || calldataLength !== 6n) {
+        throw new Error("The STRK20 external action is not the exact universal-book callback.");
+      }
+      const runHigh = take(`action ${index} book run high`);
+      const runLow = take(`action ${index} book run low`);
+      const releaseHigh = take(`action ${index} book release high`);
+      const releaseLow = take(`action ${index} book release low`);
+      const bookHigh = take(`action ${index} book entry high`);
+      const bookLow = take(`action ${index} book entry low`);
+      if ((runHigh === 0n && runLow === 0n)
+        || releaseHigh !== 0n
+        || releaseLow !== 0n
+        || (bookHigh === 0n && bookLow === 0n)) {
+        throw new Error("The STRK20 universal-book callback has invalid agent bindings.");
+      }
+      bookInvokes += 1;
     } else {
       throw new Error(
         "The isolated signer forbids registration, deposits, open notes, withdrawals and external actions.",
@@ -295,6 +318,9 @@ function assertRestrictedProofActions(
   }
   if (cursor !== calldata.length) {
     throw new Error("The STRK20 proof action stream contains trailing calldata.");
+  }
+  if (constraints.bookSealAddress && bookInvokes !== 1) {
+    throw new Error("The autonomous proof requires exactly one universal-book callback.");
   }
   if (createdNotes < 1 || createdNotes > constraints.maxCreatedNotes) {
     throw new Error("The STRK20 encrypted-note count is outside the isolated signer limit.");
@@ -350,25 +376,26 @@ export function assertRestrictedPolicyConfiguration(
   if (
     !sameFelt(call.contractAddress, constraints.policyAccountAddress)
     || call.entrypoint !== "configure_policy"
-    || call.calldata.length !== 19
+    || call.calldata.length !== 20
   ) throw new Error("The signer only accepts one canonical policy configuration call.");
   const values = call.calldata.map(BigInt);
-  const [policyId, sessionPublicKey, pool, seal, sealMode, proofVersion, schemaVersion] = values;
-  const validAfter = values[14];
-  const validBefore = values[15];
-  const periodSeconds = values[16];
-  const maxCallsPerPeriod = values[17];
-  const maxCallCount = values[18];
+  const [policyId, sessionPublicKey, pool, seal, bookSeal, sealMode, proofVersion, schemaVersion] = values;
+  const validAfter = values[15];
+  const validBefore = values[16];
+  const periodSeconds = values[17];
+  const maxCallsPerPeriod = values[18];
+  const maxCallCount = values[19];
   if (
     policyId === 0n
     || sessionPublicKey === 0n
     || !sameFelt(pool.toString(), constraints.poolAddress)
     || !sameFelt(seal.toString(), constraints.sealAddress)
-    || sealMode !== 0n
+    || !sameFelt(bookSeal.toString(), constraints.bookSealAddress ?? "0x0")
+    || sealMode !== (constraints.bookSealAddress ? 2n : 0n)
     || (proofVersion !== 1n && proofVersion !== 2n)
     || schemaVersion !== 1n
-    || (values[7] === 0n && values[8] === 0n)
-    || values.slice(9, 14).some((value) => value === 0n)
+    || (values[8] === 0n && values[9] === 0n)
+    || values.slice(10, 15).some((value) => value === 0n)
     || validBefore <= validAfter
     || validBefore - validAfter > BigInt(constraints.maxPolicyLifetimeSeconds)
     || validAfter > BigInt(nowUnixSeconds + 300)
@@ -384,7 +411,7 @@ export function assertRestrictedPolicyConfiguration(
 }
 
 export function configuredPolicyMatches(call: PolicyConfigurationRequest["call"], state: readonly string[]): boolean {
-  if (state.length !== 23 || BigInt(state[0]) !== 1n) return false;
+  if (state.length !== 24 || BigInt(state[0]) !== 1n) return false;
   if (BigInt(state[1]) !== 0n) return false;
   return call.calldata.slice(1).every((value, index) => BigInt(value) === BigInt(state[index + 2]));
 }
