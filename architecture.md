@@ -431,6 +431,13 @@ profile, the real ordered proof pair and reversed-shard rejection were read back
 `evidence/vesting-tax-mainnet.json`. A deliberately small live state-changing canary
 remains a separate release gate.
 
+The production web and prover machines both pin that exact seal in public build-time
+and private server runtime configuration. The served payroll bundle exposes the same
+address and fails closed for advanced runs when it is absent; the protected prover
+route remains enabled and authentication-gated. Release image identifiers, health
+checks and the green source CI binding are recorded in
+`evidence/vesting-tax-hosted-rollout.json`.
+
 ### Complete private compliance book
 
 For every on-chain book entry, the organization retains an authenticated encrypted

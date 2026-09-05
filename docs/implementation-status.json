@@ -441,7 +441,8 @@
         "scripts/lib/payo-vesting-book-mainnet.mjs",
         "scripts/payo-vesting-book-mainnet.mjs",
         "evidence/vesting-tax-mainnet-plan.json",
-        "evidence/vesting-tax-mainnet.json"
+        "evidence/vesting-tax-mainnet.json",
+        "evidence/vesting-tax-hosted-rollout.json"
       ],
       "tests": [
         "lib/domain/obligation-schedule.test.ts",
@@ -610,7 +611,8 @@
         "evidence/vesting-tax-devnet.json",
         "evidence/phase3-devnet-fixtures/rendered-browser-ui-origin.json",
         "docs/VESTING_TAX_REPORTING_PLAN.md",
-        "evidence/vesting-tax-mainnet.json"
+        "evidence/vesting-tax-mainnet.json",
+        "evidence/vesting-tax-hosted-rollout.json"
       ],
       "tests": [
         "lib/client/proof-package-workflow.test.ts",
@@ -1064,7 +1066,8 @@
         "scripts/lib/payo-vesting-book-mainnet.mjs",
         "scripts/payo-vesting-book-mainnet.mjs",
         "evidence/vesting-tax-mainnet-plan.json",
-        "evidence/vesting-tax-mainnet.json"
+        "evidence/vesting-tax-mainnet.json",
+        "evidence/vesting-tax-hosted-rollout.json"
       ]
     },
     {
@@ -1093,7 +1096,8 @@
         "lib/disclosure/payroll-book-report.ts",
         "lib/client/payroll-report-workflow.ts",
         "lib/disclosure/tax-evidence.ts",
-        "evidence/vesting-tax-devnet.json"
+        "evidence/vesting-tax-devnet.json",
+        "evidence/vesting-tax-hosted-rollout.json"
       ]
     },
     {
@@ -1160,6 +1164,7 @@
         "scripts/payo-vesting-book-mainnet.mjs",
         "evidence/vesting-tax-mainnet-plan.json",
         "evidence/vesting-tax-mainnet.json",
+        "evidence/vesting-tax-hosted-rollout.json",
         "tests/browser/block5-private-exit.spec.ts",
         "scripts/verify-block5-private-exit-upstream.ts",
         "scripts/verify-pre-hackathon-release.mjs",

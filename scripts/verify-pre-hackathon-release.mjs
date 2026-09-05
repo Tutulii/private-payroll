@@ -58,6 +58,7 @@ const [
   vestingPlan,
   exitPlanRecord,
   vestingDeployment,
+  hostedRollout,
   exitDeployment,
 ] = await Promise.all([
   readJson("evidence/vesting-tax-devnet.json"),
@@ -68,6 +69,7 @@ const [
   readJson("evidence/vesting-tax-mainnet-plan.json"),
   readJson("evidence/private-exit-mainnet-plan.json"),
   optionalJson("evidence/vesting-tax-mainnet.json"),
+  readJson("evidence/vesting-tax-hosted-rollout.json"),
   optionalJson("evidence/private-exit-mainnet.json"),
 ]);
 
@@ -222,6 +224,38 @@ if (vestingDeployment) {
   vestingTopologyVerified = true;
 }
 
+const hostedSealAddress = vestingPlan.contracts.vestingBookSeal.address;
+assert(hostedRollout.schemaVersion === "payo-vesting-tax-hosted-rollout-v1"
+  && hostedRollout.network === "starknet-mainnet"
+  && hostedRollout.chainId === MAINNET_CHAIN_ID,
+"The VestingBook hosted-rollout evidence is malformed or bound to another network.");
+assert(hostedRollout.passed === true
+  && hostedRollout.mainnetTopology?.topologyVerified === true
+  && sameHex(hostedRollout.mainnetTopology?.vestingBookSealAddress, hostedSealAddress),
+"The hosted rollout is not bound to the verified Mainnet VestingBook seal.");
+assert(hostedRollout.github?.conclusion === "success"
+  && hostedRollout.github?.headSha === hostedRollout.sourceCommit
+  && /^[0-9a-f]{40}$/.test(hostedRollout.sourceCommit),
+"The hosted rollout is not bound to a green source commit.");
+for (const service of [hostedRollout.web, hostedRollout.prover]) {
+  assert(service?.state === "started"
+    && service.runtimeConfig?.matchesMainnetEvidence === true
+    && sameHex(service.runtimeConfig?.publicVestingBookSealAddress, hostedSealAddress)
+    && sameHex(service.runtimeConfig?.serverVestingBookSealAddress, hostedSealAddress),
+  `${service?.app ?? "Hosted PAYO service"} is not bound to the verified VestingBook seal.`);
+}
+assert(hostedRollout.web?.healthCheckPassing === true
+  && Object.values(hostedRollout.web?.http ?? {}).every((status) => status === 200)
+  && hostedRollout.web?.servedBrowser?.vestingBookSealAddressPresent === true
+  && hostedRollout.web?.servedBrowser?.advancedPayrollFailsClosedWhenSealMissing === true,
+"The hosted PAYO web release did not pass its route and served-bundle checks.");
+assert(hostedRollout.prover?.runtimeConfig?.selfHostedProverEnabled === true
+  && hostedRollout.prover?.http?.health === 200
+  && hostedRollout.prover?.http?.protectedProofRoute?.status === 401
+  && hostedRollout.prover?.http?.protectedProofRoute?.code === "AUTH_REQUIRED",
+"The hosted PAYO prover is disabled, unhealthy or no longer access-controlled.");
+const hostedWiringVerified = true;
+
 const vestingCanaryPassed = vestingTopologyVerified && vestingDeployment?.canary?.passed === true;
 const exitTopologyVerified = exitDeployment?.verification?.passed === true;
 const exitCanaryPassed = exitTopologyVerified && exitDeployment?.canary?.passed === true;
@@ -241,6 +275,7 @@ const result = {
       ? "verified"
       : vestingTopologyVerified ? "topology_verified_canary_pending" : "pending",
     vestingBookTopology: vestingTopologyVerified ? "verified" : "pending",
+    hostedWiring: hostedWiringVerified ? "verified" : "pending",
     vestingBookCanary: vestingCanaryPassed ? "verified" : "pending",
     privateExit: exitCanaryPassed
       ? "verified"

@@ -1,0 +1,79 @@
+{
+  "schemaVersion": "payo-vesting-tax-hosted-rollout-v1",
+  "observedAt": "2026-09-05T09:01:54Z",
+  "sourceCommit": "96946f4d332da725dfc289d3e1eef2aa236c5aec",
+  "network": "starknet-mainnet",
+  "chainId": "0x534e5f4d41494e",
+  "mainnetTopology": {
+    "vestingVerifierAddress": "0x4b35d2d366848169ea4fb32d4fffda498b5251160da2e60fc53030a37d5551c",
+    "vestingBundleAddress": "0x1bc7517191802bf82ccfb60fa4f27f9306d6cfee9160b545d7dea662e8870a8",
+    "vestingBookSealAddress": "0x5208cc07cb4153235ab5c6ecd1936ee77f9be7a2ea09f6cc69518a6362493f",
+    "deploymentEvidence": "evidence/vesting-tax-mainnet.json",
+    "topologyVerified": true,
+    "liveCanary": "pending"
+  },
+  "github": {
+    "workflow": "PAYO CI",
+    "runId": 33954030737,
+    "url": "https://github.com/Tutulii/private-payroll/actions/runs/33954030737",
+    "headSha": "96946f4d332da725dfc289d3e1eef2aa236c5aec",
+    "conclusion": "success"
+  },
+  "web": {
+    "app": "private-payroll",
+    "hostname": "private-payroll.fly.dev",
+    "machineId": "d897352c37ed98",
+    "region": "sin",
+    "state": "started",
+    "healthCheckPassing": true,
+    "image": "private-payroll:deployment-01M1RB7HEDS9MF6YX8R0S0P0M6",
+    "imageDigest": "sha256:e112b128592499dc0b7f07644d67c5131c298698527e4c4144930a76863da960",
+    "databaseReleaseCommandPassed": true,
+    "runtimeConfig": {
+      "publicVestingBookSealAddress": "0x5208cc07cb4153235ab5c6ecd1936ee77f9be7a2ea09f6cc69518a6362493f",
+      "serverVestingBookSealAddress": "0x5208cc07cb4153235ab5c6ecd1936ee77f9be7a2ea09f6cc69518a6362493f",
+      "matchesMainnetEvidence": true
+    },
+    "http": {
+      "health": 200,
+      "payroll": 200,
+      "team": 200,
+      "activity": 200
+    },
+    "servedBrowser": {
+      "chunks": [
+        "/_next/static/chunks/8168-e4962d98eaeb4682.js",
+        "/_next/static/chunks/4101-468d97791df449bd.js"
+      ],
+      "vestingBookSealAddressPresent": true,
+      "advancedPayrollFailsClosedWhenSealMissing": true
+    }
+  },
+  "prover": {
+    "app": "private-payroll-prover",
+    "hostname": "private-payroll-prover.fly.dev",
+    "machineId": "e82de1df1e1998",
+    "region": "sin",
+    "state": "started",
+    "image": "private-payroll-prover:deployment-01M1RAV9MG6WN06NBAZ911JC99",
+    "imageDigest": "sha256:1fd0aa4f9ad3fdd32cf732343bd95aa46aadc8d91cc8fe756af903844dca55a9",
+    "runtimeConfig": {
+      "publicVestingBookSealAddress": "0x5208cc07cb4153235ab5c6ecd1936ee77f9be7a2ea09f6cc69518a6362493f",
+      "serverVestingBookSealAddress": "0x5208cc07cb4153235ab5c6ecd1936ee77f9be7a2ea09f6cc69518a6362493f",
+      "selfHostedProverEnabled": true,
+      "matchesMainnetEvidence": true
+    },
+    "http": {
+      "health": 200,
+      "protectedProofRoute": {
+        "status": 401,
+        "code": "AUTH_REQUIRED"
+      }
+    }
+  },
+  "passed": true,
+  "limitations": [
+    "This proves the reviewed v3 topology is configured in the deployed web and prover releases; it is not a state-changing vesting, payroll-book or tax-export canary.",
+    "The deliberately small Mainnet live canary still requires explicit user approval immediately before submission."
+  ]
+}

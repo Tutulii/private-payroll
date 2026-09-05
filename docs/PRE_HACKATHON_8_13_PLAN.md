@@ -104,6 +104,13 @@ read-back. Evidence: `evidence/vesting-tax-mainnet.json`. The deliberately small
 vesting/book/export canary and the separate private-exit Mainnet instance/canary remain
 pending and require explicit approval.
 
+The exact v3 VestingBook seal is also pinned into both the hosted PAYO web release and
+self-hosted prover. Both Fly machines are started, both health endpoints pass, the
+served payroll bundle contains the reviewed Mainnet address and advanced payroll fails
+closed if that address is absent. The clean-checkout PAYO CI run for the deployed source
+commit passed. Evidence: `evidence/vesting-tax-hosted-rollout.json`. This verifies hosted
+wiring, not the still-pending state-changing canary.
+
 - Freeze the final public statement before generating the Noir VK or Garaga verifier.
 - Pass positive and negative TypeScript, PostgreSQL, Noir, Cairo, real-proof
   composition, Devnet and Linux Chromium gates.
