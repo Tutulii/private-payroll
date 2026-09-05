@@ -26,6 +26,19 @@ export type PrivatePayrollActionBundle = {
 
 export type PrivateExceptionWorkflow = "wage_claim" | "wage_remediation";
 
+const U128_LIMIT = 1n << 128n;
+
+function actionContract(payoAction: STRK20_INVOKE_ACTION): bigint {
+  if (payoAction.type !== "invoke") {
+    throw new Error("Payroll contains an unapproved PAYO seal action.");
+  }
+  try {
+    return num.toBigInt(validateAndParseAddress(payoAction.contract));
+  } catch {
+    throw new Error("Payroll contains an unapproved PAYO seal action.");
+  }
+}
+
 function assertProofBoundAction(
   payoAction: STRK20_INVOKE_ACTION,
   configuredSeal: string,
@@ -66,14 +79,54 @@ function assertProofBoundAction(
   return normalizedSeal;
 }
 
+function assertPayrollAction(
+  payoAction: STRK20_INVOKE_ACTION,
+  configuredSeal: string,
+  configuredBookSeal?: string,
+): void {
+  const contract = actionContract(payoAction);
+  let seal: string;
+  try {
+    seal = validateAndParseAddress(configuredSeal);
+  } catch {
+    throw new Error("The configured PAYO seal address is invalid.");
+  }
+  if (contract === num.toBigInt(seal)) {
+    assertProofBoundAction(payoAction, seal, 0);
+    return;
+  }
+
+  let bookSeal: string;
+  try {
+    bookSeal = validateAndParseAddress(configuredBookSeal?.trim() ?? "");
+  } catch {
+    throw new Error("Payroll contains an unapproved PAYO seal action.");
+  }
+  if (contract !== num.toBigInt(bookSeal)) {
+    throw new Error("Payroll contains an unapproved PAYO seal action.");
+  }
+  if (payoAction.calldata.length !== 6) {
+    throw new Error("PAYO payroll-book action is not the expected six-field ABI.");
+  }
+  try {
+    for (const field of payoAction.calldata) {
+      const value = BigInt(String(field));
+      if (value < 0n || value >= U128_LIMIT) throw new Error("out of range");
+    }
+  } catch {
+    throw new Error("PAYO payroll-book action calldata is not canonical u128 data.");
+  }
+}
+
 export function buildPrivatePayrollActions(
   recipients: PrivatePayrollRecipient[],
   payoAction: STRK20_INVOKE_ACTION,
   configuredSeal: string,
+  configuredBookSeal?: string,
 ): PrivatePayrollActionBundle {
   if (recipients.length === 0) throw new Error("Add at least one recipient.");
   if (recipients.length > 50) throw new Error("A payroll can contain up to 50 recipients.");
-  assertProofBoundAction(payoAction, configuredSeal, 0);
+  assertPayrollAction(payoAction, configuredSeal, configuredBookSeal);
 
   const seenDestinations = new Set<string>();
   const totals: Record<PayrollTokenSymbol, bigint> = { STRK: 0n, USDC: 0n };

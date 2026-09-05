@@ -878,6 +878,165 @@ export async function resumePendingPayrollSubmission(input: {
   return { ...submitted, verificationQueued: true };
 }
 
+/**
+ * Reopens Ready for a v3 payroll whose proof and on-chain authorization are
+ * already durable but whose wallet request never opened. Every payment line
+ * and callback is reconstructed from authenticated encrypted records; no
+ * caller-supplied recipient, amount, proof, or callback is accepted.
+ */
+export async function resumePendingPayrollApproval(input: {
+  client: PayoClient;
+  pending: PendingPayrollSubmission;
+  principal: VaultPrincipalKeyPair;
+  chainId: string;
+  bookSealAddress: string;
+  submitPayroll: (
+    recipients: Array<{ address: string; amount: string; token: PayrollTokenSymbol }>,
+    payoAction: STRK20_INVOKE_ACTION,
+  ) => Promise<string>;
+  persistPendingSubmission?: (submission: PendingPayrollSubmission | null) => void;
+  onStage?: (stage: PayrollExecutionStage) => void;
+  walletRecoveryPollIntervalMs?: number;
+  walletRecoveryTimeoutMs?: number;
+  walletRecoveryNoticeDelayMs?: number;
+  now?: () => Date;
+}): Promise<PayrollExecutionResult> {
+  const pending = parsePendingPayrollSubmission(input.pending);
+  if (pending.version !== 5 || pending.authorizationMode !== "vesting_book_v3") {
+    throw new Error("Only a v3 payroll-book approval can resume Ready without regenerating proof.");
+  }
+  if (pending.transactionHash) {
+    return resumePendingPayrollSubmission({
+      client: input.client,
+      pending,
+      persistPendingSubmission: input.persistPendingSubmission,
+      onStage: input.onStage,
+    });
+  }
+
+  const [{ run }, { settlement }] = await Promise.all([
+    input.client.getPayrollRun(pending.runId),
+    input.client.getSettlement(pending.settlementId),
+  ]);
+  const serverSettlement = settlement as Record<string, unknown>;
+  if (
+    run.id !== pending.runId
+    || run.organizationId !== pending.organizationId
+    || run.transactionHash !== null
+    || !["proven", "approval_pending"].includes(run.state)
+    || serverSettlement.id !== pending.settlementId
+    || serverSettlement.organizationId !== pending.organizationId
+    || serverSettlement.runId !== pending.runId
+    || serverSettlement.state !== "approval_pending"
+    || serverSettlement.transactionHash !== null
+    || serverSettlement.walletRequestId !== pending.walletRequestId
+    || serverSettlement.idempotencyKey !== pending.idempotencyKey
+    || BigInt(String(serverSettlement.tokenTotalsCommitment)) !== BigInt(pending.tokenTotalsCommitment)
+  ) {
+    throw new Error("The durable payroll approval no longer matches its encrypted recovery record.");
+  }
+  if (
+    run.envelope.aad.organizationId !== pending.organizationId
+    || run.envelope.aad.recordId !== pending.runId
+    || run.envelope.aad.recordType !== "payroll-run"
+  ) throw new Error("The recoverable payroll run has invalid encrypted identity metadata.");
+
+  const payload = resumablePayrollPayloadSchema.parse(
+    decryptVaultRecord(run.envelope, input.principal),
+  );
+  const buildInput = payload.claimProofSource.buildInput as SerializedPayrollIntegrityBuildRequest;
+  const rebuilt = await buildPayrollIntegrityInputsFromSerialized(buildInput);
+  if (
+    buildInput.chainId !== input.chainId
+    || BigInt(payload.agreementRoot) !== BigInt(rebuilt.agreementRoot)
+    || BigInt(payload.manifestRoot) !== BigInt(rebuilt.manifestRoot)
+    || BigInt(payload.policyRoot) !== BigInt(rebuilt.policyRoot)
+    || BigInt(payload.fxRoot) !== BigInt(rebuilt.fxRoot)
+    || BigInt(payload.runNullifier) !== BigInt(rebuilt.runNullifier)
+    || !sameField(run.agreementRoot, rebuilt.agreementRoot)
+    || !sameField(run.manifestRoot, rebuilt.manifestRoot)
+    || !sameField(run.policyRoot, rebuilt.policyRoot)
+    || !sameField(run.fxRoot, rebuilt.fxRoot)
+    || !sameField(run.runNullifier, rebuilt.runNullifier)
+  ) throw new Error("The recoverable payroll proof bindings differ from its encrypted run.");
+  rebuilt.witness.circuitInputs = [{}, {}];
+
+  const recovered = await openStoredPayrollBookProof({
+    client: input.client,
+    proofBundleId: pending.proofBundleId,
+    organizationId: pending.organizationId,
+    runId: pending.runId,
+    principal: input.principal,
+    expectedEntryKinds: ["ordinary", "vesting"],
+  });
+  if (hashCanonicalJson(pending.proofShards) !== hashCanonicalJson(
+    recovered.payrollProof.shards.map(({ proofCalldata }) => proofCalldata),
+  )) throw new Error("The recovery record differs from the stored payroll proof shards.");
+  if (BigInt(recovered.vestingBook.shards[0].publicInputs.validityExpiry)
+    <= BigInt(Math.floor((input.now?.() ?? new Date()).getTime() / 1_000)) + 60n) {
+    throw new Error("The authorized payroll-book proof has expired; protect a fresh payday before retrying.");
+  }
+
+  const tokenTotals = { STRK: 0n, USDC: 0n };
+  const recipients = buildInput.lines.map((line) => {
+    const netAtomic = line.earningsAtomic.reduce((total, value) => total + BigInt(value), 0n)
+      - line.deductionsAtomic.reduce((total, value) => total + BigInt(value), 0n);
+    if (netAtomic <= 0n) throw new Error(`Agreement ${line.agreementId} has no positive net settlement.`);
+    tokenTotals[line.token] += netAtomic;
+    return {
+      address: line.recipientAddress,
+      amount: formatTokenAmount(netAtomic, line.token),
+      token: line.token,
+    };
+  });
+  const totalsCommitment = commitTokenTotals({
+    organizationId: pending.organizationId,
+    runId: pending.runId,
+    totals: { STRK: tokenTotals.STRK.toString(), USDC: tokenTotals.USDC.toString() },
+  });
+  const encryptedSettlement = settlementRecordSchema.parse(
+    decryptVaultRecord(pending.settlementEnvelope, input.principal),
+  );
+  if (
+    BigInt(totalsCommitment) !== BigInt(pending.tokenTotalsCommitment)
+    || encryptedSettlement.id !== pending.settlementId
+    || encryptedSettlement.runId !== pending.runId
+    || encryptedSettlement.walletRequestId !== pending.walletRequestId
+    || encryptedSettlement.idempotencyKey !== pending.idempotencyKey
+    || BigInt(encryptedSettlement.tokenTotalsCommitment) !== BigInt(pending.tokenTotalsCommitment)
+    || encryptedSettlement.tokenTotals.STRK !== tokenTotals.STRK.toString()
+    || encryptedSettlement.tokenTotals.USDC !== tokenTotals.USDC.toString()
+  ) throw new Error("The recovered private payment differs from its durable settlement commitment.");
+
+  const payoAction = buildVestingBookAction({
+    sealAddress: input.bookSealAddress,
+    chainId: input.chainId,
+    payrollShards: recovered.payrollProof.shards,
+    vestingBook: recovered.vestingBook,
+  });
+  input.onStage?.("wallet");
+  const alreadyRecovered = await readRecoveredSettlementTransactionHash(
+    input.client,
+    pending.settlementId,
+  );
+  const transactionHash = alreadyRecovered ?? await awaitWalletOrRecoveredTransaction({
+    submit: () => input.submitPayroll(recipients, payoAction),
+    readRecoveredTransactionHash: () => readRecoveredSettlementTransactionHash(input.client, pending.settlementId),
+    onRecoveryPolling: () => input.onStage?.("wallet_recovery"),
+    pollIntervalMs: input.walletRecoveryPollIntervalMs,
+    timeoutMs: input.walletRecoveryTimeoutMs,
+    recoveryNoticeDelayMs: input.walletRecoveryNoticeDelayMs,
+  });
+  const submitted = { ...pending, transactionHash };
+  input.persistPendingSubmission?.(submitted);
+  return resumePendingPayrollSubmission({
+    client: input.client,
+    pending: submitted,
+    persistPendingSubmission: input.persistPendingSubmission,
+    onStage: input.onStage,
+  });
+}
+
 const sealedRecoveryProofSchema = z.object({
   shards: z.tuple([
     z.object({
@@ -1383,6 +1542,7 @@ export async function executeProofBoundPayroll(
           organizationId: input.organizationId,
           runId,
           principal: input.principal,
+          expectedEntryKinds: ["agent"],
         });
         await authorizePayrollBookProof({
           client: input.client,

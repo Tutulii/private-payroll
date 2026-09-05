@@ -1158,10 +1158,12 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     async (recipients: PayrollRecipient[], payoAction: STRK20_INVOKE_ACTION) => {
       assertPrivateActionAvailable();
       const configuredSeal = process.env.NEXT_PUBLIC_PAYO_SEAL_ADDRESS;
+      const configuredBookSeal = process.env.NEXT_PUBLIC_PAYO_VESTING_BOOK_SEAL_ADDRESS;
       const { actions, totals } = buildPrivatePayrollActions(
         recipients,
         payoAction,
         configuredSeal ?? "",
+        configuredBookSeal,
       );
 
       if (!walletAccount) throw new Error("Connect Ready wallet first.");

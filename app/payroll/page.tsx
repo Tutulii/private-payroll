@@ -42,6 +42,7 @@ import {
   parsePendingPayrollSubmission,
   preparePayrollObligationRoot,
   recoverSealedProvenPayroll,
+  resumePendingPayrollApproval,
   resumePendingPayrollSubmission,
   type PayrollExecutionStage,
   type PayrollExecutionResult,
@@ -1532,6 +1533,41 @@ export default function PayrollPage() {
     }
   };
 
+  const resumePayrollApproval = async () => {
+    setFormError("");
+    setProofDeliveryNotice("");
+    try {
+      if (!vault.client || !vault.session || !recoverableSubmission) {
+        throw new Error("No recoverable payroll approval is available.");
+      }
+      if (!starknet.isConnected || !starknet.isMainnet) {
+        throw new Error("Connect Ready on Starknet Mainnet before resuming approval.");
+      }
+      const bookSealAddress = process.env.NEXT_PUBLIC_PAYO_VESTING_BOOK_SEAL_ADDRESS?.trim();
+      if (!bookSealAddress) throw new Error("The universal PAYO payroll-book seal is not configured.");
+      const result = await resumePendingPayrollApproval({
+        client: vault.client,
+        pending: recoverableSubmission,
+        principal: vault.session.principal,
+        chainId: starknet.chainId,
+        bookSealAddress,
+        submitPayroll: starknet.runProofBoundPayroll,
+        persistPendingSubmission,
+        onStage: setPayrollStage,
+      });
+      setPayrollReceipt(result);
+      setProofDeliveryNotice(result.proofDeliveryWarning ?? "");
+      await reconcilePayrollTransaction(result.transactionHash);
+      await refreshPayrollRuns();
+      notify(`Recovered proof paid privately · ${result.transactionHash.slice(0, 10)}…`);
+    } catch (recoveryError) {
+      setPayrollStage(null);
+      setFormError(recoveryError instanceof Error
+        ? recoveryError.message
+        : "Ready approval recovery failed.");
+    }
+  };
+
   const resumePayrollRecording = async (submittedHash = recoveryTransactionHash) => {
     setFormError("");
     setProofDeliveryNotice("");
@@ -2354,11 +2390,21 @@ export default function PayrollPage() {
                       >Hide hash recovery</button>
                     </>
                   ) : (
-                    <button
-                      type="button"
-                      className="button button--soft"
-                      onClick={() => setShowManualHashRecovery(true)}
-                    >I see a submitted transaction</button>
+                    <>
+                      {recoverableSubmission.authorizationMode === "vesting_book_v3" && (
+                        <button
+                          type="button"
+                          className="button button--ink"
+                          disabled={Boolean(payrollStage)}
+                          onClick={() => void resumePayrollApproval()}
+                        >Resume Ready approval</button>
+                      )}
+                      <button
+                        type="button"
+                        className="button button--soft"
+                        onClick={() => setShowManualHashRecovery(true)}
+                      >I see a submitted transaction</button>
+                    </>
                   )}
                   {!recoverableSubmission.transactionHash && (
                     <button

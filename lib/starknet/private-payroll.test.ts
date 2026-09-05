@@ -23,6 +23,11 @@ const PAYO_ACTION: STRK20_INVOKE_ACTION = {
   contract: SEAL,
   calldata: Array.from({ length: 19 }, (_, index) => num.toHex(index)),
 };
+const BOOK_PAYO_ACTION: STRK20_INVOKE_ACTION = {
+  type: "invoke",
+  contract: BOOK_SEAL,
+  calldata: ["0x11", "0x12", "0x0", "0x0", "0x21", "0x22"],
+};
 
 describe("buildPrivatePayrollActions", () => {
   it("builds a mixed batch with exact token decimals and the seal last", () => {
@@ -142,6 +147,35 @@ describe("buildPrivatePayrollActions", () => {
     ).actions;
     expect(actions.at(-2)).toBe(remediationAction);
     expect(actions.at(-1)).toBe(bookAction);
+  });
+
+  it("accepts only the configured six-u128 payroll-book action", () => {
+    expect(buildPrivatePayrollActions(
+      [{ address: "0x111", token: "STRK", amount: "1" }],
+      BOOK_PAYO_ACTION,
+      SEAL,
+      BOOK_SEAL,
+    ).actions.at(-1)).toBe(BOOK_PAYO_ACTION);
+    expect(() => buildPrivatePayrollActions(
+      [{ address: "0x111", token: "STRK", amount: "1" }],
+      BOOK_PAYO_ACTION,
+      SEAL,
+    )).toThrow(/unapproved PAYO seal/i);
+    expect(() => buildPrivatePayrollActions(
+      [{ address: "0x111", token: "STRK", amount: "1" }],
+      { ...BOOK_PAYO_ACTION, calldata: BOOK_PAYO_ACTION.calldata.slice(0, 5) },
+      SEAL,
+      BOOK_SEAL,
+    )).toThrow(/six-field ABI/i);
+    expect(() => buildPrivatePayrollActions(
+      [{ address: "0x111", token: "STRK", amount: "1" }],
+      {
+        ...BOOK_PAYO_ACTION,
+        calldata: ["0x100000000000000000000000000000000", ...BOOK_PAYO_ACTION.calldata.slice(1)],
+      },
+      SEAL,
+      BOOK_SEAL,
+    )).toThrow(/canonical u128/i);
   });
 
   it("rejects a proof action whose mode or ABI does not match its workflow", () => {

@@ -83,6 +83,7 @@ export async function openStoredPayrollBookProof(input: {
   organizationId: string;
   runId: string;
   principal: VaultPrincipalKeyPair;
+  expectedEntryKinds?: readonly VestingBookProof["entryKind"][];
 }) {
   const { proofBundle } = await input.client.getEncryptedProofBundle(input.proofBundleId);
   if (
@@ -134,8 +135,11 @@ export async function openStoredPayrollBookProof(input: {
       || BigInt(shard.calldataHash) !== BigInt(metadata.shardCalldataHashes[index])
     ) throw new Error(`Stored payroll proof shard ${index} differs from its public commitments.`);
   }
-  if (!payload.vestingBook || payload.vestingBook.entryKind !== "agent") {
-    throw new Error("The stored autonomous payroll is missing its universal agent-book proof.");
+  if (!payload.vestingBook) {
+    throw new Error("The stored payroll is missing its universal payroll-book proof.");
+  }
+  if (input.expectedEntryKinds && !input.expectedEntryKinds.includes(payload.vestingBook.entryKind)) {
+    throw new Error("The stored payroll-book proof has an unexpected entry kind.");
   }
 
   const payrollProof: ProofWorkerSuccess = {

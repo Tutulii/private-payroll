@@ -30,7 +30,9 @@ import {
   preparePayrollObligationRoot,
   recoverConfirmedPayrollVerification,
   recoverSealedProvenPayroll,
+  resumePendingPayrollApproval,
   resumePendingPayrollSubmission,
+  type PendingPayrollSubmission,
 } from "./payroll-execution";
 import { buildAdvancedPaymentPlanDraft } from "./advanced-agreement-draft";
 import { prepareObligationSnapshotPlan } from "./obligation-snapshot-plan";
@@ -788,6 +790,89 @@ describe("proof-bound payroll browser orchestration", () => {
       pending,
       persistPendingSubmission: persistence,
     })).resolves.toMatchObject({ settlementId: result.settlementId, verificationQueued: true });
+    expect(persistence).toHaveBeenLastCalledWith(null);
+  });
+
+  it("reopens Ready from the exact stored v3 proof after the first wallet call never opened", async () => {
+    const mockClient = client();
+    const input = await snapshotExecutionInput(mockClient);
+    // Ordinary v3 payroll proofs are source-bound directly to the payroll-book
+    // seal; keep the fixture identical to the production wiring.
+    const bookSealAddress = sealAddress;
+    const vestingBook = {
+      ownerAddress: input.snapshotPlan.snapshot.ownerAddress,
+      bookSealAddress,
+      entryKind: "ordinary" as const,
+    };
+    input.submitPayroll.mockRejectedValueOnce(new Error("wallet boundary rejected before Ready"));
+
+    await expect(executeProofBoundPayroll({ ...input, vestingBook }))
+      .rejects.toThrow("wallet boundary rejected before Ready");
+
+    const persistedRun = mockClient.createPayrollRun.mock.calls[0][0];
+    const storedProof = mockClient.storeEncryptedProofBundle.mock.calls[0][0];
+    const pending = input.persistPendingSubmission.mock.calls
+      .map(([value]) => value)
+      .find((value) => value && !value.transactionHash) as PendingPayrollSubmission;
+    expect(pending).toMatchObject({
+      version: 5,
+      runId: persistedRun.id,
+      proofBundleId: storedProof.id,
+      authorizationMode: "vesting_book_v3",
+    });
+
+    mockClient.getPayrollRun.mockResolvedValue({
+      run: {
+        id: persistedRun.id,
+        organizationId: persistedRun.organizationId,
+        state: "approval_pending" as const,
+        agreementRoot: persistedRun.agreementRoot,
+        manifestRoot: persistedRun.manifestRoot,
+        policyRoot: persistedRun.policyRoot,
+        fxRoot: persistedRun.fxRoot,
+        runNullifier: persistedRun.runNullifier,
+        obligationSnapshotPlanId: persistedRun.obligationSnapshotPlanId ?? null,
+        transactionHash: null,
+        envelope: persistedRun.envelope,
+      },
+    });
+    mockClient.getEncryptedProofBundle.mockResolvedValue(storedProofResponse(storedProof));
+    mockClient.getSettlement.mockResolvedValue({
+      settlement: {
+        id: pending.settlementId,
+        organizationId: pending.organizationId,
+        runId: pending.runId,
+        state: "approval_pending",
+        transactionHash: null,
+        walletRequestId: pending.walletRequestId,
+        idempotencyKey: pending.idempotencyKey,
+        tokenTotalsCommitment: pending.tokenTotalsCommitment,
+      },
+    });
+    input.submitPayroll.mockResolvedValueOnce("0xbeef");
+    const persistence = vi.fn();
+
+    await expect(resumePendingPayrollApproval({
+      client: mockClient as unknown as PayoClient,
+      pending,
+      principal,
+      chainId,
+      bookSealAddress,
+      submitPayroll: input.submitPayroll,
+      persistPendingSubmission: persistence,
+      walletRecoveryPollIntervalMs: 1,
+      walletRecoveryTimeoutMs: 50,
+      now: input.now,
+    })).resolves.toMatchObject({
+      runId: persistedRun.id,
+      transactionHash: "0xbeef",
+      verificationQueued: true,
+    });
+
+    expect(input.prove).toHaveBeenCalledTimes(1);
+    expect(mockClient.storeEncryptedProofBundle).toHaveBeenCalledTimes(1);
+    expect(input.submitPayroll).toHaveBeenCalledTimes(2);
+    expect(mockClient.recordSettlementSubmission).toHaveBeenCalledWith(pending.settlementId, "0xbeef");
     expect(persistence).toHaveBeenLastCalledWith(null);
   });
 
