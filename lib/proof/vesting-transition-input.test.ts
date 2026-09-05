@@ -118,7 +118,7 @@ describe("Advanced v3 vesting transition inputs", () => {
   it("executes both ordered shards with TypeScript commitments", async () => {
     const build = await fixture();
     const circuit = JSON.parse(readFileSync(
-      new URL("../../circuits/vesting_transition/target/payo_vesting_transition.json", import.meta.url),
+      new URL("../../public/circuits/vesting_transition-v3.json", import.meta.url),
       "utf8",
     )) as CompiledCircuit;
     const noir = new Noir(circuit);
@@ -134,7 +134,7 @@ describe("Advanced v3 vesting transition inputs", () => {
   it("executes an ordinary payroll-book entry with zero vesting state", async () => {
     const build = await fixture("ordinary");
     const circuit = JSON.parse(readFileSync(
-      new URL("../../circuits/vesting_transition/target/payo_vesting_transition.json", import.meta.url),
+      new URL("../../public/circuits/vesting_transition-v3.json", import.meta.url),
       "utf8",
     )) as CompiledCircuit;
     const noir = new Noir(circuit);
@@ -153,7 +153,7 @@ describe("Advanced v3 vesting transition inputs", () => {
   it("fails closed when a stale state or changed book entry reaches the circuit", async () => {
     const build = await fixture();
     const circuit = JSON.parse(readFileSync(
-      new URL("../../circuits/vesting_transition/target/payo_vesting_transition.json", import.meta.url),
+      new URL("../../public/circuits/vesting_transition-v3.json", import.meta.url),
       "utf8",
     )) as CompiledCircuit;
     const noir = new Noir(circuit);

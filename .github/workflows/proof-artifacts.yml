@@ -209,7 +209,7 @@ jobs:
             vesting_verifier_v3/src/honk_verifier.cairo
           (cd vesting_verifier_v3 && scarb fmt)
           for source in honk_verifier.cairo honk_verifier_circuits.cairo honk_verifier_constants.cairo; do
-            diff -u \
+            diff -uB \
               "$GITHUB_WORKSPACE/contracts/vesting_verifier_v3/src/$source" \
               "vesting_verifier_v3/src/$source"
           done

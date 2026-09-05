@@ -114,7 +114,7 @@ describe("universal payroll-book proof input", () => {
     expect(build.shards[1].lines.filter(({ active }) => active)).toHaveLength(1);
 
     const circuit = JSON.parse(readFileSync(
-      new URL("../../circuits/vesting_transition/target/payo_vesting_transition.json", import.meta.url),
+      new URL("../../public/circuits/vesting_transition-v3.json", import.meta.url),
       "utf8",
     )) as CompiledCircuit;
     const noir = new Noir(circuit);
@@ -166,7 +166,7 @@ describe("universal payroll-book proof input", () => {
     expect(BigInt(build.entry.totalsCommitment)).not.toBe(0n);
 
     const circuit = JSON.parse(readFileSync(
-      new URL("../../circuits/vesting_transition/target/payo_vesting_transition.json", import.meta.url),
+      new URL("../../public/circuits/vesting_transition-v3.json", import.meta.url),
       "utf8",
     )) as CompiledCircuit;
     const noir = new Noir(circuit);

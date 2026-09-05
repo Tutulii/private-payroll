@@ -78,7 +78,7 @@ const claimFact = {
 
 function circuit() {
   return new Noir(JSON.parse(readFileSync(
-    new URL("../../circuits/vesting_transition/target/payo_vesting_transition.json", import.meta.url),
+    new URL("../../public/circuits/vesting_transition-v3.json", import.meta.url),
     "utf8",
   )) as CompiledCircuit);
 }
