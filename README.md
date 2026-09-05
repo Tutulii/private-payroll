@@ -36,10 +36,10 @@ PAYO labels capabilities according to evidence, not intention.
 | PAYO payroll-seal contract | Deployed and live-proven for STRK, USDC, and mixed batches | The five-contract Mainnet topology is binding-verified. Ready STRK-only, native-USDC-only, and mixed STRK/USDC payrolls reached durable `confirmed`, seal `proven`, and two-shard `onchain_verified` states in [Phase 2 evidence](./docs/phase2-evidence.md) |
 | Advanced obligation engine | Transaction-safe merged v2 deployed and active on Mainnet; fresh PAYO payroll E2E pending | One proof retains PayrollIntegrity plus statutory, FX, classification, schedules, vesting, and offboarding constraints; both 3,223-felt shards passed the deployed verifier, tamper rejection, deterministic class-hash read-back, and registry activation recorded in [Phase 3 evidence](./docs/phase3-evidence.md) |
 | Compliance proof export | Built and tested locally | Balanced journal and verifier-bound ZIP package |
-| Universal accountable payroll book | Locally and Devnet proven; Mainnet release pending | Ordinary, vesting, agent, claim and remediation entry kinds; atomic private agent settlement/book append and replay rejection in [`evidence/universal-payroll-book-private-devnet.json`](./evidence/universal-payroll-book-private-devnet.json) |
+| Universal accountable payroll book | Mainnet v3 topology active and proof-verified; live book canary pending | Ordinary, vesting, agent, claim and remediation entry kinds; atomic private settlement/book append and replay rejection, with deployment receipts and real-proof read-back in [`evidence/vesting-tax-mainnet.json`](./evidence/vesting-tax-mainnet.json) |
 | Worker-controlled income statements | Built and browser-tested; Mainnet book canary pending | Direct STRK20 holders derive a reporting-only identity with a viewing-key ownership proof, receive only their encrypted book lines, and generate the final statement locally; Ready is an explicit PAYO-X25519 fallback |
 | Familiar private tax evidence | Built and browser-tested; Mainnet book canary pending | One checkpoint-bound verified-income schema renders W-2-, P60- and T4-style evidence with exact policy/catalog bindings; these are explicitly not official filings or legal advice |
-| Private external fact attestations | Locally, browser, and Devnet proven; Mainnet release pending | An issuer-signed package binds residency, employment and tax status to one private recipient, exact policy catalog and one-hour proof window; the v3 proof exposes only an approved, revocable catalog root. See [`evidence/vesting-tax-devnet.json`](./evidence/vesting-tax-devnet.json) and [`evidence/block4-external-attestation-browser.json`](./evidence/block4-external-attestation-browser.json) |
+| Private external fact attestations | Mainnet v3 topology active and proof-verified; live canary pending | An issuer-signed package binds residency, employment and tax status to one private recipient, exact policy catalog and one-hour proof window; the v3 proof exposes only an approved, revocable catalog root. See [`evidence/vesting-tax-devnet.json`](./evidence/vesting-tax-devnet.json), [`evidence/block4-external-attestation-browser.json`](./evidence/block4-external-attestation-browser.json), and [`evidence/vesting-tax-mainnet.json`](./evidence/vesting-tax-mainnet.json) |
 | MCP policy gateway | Phase 4 complete; Mainnet agent canary remains Phase 5 | All eight tools, encrypted capability authority, transactional limits, human approval and bounded direct-SDK execution are linked in [Phase 4 evidence](./docs/phase4-evidence.md) |
 | SettlementMatch proof | Working for direct Privacy SDK policy accounts | Real proof, generated verifier, atomic `FINALIZE`, exact private balance delta and replay rejection are recorded in [Phase 4 evidence](./docs/phase4-evidence.md); Ready does not expose its viewing key, so Ready-backed runs remain `confirmed` |
 
@@ -112,16 +112,18 @@ The roadmap below is the target, not a completion claim. The evidence-backed sta
 - Private wage claims and private remediation payments.
 - Encrypted accounting and auditor proof packages.
 
-The stateful vesting/compliance-book extension now has local and Devnet evidence:
+The stateful vesting/compliance-book extension now has local, Devnet and Mainnet
+topology evidence:
 a v3 proof binds immutable vesting terms, exact accrued-release deltas and sequential
 state; the seal rejects stale/replayed releases and appends every finalized entry to
 an ordered period accumulator. Employer, worker and tax-reviewer reports are encrypted
-and verified against that complete book. Read-only Mainnet dependency checks,
-deterministic address planning, and fee simulation are recorded in
-`evidence/vesting-tax-mainnet-plan.json`. This is **not a Mainnet completion claim**:
-the v3 verifier, bundle and VestingBook seal remain undeployed and still require
-explicitly approved declaration, deployment, activation and one deliberately small
-live canary.
+and verified against that complete book. The v3 verifier, ordered bundle and
+VestingBook seal are deployed at their reviewed deterministic Mainnet addresses;
+their class hashes, immutable dependency wiring, active registry profile, real ordered
+proof pair and reversed-shard rejection passed read-back. Receipts are recorded in
+`evidence/vesting-tax-mainnet.json`. This is **not a live-flow completion claim**:
+one deliberately small, explicitly approved vesting/book/export canary is still
+required.
 
 ### Phase 4 — Human and AI-agent payroll
 

@@ -1283,8 +1283,11 @@ export default function PayrollPage() {
       const advancedProfile = selectedObligations.every(
         ({ agreement }) => agreement.agreement.agreementVersion === "payo-agreement-v2",
       );
-      const vestingBookSealAddress = process.env.NEXT_PUBLIC_PAYO_VESTING_BOOK_SEAL_ADDRESS;
-      const useVestingBook = advancedProfile && Boolean(vestingBookSealAddress);
+      const vestingBookSealAddress = process.env.NEXT_PUBLIC_PAYO_VESTING_BOOK_SEAL_ADDRESS?.trim();
+      if (advancedProfile && !vestingBookSealAddress) {
+        throw new Error("The universal PAYO payroll-book seal is not configured.");
+      }
+      const useVestingBook = advancedProfile;
       const sealAddress = prepareForAgent
         ? process.env.NEXT_PUBLIC_PAYO_AGENT_SEAL_ADDRESS
         : useVestingBook

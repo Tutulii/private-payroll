@@ -687,10 +687,11 @@ if (action === "verify-canary") {
 
 if (action === "verify") {
   const blockNumber = await provider.getBlockNumber();
-  const [dependencies, status, proofVerification] = await Promise.all([
+  const [dependencies, status, proofVerification, balance] = await Promise.all([
     assertLiveDependencies(plan, blockNumber),
     liveStatus(plan, blockNumber),
     verifyRealProofPair(plan),
+    readBalance(plan.deployerAddress),
   ]);
   if (!Object.values(status.declarations).every(Boolean)
     || !Object.values(status.contracts).every(({ deployed }) => deployed)
@@ -704,6 +705,7 @@ if (action === "verify") {
     dependencies,
     status,
     proofVerification,
+    balanceFri: balance.toString(),
     canaryRequired: true,
   };
   await updateEvidence(plan, async (evidence) => ({ ...evidence, verification }));

@@ -440,7 +440,8 @@
         "docs/VESTING_TAX_REPORTING_PLAN.md",
         "scripts/lib/payo-vesting-book-mainnet.mjs",
         "scripts/payo-vesting-book-mainnet.mjs",
-        "evidence/vesting-tax-mainnet-plan.json"
+        "evidence/vesting-tax-mainnet-plan.json",
+        "evidence/vesting-tax-mainnet.json"
       ],
       "tests": [
         "lib/domain/obligation-schedule.test.ts",
@@ -463,7 +464,8 @@
         "contracts/vesting_integration: real v3 Garaga proofs composed with the production VestingBook seal",
         "standalone Devnet real-proof verification plus state advance, exact accumulator, changed-proof, replay and stale-genesis rejection",
         "combined official STRK20 SDK private payment plus atomic universal-book append, exact balance delta and replay rejection",
-        "read-only Mainnet dependency checks, deterministic topology, undeployed-state read-back, and fee simulation without mutation"
+        "read-only Mainnet dependency checks, deterministic topology, undeployed-state read-back, and fee simulation without mutation",
+        "Mainnet three-class declaration, atomic deployment, activation, exact class/wiring read-back, real ordered proof acceptance, and reversed-shard rejection at block 14392605"
       ]
     },
     {
@@ -607,7 +609,8 @@
         "contracts/src/vesting_book_seal.cairo",
         "evidence/vesting-tax-devnet.json",
         "evidence/phase3-devnet-fixtures/rendered-browser-ui-origin.json",
-        "docs/VESTING_TAX_REPORTING_PLAN.md"
+        "docs/VESTING_TAX_REPORTING_PLAN.md",
+        "evidence/vesting-tax-mainnet.json"
       ],
       "tests": [
         "lib/client/proof-package-workflow.test.ts",
@@ -624,7 +627,8 @@
         "lib/policy/reference-packs.test.ts",
         "tests/browser/phase3-production-controls.spec.ts",
         "complete employer/tax book and worker statement reject omission, duplication, mutation, wrong key and cross-tenant evidence",
-        "canonical W-2/P60/T4-style views reject exact-policy substitution and mutated evidence"
+        "canonical W-2/P60/T4-style views reject exact-policy substitution and mutated evidence",
+        "Mainnet v3 payroll-book verifier, bundle, seal and active registry profile read back against the reviewed deployment plan"
       ]
     },
     {
@@ -1059,7 +1063,8 @@
         "evidence/vesting-tax-devnet.json",
         "scripts/lib/payo-vesting-book-mainnet.mjs",
         "scripts/payo-vesting-book-mainnet.mjs",
-        "evidence/vesting-tax-mainnet-plan.json"
+        "evidence/vesting-tax-mainnet-plan.json",
+        "evidence/vesting-tax-mainnet.json"
       ]
     },
     {
@@ -1154,6 +1159,7 @@
         "scripts/lib/payo-vesting-book-mainnet.mjs",
         "scripts/payo-vesting-book-mainnet.mjs",
         "evidence/vesting-tax-mainnet-plan.json",
+        "evidence/vesting-tax-mainnet.json",
         "tests/browser/block5-private-exit.spec.ts",
         "scripts/verify-block5-private-exit-upstream.ts",
         "scripts/verify-pre-hackathon-release.mjs",

@@ -1,0 +1,250 @@
+{
+  "schemaVersion": 1,
+  "network": "starknet-mainnet",
+  "plan": {
+    "schemaVersion": 1,
+    "generatedAt": "2026-09-05T04:41:42.044Z",
+    "network": "starknet-mainnet",
+    "chainId": "0x534e5f4d41494e",
+    "deployerAddress": "0x126a7a572cf8935d069af937e9f7b27a24949e271e1fbccfe4de0c0d8dc8ea9",
+    "poolAddress": "0x40337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+    "reusedTopology": {
+      "policyRegistry": {
+        "address": "0x34701f573096b7bab0e5678e1ed2f17a87c8d56eb5f4d70bcf2197bab8e4477",
+        "classHash": "0x6366141e5ae47f2e170409c6babaa4d6ae220b5b255f8dcbf9b0173f8681cfd"
+      },
+      "obligationRegistry": {
+        "address": "0x44b22f1a17d2710c2f51ed0b37b8b0ff8435262d3c8c0f2f17be07c84ac23b5",
+        "classHash": "0x50ac78b67fd69d7e2a892dc51014159d7e69fe1770c3f4f33add21131aa2a0b"
+      },
+      "exceptionSeal": {
+        "address": "0x3394e58bb2bb294e0ae92514079a1394c6c66eae8a6c033a6f7f449b1d12ce",
+        "classHash": "0x612f04ea11fd47f83793efee058a9ddd1380b03fe1273fe9fab13ff58b3a3b"
+      },
+      "payrollV2Bundle": "0xeba326f15f73968026bd12007220d88104fdcb322a56ad8c69fbe8a5350e18"
+    },
+    "circuit": {
+      "proofVersion": 3,
+      "schemaVersion": 1,
+      "publicInputCount": 58,
+      "circuitSha256": "0xbb1a8029e604de7b47a28f2ab7dc49f7a3859bc0c3c66b4bf502bdb1b943aec6",
+      "verificationKeySha256": "0xafad41c9d11ec920fe9cb091b04dc4ed092d2dfee561444a95b2af855ae80a20",
+      "measuredProofCalldataFelts": 3269,
+      "maximumProofCalldataFelts": 4992
+    },
+    "verifierProfile": {
+      "mode": 0,
+      "proofVersion": 3,
+      "address": "0x1bc7517191802bf82ccfb60fa4f27f9306d6cfee9160b545d7dea662e8870a8"
+    },
+    "contracts": {
+      "vestingVerifier": {
+        "address": "0x4b35d2d366848169ea4fb32d4fffda498b5251160da2e60fc53030a37d5551c",
+        "salt": "0x7061796f2d76657374696e672d76332d76657269666965722d7631",
+        "constructorCalldata": [],
+        "classHash": "0x5880228c9533d8b168275dbf3671cf219e684fb6027dd56f5ef3215caf37573",
+        "compiledClassHash": "0x70899e9edf6dd859860e26f2a4695fe3f1ab4de78c71b5cd27e4625da6d4770",
+        "sierraSha256": "8cd91e54a04406ab8fbc03c77f0e3a10e6ef5f598c41ac9610b5bafb4a004391",
+        "casmSha256": "ec88c07f3ef2f48c65e6f35261e4dd8f712cd2e86e8335741200ec1c026facfe"
+      },
+      "vestingBundle": {
+        "address": "0x1bc7517191802bf82ccfb60fa4f27f9306d6cfee9160b545d7dea662e8870a8",
+        "salt": "0x7061796f2d76657374696e672d76332d62756e646c652d7631",
+        "constructorCalldata": [
+          "0x4b35d2d366848169ea4fb32d4fffda498b5251160da2e60fc53030a37d5551c"
+        ],
+        "classHash": "0x7aa6924647c8f6bed105fe7a11e51b3679dfc111f88f63519a5b2043fe1586d",
+        "compiledClassHash": "0x409609d6b59e878680504448da5df1eb6adb87f48d89010f217f34482ef38f3",
+        "sierraSha256": "84a9a1516808d0c4672137ebcb30ee2aae0bbc593853ae9537e165e3bd9850a6",
+        "casmSha256": "b29a2d95bb22e507c818b0b6a0f2dfcedb777215dc4370fef45eddb2ad30a560"
+      },
+      "vestingBookSeal": {
+        "address": "0x5208cc07cb4153235ab5c6ecd1936ee77f9be7a2ea09f6cc69518a6362493f",
+        "salt": "0x7061796f2d76657374696e672d626f6f6b2d7365616c2d7631",
+        "constructorCalldata": [
+          "0x40337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+          "0x34701f573096b7bab0e5678e1ed2f17a87c8d56eb5f4d70bcf2197bab8e4477",
+          "0x44b22f1a17d2710c2f51ed0b37b8b0ff8435262d3c8c0f2f17be07c84ac23b5",
+          "0x3394e58bb2bb294e0ae92514079a1394c6c66eae8a6c033a6f7f449b1d12ce",
+          "0x534e5f4d41494e"
+        ],
+        "classHash": "0x25af7969593ae59fe67830f7cb42774f0e62807c9114367d36e753be9577553",
+        "compiledClassHash": "0x105281f078733e95593b505c087a189a12cc45acd0902a4f931f557e225f7ed",
+        "sierraSha256": "f7be3b0fb5e0f0830009edfae51f18125bb029e1a6e28e1c3a3303a1f7f5b4c7",
+        "casmSha256": "129ba07d97d898d92c3e86ada10dd40316deadb2c1943109dcba1273c526f44d"
+      }
+    },
+    "source": "circuits/vesting_transition/target/payo-vesting-book-mainnet-plan.json"
+  },
+  "declarations": {
+    "vestingVerifier": {
+      "transactionHash": "0x73ae088d6dedbd2368c2db1d00cf88b2740411fc13aece6b9bc1722d0b2914f",
+      "classHash": "0x5880228c9533d8b168275dbf3671cf219e684fb6027dd56f5ef3215caf37573",
+      "nonce": "0x66",
+      "tip": "1",
+      "recoveredFromWaitError": false,
+      "simulatedFeeFri": "315362903389632279532",
+      "actualFeeFri": "127419355447091932400",
+      "blockNumber": 14391143
+    },
+    "vestingBundle": {
+      "transactionHash": "0x31339e00d57577ac68ed78e0b741d313cc88b31e9c8dafeb9b2bad79f0e9e96",
+      "classHash": "0x7aa6924647c8f6bed105fe7a11e51b3679dfc111f88f63519a5b2043fe1586d",
+      "nonce": "0x67",
+      "tip": "1",
+      "recoveredFromWaitError": true,
+      "simulatedFeeFri": "13165861933168478764",
+      "actualFeeFri": "5352709355570492474",
+      "blockNumber": 14391163
+    },
+    "vestingBookSeal": {
+      "transactionHash": "0x27d0ce2a7c2b73ba72bded84c57677bf15e2de54bc4a1a30f2367cce51c2581",
+      "classHash": "0x25af7969593ae59fe67830f7cb42774f0e62807c9114367d36e753be9577553",
+      "nonce": "0x68",
+      "tip": "1",
+      "recoveredFromWaitError": true,
+      "simulatedFeeFri": "234833804241987494188",
+      "actualFeeFri": "94882345749332055920",
+      "blockNumber": 14391190
+    }
+  },
+  "updatedAt": "2026-09-05T07:55:20.191Z",
+  "deployment": {
+    "names": [
+      "vestingVerifier",
+      "vestingBundle",
+      "vestingBookSeal"
+    ],
+    "transactionHash": "0x332cfd95c769910a35ad3101e4dffd43a1ad4efe70aa1a1b821817ebf55d8c8",
+    "nonce": "0x69",
+    "tip": "1",
+    "recoveredFromWaitError": false,
+    "simulatedFeeFri": "369400007299358035",
+    "actualFeeFri": "149221101329183970",
+    "blockNumber": 14391244,
+    "wiring": {
+      "checked": true,
+      "passed": true,
+      "underlyingVerifier": "0x4b35d2d366848169ea4fb32d4fffda498b5251160da2e60fc53030a37d5551c",
+      "pool": "0x40337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+      "policyRegistry": "0x34701f573096b7bab0e5678e1ed2f17a87c8d56eb5f4d70bcf2197bab8e4477",
+      "obligationRegistry": "0x44b22f1a17d2710c2f51ed0b37b8b0ff8435262d3c8c0f2f17be07c84ac23b5",
+      "exceptionSeal": "0x3394e58bb2bb294e0ae92514079a1394c6c66eae8a6c033a6f7f449b1d12ce"
+    }
+  },
+  "activation": {
+    "transactionHash": "0x48afc79524311443f4f75fdab9b8cda461df62960505ce3b8dc7cb897219c83",
+    "nonce": "0x6a",
+    "tip": "1",
+    "recoveredFromWaitError": false,
+    "simulatedFeeFri": "181327500277633563",
+    "actualFeeFri": "73230859387307710",
+    "blockNumber": 14391300,
+    "validAfter": 1788592721,
+    "expiresAt": 1820128721,
+    "profile": {
+      "mode": 0,
+      "proofVersion": 3,
+      "address": "0x1bc7517191802bf82ccfb60fa4f27f9306d6cfee9160b545d7dea662e8870a8",
+      "active": true,
+      "matches": true
+    }
+  },
+  "verification": {
+    "passed": true,
+    "observedAt": "2026-09-05T07:55:20.182Z",
+    "blockNumber": 14392605,
+    "dependencies": [
+      {
+        "code": "chain",
+        "passed": true
+      },
+      {
+        "code": "policyRegistry.class_hash",
+        "expected": "0x6366141e5ae47f2e170409c6babaa4d6ae220b5b255f8dcbf9b0173f8681cfd",
+        "actual": "0x6366141e5ae47f2e170409c6babaa4d6ae220b5b255f8dcbf9b0173f8681cfd",
+        "passed": true
+      },
+      {
+        "code": "obligationRegistry.class_hash",
+        "expected": "0x50ac78b67fd69d7e2a892dc51014159d7e69fe1770c3f4f33add21131aa2a0b",
+        "actual": "0x50ac78b67fd69d7e2a892dc51014159d7e69fe1770c3f4f33add21131aa2a0b",
+        "passed": true
+      },
+      {
+        "code": "exceptionSeal.class_hash",
+        "expected": "0x612f04ea11fd47f83793efee058a9ddd1380b03fe1273fe9fab13ff58b3a3b",
+        "actual": "0x612f04ea11fd47f83793efee058a9ddd1380b03fe1273fe9fab13ff58b3a3b",
+        "passed": true
+      },
+      {
+        "code": "pool.deployed",
+        "actual": "0x67dddd89d80fedadc06b6f160798f94800a4a70164e5a24301cd0d6076b554d",
+        "passed": true
+      },
+      {
+        "code": "policy.admin",
+        "passed": true
+      },
+      {
+        "code": "payroll_v2.active",
+        "passed": true
+      }
+    ],
+    "status": {
+      "declarations": {
+        "vestingVerifier": true,
+        "vestingBundle": true,
+        "vestingBookSeal": true
+      },
+      "contracts": {
+        "vestingVerifier": {
+          "address": "0x4b35d2d366848169ea4fb32d4fffda498b5251160da2e60fc53030a37d5551c",
+          "expectedClassHash": "0x5880228c9533d8b168275dbf3671cf219e684fb6027dd56f5ef3215caf37573",
+          "actualClassHash": "0x5880228c9533d8b168275dbf3671cf219e684fb6027dd56f5ef3215caf37573",
+          "deployed": true
+        },
+        "vestingBundle": {
+          "address": "0x1bc7517191802bf82ccfb60fa4f27f9306d6cfee9160b545d7dea662e8870a8",
+          "expectedClassHash": "0x7aa6924647c8f6bed105fe7a11e51b3679dfc111f88f63519a5b2043fe1586d",
+          "actualClassHash": "0x7aa6924647c8f6bed105fe7a11e51b3679dfc111f88f63519a5b2043fe1586d",
+          "deployed": true
+        },
+        "vestingBookSeal": {
+          "address": "0x5208cc07cb4153235ab5c6ecd1936ee77f9be7a2ea09f6cc69518a6362493f",
+          "expectedClassHash": "0x25af7969593ae59fe67830f7cb42774f0e62807c9114367d36e753be9577553",
+          "actualClassHash": "0x25af7969593ae59fe67830f7cb42774f0e62807c9114367d36e753be9577553",
+          "deployed": true
+        }
+      },
+      "profile": {
+        "mode": 0,
+        "proofVersion": 3,
+        "address": "0x1bc7517191802bf82ccfb60fa4f27f9306d6cfee9160b545d7dea662e8870a8",
+        "active": true,
+        "matches": true
+      },
+      "wiring": {
+        "checked": true,
+        "passed": true,
+        "underlyingVerifier": "0x4b35d2d366848169ea4fb32d4fffda498b5251160da2e60fc53030a37d5551c",
+        "pool": "0x40337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+        "policyRegistry": "0x34701f573096b7bab0e5678e1ed2f17a87c8d56eb5f4d70bcf2197bab8e4477",
+        "obligationRegistry": "0x44b22f1a17d2710c2f51ed0b37b8b0ff8435262d3c8c0f2f17be07c84ac23b5",
+        "exceptionSeal": "0x3394e58bb2bb294e0ae92514079a1394c6c66eae8a6c033a6f7f449b1d12ce"
+      }
+    },
+    "proofVerification": {
+      "passed": true,
+      "proofCalldataFelts": [
+        3269,
+        3269
+      ],
+      "reversedShardsRejected": true,
+      "fixtureSealBinding": "0x456",
+      "attestationRoot": "0x05a649755746757000454e5d6fcbb95460522e05ba4c5469dfea413ce724818f"
+    },
+    "balanceFri": "278089224220459129477",
+    "canaryRequired": true
+  }
+}

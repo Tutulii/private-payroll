@@ -12,6 +12,7 @@ primary_region = "sin"
   NEXT_PUBLIC_PAYO_PROVER_URL = "https://private-payroll-prover.fly.dev"
   NEXT_PUBLIC_PAYO_AGENT_SEAL_ADDRESS = "0x1b0208114f33ea0ac800f6474307680a0cf239d13ac11818523f70cba49c84a"
   NEXT_PUBLIC_PAYO_AGENT_POLICY_ACCOUNT_ADDRESS = "0x656928a6f3aeb62c2e62ff7457d351a41ed987ceed07c514539165662ecb7e0"
+  NEXT_PUBLIC_PAYO_VESTING_BOOK_SEAL_ADDRESS = "0x5208cc07cb4153235ab5c6ecd1936ee77f9be7a2ea09f6cc69518a6362493f"
 
 [deploy]
   release_command = "npm run db:migrate:runtime"
@@ -24,6 +25,8 @@ primary_region = "sin"
   NEXT_PUBLIC_PAYO_PROVER_URL = "https://private-payroll-prover.fly.dev"
   NEXT_PUBLIC_PAYO_AGENT_SEAL_ADDRESS = "0x1b0208114f33ea0ac800f6474307680a0cf239d13ac11818523f70cba49c84a"
   NEXT_PUBLIC_PAYO_AGENT_POLICY_ACCOUNT_ADDRESS = "0x656928a6f3aeb62c2e62ff7457d351a41ed987ceed07c514539165662ecb7e0"
+  NEXT_PUBLIC_PAYO_VESTING_BOOK_SEAL_ADDRESS = "0x5208cc07cb4153235ab5c6ecd1936ee77f9be7a2ea09f6cc69518a6362493f"
+  PAYO_VESTING_BOOK_SEAL_ADDRESS = "0x5208cc07cb4153235ab5c6ecd1936ee77f9be7a2ea09f6cc69518a6362493f"
   # Phase 5 enables this only after the isolated signer, treasury registration,
   # owner rotation, policy activation and pinned canary preflight all pass.
   PAYO_AGENT_EXECUTOR_ENABLED = "false"

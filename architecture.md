@@ -420,6 +420,17 @@ the book entry. The ordered period accumulator is
 `Poseidon(PAYO_BOOK_ADD_V1, previous_root, entry_high, entry_low, index)`; entries and
 state are commitments, never public salary plaintext.
 
+The reviewed Mainnet v3 topology is deployed and active: the generated verifier is
+`0x4b35d2d366848169ea4fb32d4fffda498b5251160da2e60fc53030a37d5551c`,
+the ordered bundle is
+`0x1bc7517191802bf82ccfb60fa4f27f9306d6cfee9160b545d7dea662e8870a8`,
+and the VestingBook seal is
+`0x5208cc07cb4153235ab5c6ecd1936ee77f9be7a2ea09f6cc69518a6362493f`.
+Deployment class hashes, immutable dependency wiring, the active proof-version-3
+profile, the real ordered proof pair and reversed-shard rejection were read back in
+`evidence/vesting-tax-mainnet.json`. A deliberately small live state-changing canary
+remains a separate release gate.
+
 ### Complete private compliance book
 
 For every on-chain book entry, the organization retains an authenticated encrypted

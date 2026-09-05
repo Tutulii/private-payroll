@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { access, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
@@ -26,6 +26,18 @@ function assertEveryBooleanTrue(value, label) {
 
 function sha256Hex(bytes) {
   return `0x${createHash("sha256").update(bytes).digest("hex")}`;
+}
+
+function sameHex(left, right) {
+  try {
+    return BigInt(left) === BigInt(right);
+  } catch {
+    return false;
+  }
+}
+
+function transactionHash(value) {
+  return typeof value === "string" && /^0x[0-9a-f]{1,64}$/i.test(value) && BigInt(value) !== 0n;
 }
 
 async function optionalJson(path) {
@@ -167,27 +179,79 @@ assert(exitPlanRecord.reviewedClass?.classHash === ANONYMIZER_CLASS_HASH
 assert(BigInt(exitPlanRecord.feeEstimate?.feeFri) > 0n,
   "The private-exit Mainnet fee simulation is missing.");
 
-const vestingMainnetPassed = vestingDeployment?.verification?.passed === true
-  && vestingDeployment?.canary?.passed === true;
-const exitMainnetPassed = exitDeployment?.verification?.passed === true
-  && exitDeployment?.canary?.passed === true;
-const totalFeeFri = BigInt(vestingEstimate.totalFeeFri)
-  + BigInt(exitPlanRecord.feeEstimate.feeFri);
-const balanceFri = BigInt(vestingEstimate.balanceFri);
-const shortfallFri = totalFeeFri > balanceFri ? totalFeeFri - balanceFri : 0n;
+let vestingTopologyVerified = false;
+if (vestingDeployment) {
+  assert(vestingDeployment.network === "starknet-mainnet",
+    "The VestingBook deployment evidence is not Mainnet evidence.");
+  assert(vestingDeployment.verification?.passed === true,
+    "The VestingBook Mainnet topology verification did not pass.");
+  assert(vestingDeployment.verification?.status?.profile?.matches === true,
+    "The active v3 registry profile does not match the reviewed bundle.");
+  assert(vestingDeployment.verification?.proofVerification?.passed === true
+    && vestingDeployment.verification.proofVerification.reversedShardsRejected === true,
+  "The deployed VestingBook proof pair or shard-order rejection was not verified.");
+  assert(BigInt(vestingDeployment.verification?.balanceFri) >= 0n,
+    "The post-deployment Mainnet balance read-back is missing.");
+
+  for (const name of ["vestingVerifier", "vestingBundle", "vestingBookSeal"]) {
+    const planned = vestingPlan.contracts[name];
+    const recorded = vestingDeployment.plan?.contracts?.[name];
+    const declaration = vestingDeployment.declarations?.[name];
+    const live = vestingDeployment.verification?.status?.contracts?.[name];
+    assert(recorded?.classHash === planned.classHash && recorded?.address === planned.address,
+      `${name} deployment evidence differs from the reviewed plan.`);
+    assert(declaration?.classHash === planned.classHash && transactionHash(declaration?.transactionHash),
+      `${name} declaration receipt is missing or mismatched.`);
+    assert(live?.deployed === true
+      && sameHex(live.actualClassHash, planned.classHash)
+      && sameHex(live.address, planned.address),
+    `${name} Mainnet class-hash read-back failed.`);
+  }
+
+  const wiring = vestingDeployment.verification.status.wiring;
+  assert(wiring?.passed === true
+    && sameHex(wiring.underlyingVerifier, vestingPlan.contracts.vestingVerifier.address)
+    && sameHex(wiring.pool, vestingPlan.poolAddress)
+    && sameHex(wiring.policyRegistry, vestingPlan.reusedTopology.policyRegistry.address)
+    && sameHex(wiring.obligationRegistry, vestingPlan.reusedTopology.obligationRegistry.address)
+    && sameHex(wiring.exceptionSeal, vestingPlan.reusedTopology.exceptionSeal.address),
+  "The VestingBook immutable Mainnet wiring differs from the reviewed plan.");
+  assert(transactionHash(vestingDeployment.deployment?.transactionHash)
+    && transactionHash(vestingDeployment.activation?.transactionHash),
+  "The VestingBook deployment or activation receipt is missing.");
+  vestingTopologyVerified = true;
+}
+
+const vestingCanaryPassed = vestingTopologyVerified && vestingDeployment?.canary?.passed === true;
+const exitTopologyVerified = exitDeployment?.verification?.passed === true;
+const exitCanaryPassed = exitTopologyVerified && exitDeployment?.canary?.passed === true;
+const remainingFeeFri = (vestingTopologyVerified ? 0n : BigInt(vestingEstimate.totalFeeFri))
+  + (exitTopologyVerified ? 0n : BigInt(exitPlanRecord.feeEstimate.feeFri));
+const balanceFri = vestingTopologyVerified
+  ? BigInt(vestingDeployment.verification.balanceFri)
+  : BigInt(vestingEstimate.balanceFri);
+const shortfallFri = remainingFeeFri > balanceFri ? remainingFeeFri - balanceFri : 0n;
 
 const result = {
   schemaVersion: "payo-pre-hackathon-release-gate-v1",
   localAndDevnetEvidencePassed: true,
-  mutationSubmitted: false,
+  mutationSubmitted: vestingTopologyVerified || exitTopologyVerified,
   mainnet: {
-    vestingBook: vestingMainnetPassed ? "verified" : "pending",
-    privateExit: exitMainnetPassed ? "verified" : "pending",
-    totalEstimatedFeeFri: totalFeeFri.toString(),
+    vestingBook: vestingCanaryPassed
+      ? "verified"
+      : vestingTopologyVerified ? "topology_verified_canary_pending" : "pending",
+    vestingBookTopology: vestingTopologyVerified ? "verified" : "pending",
+    vestingBookCanary: vestingCanaryPassed ? "verified" : "pending",
+    privateExit: exitCanaryPassed
+      ? "verified"
+      : exitTopologyVerified ? "topology_verified_canary_pending" : "pending",
+    privateExitTopology: exitTopologyVerified ? "verified" : "pending",
+    privateExitCanary: exitCanaryPassed ? "verified" : "pending",
+    remainingEstimatedFeeFri: remainingFeeFri.toString(),
     observedBalanceFri: balanceFri.toString(),
     bareShortfallFri: shortfallFri.toString(),
   },
-  block6Complete: vestingMainnetPassed && exitMainnetPassed,
+  block6Complete: vestingCanaryPassed && exitCanaryPassed,
 };
 
 process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

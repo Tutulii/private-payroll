@@ -7,7 +7,8 @@ key or contract artifacts change and must be regenerated before deployment.
 
 ## 1. Universal, accountable private payroll book
 
-Status: **cleared locally/Devnet on 2026-09-05; Mainnet release remains Block 6.**
+Status: **cleared locally/Devnet; Mainnet v3 topology deployed, activated and
+proof-verified on 2026-09-05; live book canary remains Block 6.**
 Evidence: `evidence/universal-payroll-book-private-devnet.json`, 25 focused
 TypeScript tests, 14 VestingBook Cairo lifecycle tests and 5 real generated-verifier
 composition tests.
@@ -55,8 +56,9 @@ lint and production build).
 
 ## 4. External fact attestations
 
-Status: **cleared locally/browser/Devnet on 2026-09-05; Mainnet release remains
-Block 6.** Evidence: `evidence/vesting-tax-devnet.json`,
+Status: **cleared locally/browser/Devnet; Mainnet v3 topology deployed, activated and
+proof-verified on 2026-09-05; live canary remains Block 6.** Evidence:
+`evidence/vesting-tax-devnet.json`, `evidence/vesting-tax-mainnet.json`,
 `evidence/block4-external-attestation-browser.json`, 40 focused TypeScript tests,
 4 Noir tests, 2 catalog-registry Cairo tests, 2 real generated-verifier tests and
 5 production VestingBook composition tests. The complete application regression is
@@ -92,13 +94,15 @@ instance address is unoccupied, and the latest guarded read-only deployment
 simulation estimated **0.083765866841584179 STRK** on 2026-09-05. Evidence:
 `evidence/private-exit-mainnet-plan.json`. No mutation was submitted.
 
-The final 58-public-input VestingBook artifacts, five-field immutable seal wiring
-and deterministic addresses were regenerated on 2026-09-05. The latest successful
-simulation estimates **600.472824438987809664 STRK**; the reviewed deployer balance is
-**505.966086733170101951 STRK**. Including the planned anonymizer instance, the bare
-deployment shortfall is **94.590503572659291892 STRK**, before fee drift and live
-canaries, so the topology is not yet fully funded. Evidence:
-`evidence/vesting-tax-mainnet-plan.json`. No mutation was submitted.
+The final 58-public-input VestingBook topology was declared, atomically deployed and
+activated on Mainnet on 2026-09-05. The three class hashes, five-field immutable seal
+wiring and proof-version-3 registry profile match the reviewed plan. A read-only call
+through the deployed verifier and bundle accepted the real ordered proof pair and
+rejected reversed shards. Declarations, deployment and activation consumed exactly
+**227.876862512710972474 STRK**, leaving **278.089224220459129477 STRK** at the final
+read-back. Evidence: `evidence/vesting-tax-mainnet.json`. The deliberately small live
+vesting/book/export canary and the separate private-exit Mainnet instance/canary remain
+pending and require explicit approval.
 
 - Freeze the final public statement before generating the Noir VK or Garaga verifier.
 - Pass positive and negative TypeScript, PostgreSQL, Noir, Cairo, real-proof
