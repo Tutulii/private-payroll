@@ -217,6 +217,18 @@ jobs:
 
       - name: Prove both VestingBook v3 shards through the generated Cairo verifier
         run: |
+          for package in vesting_verifier_v3 vesting_integration vesting_devnet_harness; do
+            fetched=false
+            for attempt in 1 2 3; do
+              if (cd "contracts/$package" && scarb fetch); then
+                fetched=true
+                break
+              fi
+              echo "::warning::Scarb fetch failed for $package on attempt $attempt of 3."
+              sleep 5
+            done
+            test "$fetched" = true
+          done
           NODE_OPTIONS=--max-old-space-size=3072 npm run vesting:v3:witness
           for shard in 0 1; do
             mkdir -p "circuits/vesting_transition/target/real-proof-fixture/proof-$shard"
@@ -234,9 +246,9 @@ jobs:
           done
           PAYO_VESTING_VK_PATH=circuits/vesting_transition/target/ci-vk/vk \
             npm run vesting:v3:fixture
-          (cd contracts/vesting_verifier_v3 && snforge test)
-          (cd contracts/vesting_integration && snforge test)
-          (cd contracts/vesting_devnet_harness && scarb build)
+          (cd contracts/vesting_verifier_v3 && SCARB_OFFLINE=true snforge test)
+          (cd contracts/vesting_integration && SCARB_OFFLINE=true snforge test)
+          (cd contracts/vesting_devnet_harness && scarb --offline build)
 
       - name: Reproduce the merged Phase 3 circuit and verification key
         working-directory: circuits/advanced_obligation
