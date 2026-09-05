@@ -149,6 +149,13 @@ export function mapVestingTransitionPublicInputs(
   if (BigInt(values[57]) < 0n || BigInt(values[57]) > 1n) {
     throw new Error("Vesting transition returned an invalid shard index.");
   }
+  // bb.js emits Noir public fields as fixed-width hex. PAYO's durable v3 ABI
+  // stores canonical felts for the chain/seal and decimal strings for scalar
+  // fields, so normalize once at the cryptographically verified boundary.
+  values = values.map((value, index) => index < 2
+    ? `0x${BigInt(value).toString(16)}`
+    : BigInt(value).toString());
+
   return {
     chainId: values[0],
     sealAddress: values[1],

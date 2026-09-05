@@ -33,12 +33,36 @@ const publicInputsSchema = z.object({
   shardIndex: z.string(),
 }).strict();
 
+function canonicalizeRemoteVestingPublicInputs(input: unknown): unknown {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const feltFields = new Set(["chainId", "sealAddress"]);
+  return Object.fromEntries(Object.entries(input).map(([key, value]) => {
+    if (typeof value !== "string") return [key, value];
+    try {
+      const parsed = BigInt(value);
+      return [
+        key,
+        feltFields.has(key) ? `0x${parsed.toString(16)}` : parsed.toString(),
+      ];
+    } catch {
+      return [key, value];
+    }
+  }));
+}
+
+// Accept the fixed-width fields emitted by an older prover during a rolling
+// deployment, but expose only the canonical durable ABI to the browser.
+export const remoteVestingTransitionPublicInputsSchema = z.preprocess(
+  canonicalizeRemoteVestingPublicInputs,
+  vestingTransitionPublicInputsSchema,
+);
+
 const remoteVestingShardSchema = z.object({
   shardIndex: z.union([z.literal(0), z.literal(1)]),
   proofBase64: z.string().min(1).max(100_000),
   proofCalldata: z.array(starknetFeltSchema).min(1).max(PAYO_MAX_PROOF_CALLDATA_FELTS),
   calldataHash: starknetFeltSchema,
-  publicInputs: vestingTransitionPublicInputsSchema,
+  publicInputs: remoteVestingTransitionPublicInputsSchema,
 }).strict();
 
 const remoteVestingBookProofSchema = z.object({
