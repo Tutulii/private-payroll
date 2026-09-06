@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { hashCanonicalJson } from "@/lib/crypto/digest";
 import { buildFxSnapshot } from "@/lib/domain/fx";
 import {
   appendPayrollBookRoot,
@@ -22,6 +23,7 @@ import {
   createVerifiedIncomeEvidence,
   familiarTaxEvidenceFilename,
   renderFamiliarTaxDocuments,
+  renderFamiliarTaxDocumentsWithDiagnostics,
   verifyFamiliarTaxDocument,
   verifyVerifiedIncomeEvidence,
 } from "./tax-evidence";
@@ -193,6 +195,43 @@ describe("canonical familiar tax evidence", () => {
       { code: "BOX_2", label: "Federal income tax withheld under bound policy", amountAtomic: "2200" },
       { code: "PAYO_NET", label: "Private net pay", amountAtomic: "7800" },
     ]);
+  });
+
+  it("withholds only ambiguous readable summaries while preserving a diagnostic", async () => {
+    const { report, trustedSnapshot } = await fixture();
+    const evidence = await createVerifiedIncomeEvidence({ report, trustedSnapshot });
+    const conflicting = structuredClone(evidence);
+    conflicting.lines.push({
+      ...structuredClone(conflicting.lines[0]),
+      lineIndex: 4,
+      recipientReference: "another-reference-for-the-same-wallet",
+    });
+    conflicting.coverage.disclosedLineCount = conflicting.lines.length;
+    const conflictingCore = Object.fromEntries(
+      Object.entries(conflicting).filter(([key]) => key !== "evidenceCommitment"),
+    );
+    conflicting.evidenceCommitment = hashCanonicalJson({
+      domain: "PAYO_VERIFIED_INCOME_EVIDENCE_V1",
+      evidence: conflictingCore,
+    });
+
+    const rendered = renderFamiliarTaxDocumentsWithDiagnostics(conflicting);
+    expect(rendered.issues).toEqual([{
+      code: "conflicting_recipient_references",
+      recipientAddress: conflicting.lines[0].recipientAddress,
+      jurisdictionCode: "US",
+      token: "USDC",
+      recipientReferences: [
+        "another-reference-for-the-same-wallet",
+        "us-worker",
+      ],
+    }]);
+    expect(rendered.documents.map(({ style }) => style).sort()).toEqual([
+      "p60_style",
+      "t4_style",
+    ]);
+    expect(() => renderFamiliarTaxDocuments(conflicting))
+      .toThrow("One recipient address has conflicting reporting references.");
   });
 
   it("lets a worker derive only their own familiar statement against the complete book", async () => {

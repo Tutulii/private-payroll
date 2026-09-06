@@ -9,7 +9,11 @@ import type { ReactNode } from "react";
 import type { EncryptedPayrollReport } from "@/lib/disclosure/payroll-book-report";
 import type { EncryptedWorkerStatementSource } from "@/lib/disclosure/worker-statement-source";
 import type { PayoReportingIdentity } from "@/lib/crypto/reporting-identity";
-import { familiarTaxEvidenceFilename, type FamiliarTaxDocument } from "@/lib/disclosure/tax-evidence";
+import {
+  familiarTaxEvidenceFilename,
+  type FamiliarTaxDocument,
+  type FamiliarTaxRenderIssue,
+} from "@/lib/disclosure/tax-evidence";
 import type { PayoProofPackageExport, ReadableProofPackageReport } from "@/lib/client/proof-package-files";
 import type { LiveProofTransactionEvidence } from "@/lib/client/starknet-proof-evidence";
 import { formatTokenAmount, type PayrollTokenSymbol } from "@/lib/starknet/tokens";
@@ -39,6 +43,7 @@ export type PayrollReportView = {
   blockNumber: string;
   packageCommitment: string;
   familiarTaxDocuments: FamiliarTaxDocument[];
+  familiarTaxIssues: FamiliarTaxRenderIssue[];
 };
 
 export type WorkerSourceView = {
@@ -173,7 +178,10 @@ export function PayrollReportResultCard({ view, canReverify, busy, download, rev
       {view.familiarTaxDocuments.length > 0 ? <>
         {view.familiarTaxDocuments.map((document, index) => <TaxEvidenceDocument key={document.documentCommitment} document={document} download={download} expanded={index === 0} />)}
         <ResultNote>Readable downloads contain private compensation data. Share only with the named worker or an authorized reviewer.</ResultNote>
-      </> : <p className={styles.empty}>This report has no employee lines eligible for a W-2-, P60-, or T4-style summary. Your encrypted report is still verified.</p>}
+      </> : view.familiarTaxIssues.length > 0
+        ? <p className={styles.empty}>Readable tax-style summaries are withheld for an address that appears under multiple contributor references. The complete encrypted payroll book remains verified.</p>
+        : <p className={styles.empty}>This report has no employee lines eligible for a W-2-, P60-, or T4-style summary. Your encrypted report is still verified.</p>}
+      {view.familiarTaxIssues.length > 0 && <ResultNote warning>{view.familiarTaxIssues.length} recipient {view.familiarTaxIssues.length === 1 ? "address has" : "addresses have"} conflicting historical contributor references: {view.familiarTaxIssues.map(({ recipientReferences }) => recipientReferences.join(" / ")).join("; ")}. PAYO preserved every original line in the verified encrypted book and did not create an ambiguous readable tax summary.</ResultNote>}
       <p className={styles.caption}>W-2-, P60-, and T4-style evidence for your records. These are not official tax forms or filings.</p>
     </section>
     <ResultDetails>

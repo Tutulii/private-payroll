@@ -100,6 +100,14 @@ export const familiarTaxDocumentSchema = z.object({
 }).strict();
 export type FamiliarTaxDocument = z.infer<typeof familiarTaxDocumentSchema>;
 
+export type FamiliarTaxRenderIssue = {
+  code: "conflicting_recipient_references";
+  recipientAddress: string;
+  jurisdictionCode: string;
+  token: VerifiedIncomeLine["token"];
+  recipientReferences: string[];
+};
+
 function taxYearForPeriod(periodStart: string, periodEnd: string): number {
   const start = new Date(Number(BigInt(periodStart)) * 1_000);
   const year = start.getUTCFullYear();
@@ -266,20 +274,31 @@ const labels = {
 } as const;
 
 /** Builds familiar views only for verified employee lines; contractors stay out. */
-export function renderFamiliarTaxDocuments(
+export function renderFamiliarTaxDocumentsWithDiagnostics(
   evidenceInput: VerifiedIncomeEvidence,
-): FamiliarTaxDocument[] {
-  const evidence = verifiedIncomeEvidenceSchema.parse(evidenceInput);
+): { documents: FamiliarTaxDocument[]; issues: FamiliarTaxRenderIssue[] } {
+  const evidence = verifyVerifiedIncomeEvidence(evidenceInput);
   const groups = new Map<string, VerifiedIncomeLine[]>();
   for (const line of evidence.lines) {
     if (line.workerType !== "employee" || !styleForJurisdiction(line.policy.jurisdictionCode)) continue;
     const key = [BigInt(line.recipientAddress).toString(), line.policy.jurisdictionCode, line.token].join(":");
     groups.set(key, [...(groups.get(key) ?? []), line]);
   }
-  return [...groups.values()].map((lines) => {
+  const documents: FamiliarTaxDocument[] = [];
+  const issues: FamiliarTaxRenderIssue[] = [];
+  for (const lines of groups.values()) {
     const first = lines[0];
-    if (lines.some((line) => line.recipientReference !== first.recipientReference)) {
-      throw new Error("One recipient address has conflicting reporting references.");
+    const recipientReferences = [...new Set(lines.map(({ recipientReference }) => recipientReference))]
+      .sort((left, right) => left.localeCompare(right));
+    if (recipientReferences.length > 1) {
+      issues.push({
+        code: "conflicting_recipient_references",
+        recipientAddress: first.recipientAddress,
+        jurisdictionCode: first.policy.jurisdictionCode,
+        token: first.token,
+        recipientReferences,
+      });
+      continue;
     }
     const style = styleForJurisdiction(first.policy.jurisdictionCode)!;
     const gross = lines.reduce((sum, line) => sum + BigInt(line.grossAtomic), 0n);
@@ -310,11 +329,23 @@ export function renderFamiliarTaxDocuments(
       sourceEvidenceCommitment: evidence.evidenceCommitment,
       disclaimer: "PAYO cryptographic evidence only — not an official tax form, filing, certification, or legal/tax advice." as const,
     };
-    return familiarTaxDocumentSchema.parse({
+    documents.push(familiarTaxDocumentSchema.parse({
       ...withoutCommitment,
       documentCommitment: hashCanonicalJson({ domain: "PAYO_FAMILIAR_TAX_EVIDENCE_V1", document: withoutCommitment }),
-    });
-  });
+    }));
+  }
+  return { documents, issues };
+}
+
+/** Strict renderer for callers that require every employee identity to be unambiguous. */
+export function renderFamiliarTaxDocuments(
+  evidenceInput: VerifiedIncomeEvidence,
+): FamiliarTaxDocument[] {
+  const rendered = renderFamiliarTaxDocumentsWithDiagnostics(evidenceInput);
+  if (rendered.issues.length > 0) {
+    throw new Error("One recipient address has conflicting reporting references.");
+  }
+  return rendered.documents;
 }
 
 export function verifyVerifiedIncomeEvidence(

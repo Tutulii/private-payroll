@@ -22,7 +22,7 @@ import {
 } from "@/lib/disclosure/payroll-book-report";
 import {
   createVerifiedIncomeEvidence,
-  renderFamiliarTaxDocuments,
+  renderFamiliarTaxDocumentsWithDiagnostics,
 } from "@/lib/disclosure/tax-evidence";
 import {
   createEncryptedWorkerStatementSource,
@@ -108,9 +108,11 @@ async function createFamiliarTaxArtifacts(
     trustedSnapshot,
     generatedAt: new Date(report.generatedAt),
   });
+  const rendered = renderFamiliarTaxDocumentsWithDiagnostics(verifiedIncomeEvidence);
   return {
     verifiedIncomeEvidence,
-    familiarTaxDocuments: renderFamiliarTaxDocuments(verifiedIncomeEvidence),
+    familiarTaxDocuments: rendered.documents,
+    familiarTaxIssues: rendered.issues,
   };
 }
 

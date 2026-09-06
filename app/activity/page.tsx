@@ -119,6 +119,7 @@ import {
 } from "@/lib/disclosure/worker-statement-source";
 import {
   type FamiliarTaxDocument,
+  type FamiliarTaxRenderIssue,
 } from "@/lib/disclosure/tax-evidence";
 import { formatTokenAmount, type PayrollTokenSymbol } from "@/lib/starknet/tokens";
 import {
@@ -229,6 +230,7 @@ function payrollReportView(input: {
   verification: unknown;
   blockNumber: string;
   familiarTaxDocuments: FamiliarTaxDocument[];
+  familiarTaxIssues: FamiliarTaxRenderIssue[];
 }): PayrollReportView {
   const start = new Date(Number(BigInt(input.payload.checkpoint.periodStart)) * 1_000);
   const end = new Date(Number(BigInt(input.payload.checkpoint.periodEnd)) * 1_000 - 1);
@@ -257,6 +259,7 @@ function payrollReportView(input: {
       blockNumber: input.blockNumber,
       packageCommitment: input.file.packageCommitment,
       familiarTaxDocuments: input.familiarTaxDocuments,
+      familiarTaxIssues: input.familiarTaxIssues,
     };
   }
   const verified = input.verification as {
@@ -280,6 +283,7 @@ function payrollReportView(input: {
     blockNumber: input.blockNumber,
     packageCommitment: input.file.packageCommitment,
     familiarTaxDocuments: input.familiarTaxDocuments,
+    familiarTaxIssues: input.familiarTaxIssues,
   };
 }
 
@@ -1047,6 +1051,7 @@ export default function ActivityPage() {
         verification: result.verification,
         blockNumber: result.snapshot.blockNumber,
         familiarTaxDocuments: result.familiarTaxDocuments,
+        familiarTaxIssues: result.familiarTaxIssues,
       });
       setPayrollReportViewState(view);
       setWorkerSourceViewState(null);
@@ -1104,6 +1109,7 @@ export default function ActivityPage() {
           verification: generated.verification,
           blockNumber: generated.snapshot.blockNumber,
           familiarTaxDocuments: generated.familiarTaxDocuments,
+          familiarTaxIssues: generated.familiarTaxIssues,
         }));
         setPayrollReportVaultKey(`${vault.session.organizationId}:${vault.session.principal.principalId}`);
         downloadJson(generated.encryptedReport, filename);
@@ -1128,6 +1134,7 @@ export default function ActivityPage() {
         verification: opened.verification,
         blockNumber: opened.snapshot.blockNumber,
         familiarTaxDocuments: opened.familiarTaxDocuments,
+        familiarTaxIssues: opened.familiarTaxIssues,
       }));
       setWorkerSourceViewState(null);
       setPayrollReportVaultKey(`${vault.session.organizationId}:${vault.session.principal.principalId}`);
@@ -1164,6 +1171,7 @@ export default function ActivityPage() {
         verification: opened.verification,
         blockNumber: opened.snapshot.blockNumber,
         familiarTaxDocuments: opened.familiarTaxDocuments,
+        familiarTaxIssues: opened.familiarTaxIssues,
       }));
       notify("Payroll report reopened and checked against the live on-chain book");
     } catch (error) {
