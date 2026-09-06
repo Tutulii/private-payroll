@@ -174,6 +174,18 @@ describe("employer statement reconciliation", () => {
     expect(markRegistered).not.toHaveBeenCalled();
   });
 
+  it("lets a prepared statement reach its first Ready registration when absent on-chain", async () => {
+    const reader = rpc({ felts: statementFelts({ exists: "0" }) });
+    await expect(reconcileEmployerStatement({
+      statement: { ...statement, registrationTransactionHash: null },
+      snapshot,
+      sealAddress,
+      rpc: reader,
+      dependencies: { markRegistered: vi.fn() },
+    })).rejects.toMatchObject({ code: "STATEMENT_NOT_REGISTERED" });
+    expect(reader.getTransactionReceipt).not.toHaveBeenCalled();
+  });
+
   it("rejects missing or mismatched finalized transaction evidence", async () => {
     await expect(reconcileEmployerStatement({
       statement: { ...statement, registrationTransactionHash: null },

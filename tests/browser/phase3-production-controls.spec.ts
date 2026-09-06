@@ -589,10 +589,11 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
   const employerEvidence = page.getByRole("button", {
     name: "Register payroll evidence",
   });
+  const employerEvidenceItem = page.locator("article.wage-vnext-item").filter({ has: employerEvidence });
   await expect(employerEvidence).toBeVisible();
   await employerEvidence.click();
   await expect(
-    page.locator(".private-exception-feedback--error"),
+    employerEvidenceItem.getByRole("alert"),
   ).toContainText("Connect the snapshot-owner Ready wallet");
 
   const identityDownload = page.waitForEvent("download");

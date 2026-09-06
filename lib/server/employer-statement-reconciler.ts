@@ -273,6 +273,17 @@ export async function reconcileEmployerStatement(input: {
     markRegistered: typeof markEmployerStatementRegistered;
   };
 }) {
+  const state = await readRegisteredEmployerStatement(input.rpc, {
+    sealAddress: input.sealAddress,
+    statementFact: input.statement.statementFact,
+  });
+  assertRegisteredEmployerStatement(input.statement, input.snapshot, state);
+
+  // A newly prepared statement has no transaction hash by design. Read the
+  // contract first so the client receives STATEMENT_NOT_REGISTERED and may
+  // open the initial Ready request. If the statement already exists on-chain,
+  // still require its exact transaction evidence to prevent duplicate or
+  // unverified recovery.
   if (!input.statement.registrationTransactionHash) {
     throw new ApiError(
       409,
@@ -280,11 +291,6 @@ export async function reconcileEmployerStatement(input: {
       "STATEMENT_TRANSACTION_MISSING",
     );
   }
-  const state = await readRegisteredEmployerStatement(input.rpc, {
-    sealAddress: input.sealAddress,
-    statementFact: input.statement.statementFact,
-  });
-  assertRegisteredEmployerStatement(input.statement, input.snapshot, state);
 
   let receipt: unknown;
   try {
