@@ -80,7 +80,7 @@ export default function OverviewPage() {
         vault.client.listSettlements(vault.session.organizationId, 4),
         vault.client.listAuditEvents(vault.session.organizationId, 8),
       ]);
-      setPayees(loadedPayees);
+      setPayees(loadedPayees.filter(({ status }) => status !== "inactive"));
       setAgreements(loadedAgreements);
       const settlementEvents: OverviewActivity[] = settlementResult.settlements.slice(0, 3).map((settlement) => ({
         id: `settlement:${settlement.id}`,
@@ -111,7 +111,9 @@ export default function OverviewPage() {
     return () => window.clearTimeout(timer);
   }, [refreshOverview]);
 
-  const activeAgreements = useMemo(() => agreements.filter(({ effectiveUntil }) => !effectiveUntil), [agreements]);
+  const activePayeeIds = useMemo(() => new Set(payees.map(({ id }) => id)), [payees]);
+  const activeAgreements = useMemo(() => agreements.filter(({ effectiveUntil, payeeId }) =>
+    !effectiveUntil && activePayeeIds.has(payeeId)), [activePayeeIds, agreements]);
   const nextAgreement = useMemo(() => activeAgreements
     .filter(({ agreement }) => agreement.schedule.kind === "recurring")
     .sort((left, right) => {

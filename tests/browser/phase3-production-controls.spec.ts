@@ -643,7 +643,7 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
       mimeType: "application/json",
       buffer: Buffer.from(`${JSON.stringify(encryptedProofPackage)}\n`),
     });
-  const inspector = page.locator(".proof-package-inspector");
+  const inspector = page.locator('[data-report-result="proof-package"]');
   await expect(inspector).toBeVisible();
   await expect(inspector).toContainText("Private wage remediation");
   await expect(inspector).toContainText("Missing obligation");
@@ -854,4 +854,33 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
       { mode: 0o600 },
     );
   }
+});
+
+test("activity history opens recent records in bounded batches", async ({ page }) => {
+  await page.goto("/payo-browser-evidence/team");
+  await page.waitForFunction(() => Boolean(window.__PAYO_BROWSER_EVIDENCE__));
+  await page.evaluate(() => {
+    const evidence = window.__PAYO_BROWSER_EVIDENCE__!;
+    const now = Date.now();
+    evidence.reset();
+    evidence.setAuditEvents(Array.from({ length: 18 }, (_, index) => ({
+      id: `activity-pagination-${index}`,
+      actorId: "payroll-operator",
+      action: index % 2 === 0 ? "payroll_run_confirmed" : "vault_record_stored",
+      subjectId: `private-subject-${index}`,
+      metadata: {},
+      createdAt: new Date(now - index * 60_000).toISOString(),
+    })));
+  });
+
+  await page.goto("/payo-browser-evidence/activity");
+  await expect(page.locator(".timeline-event")).toHaveCount(8);
+  await expect(page.getByText("Showing 8 of 19 records")).toBeVisible();
+
+  await page.getByRole("button", { name: "Show 8 older records" }).click();
+  await expect(page.locator(".timeline-event")).toHaveCount(16);
+  await expect(page.getByRole("button", { name: "Show 3 older records" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Show recent only" }).click();
+  await expect(page.locator(".timeline-event")).toHaveCount(8);
 });

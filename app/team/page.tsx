@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
+  X,
   UserPlus,
   WalletCards,
   Zap,
@@ -21,6 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { useAppShell } from "../ui/app-shell";
 import { usePayoVault } from "../vault/payo-vault";
 import {
+  deactivateEncryptedPayee,
   loadEncryptedPayees,
   storeEncryptedPayee,
   type PayeeClaimIdentity,
@@ -133,6 +135,9 @@ export default function TeamPage() {
   const [approvalActionId, setApprovalActionId] = useState<string | null>(null);
   const [directoryLoading, setDirectoryLoading] = useState(false);
   const [directoryError, setDirectoryError] = useState("");
+  const [memberMenuId, setMemberMenuId] = useState<string | null>(null);
+  const [removalCandidateId, setRemovalCandidateId] = useState<string | null>(null);
+  const [removalActionId, setRemovalActionId] = useState<string | null>(null);
   const [showAddPayee, setShowAddPayee] = useState(false);
   const [displayName, setDisplayName] = useState("");
   const [recipientAddress, setRecipientAddress] = useState("");
@@ -212,7 +217,7 @@ export default function TeamPage() {
       const tasks: ProgressiveTask[] = [
         { label: "Contributors", run: async () => {
           const loaded = await loadEncryptedPayees({ client, organizationId, principal });
-          if (current()) setPayees(loaded);
+          if (current()) setPayees(loaded.filter(({ status }) => status !== "inactive"));
         } },
         { label: "Agreements", run: async () => {
           const loaded = await loadEncryptedPayAgreements({ client, organizationId, principal });
@@ -328,6 +333,7 @@ export default function TeamPage() {
   const humanCount = members.filter(({ kind }) => kind === "Human").length;
   const agentCount = members.length - humanCount;
   const agreementFormPayee = payees.find(({ id }) => id === agreementPayeeId);
+  const removalCandidate = members.find(({ id }) => id === removalCandidateId) ?? null;
   const missingPrincipalCount = (vault.session && !principals.some(({ vaultPrincipalId }) =>
     vaultPrincipalId === vault.session!.principal.principalId) ? 1 : 0)
     + payees.filter((payee) => !principals.some(({ id }) => id === payee.principalId)).length;
@@ -370,6 +376,39 @@ export default function TeamPage() {
       setDirectoryError(error instanceof Error ? error.message : "The contributor could not be encrypted.");
     } finally {
       setDirectoryLoading(false);
+    }
+  };
+
+  const removeContributor = async () => {
+    if (!vault.client || !vault.session || !removalCandidate) {
+      setDirectoryError("Unlock the encrypted workspace before removing a contributor.");
+      return;
+    }
+    setRemovalActionId(removalCandidate.id);
+    setDirectoryError("");
+    try {
+      if (removalCandidate.activeCapability) {
+        await revokeEncryptedAgentCapability({
+          client: vault.client,
+          record: removalCandidate.activeCapability,
+          principal: vault.session.principal,
+        });
+      }
+      await deactivateEncryptedPayee({
+        client: vault.client,
+        record: removalCandidate.payee,
+        directoryPrincipal: principals.find(({ id }) => id === removalCandidate.payee.principalId),
+        principal: vault.session.principal,
+      });
+      const removedName = removalCandidate.name;
+      setRemovalCandidateId(null);
+      setMemberMenuId(null);
+      await refreshPayees();
+      notify(`${removedName} removed from active contributors`);
+    } catch (error) {
+      setDirectoryError(error instanceof Error ? error.message : "The contributor could not be removed.");
+    } finally {
+      setRemovalActionId(null);
     }
   };
 
@@ -992,7 +1031,31 @@ export default function TeamPage() {
         <div className="member-grid">
           {visibleMembers.map((member) => (
             <article className="member-card" key={member.id}>
-              <button type="button" className="member-more" aria-label={`Encrypted record for ${member.name}`} title="Encrypted vault record"><MoreHorizontal size={18} /></button>
+              <div
+                className="member-actions"
+                onBlur={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setMemberMenuId(null);
+                }}
+              >
+                <button
+                  type="button"
+                  className="member-more"
+                  aria-label={`Actions for ${member.name}`}
+                  aria-haspopup="menu"
+                  aria-expanded={memberMenuId === member.id}
+                  onClick={() => setMemberMenuId((current) => current === member.id ? null : member.id)}
+                ><MoreHorizontal size={18} /></button>
+                {memberMenuId === member.id && (
+                  <div className="member-action-menu" role="menu">
+                    <button type="button" role="menuitem" onClick={() => {
+                      setRemovalCandidateId(member.id);
+                      setMemberMenuId(null);
+                    }}>
+                      <X size={15} /> Remove contributor
+                    </button>
+                  </div>
+                )}
+              </div>
               <div className={`member-avatar avatar--${member.tone}`}>
                 {member.kind === "Agent" ? <Bot size={24} /> : member.initials}
                 <span className={member.ready ? "member-status" : "member-status member-status--pending"} />
@@ -1120,6 +1183,35 @@ export default function TeamPage() {
           </div>
         )}
       </section>
+
+      {removalCandidate && (
+        <div
+          className="team-removal-backdrop"
+          onMouseDown={() => { if (!removalActionId) setRemovalCandidateId(null); }}
+        >
+          <section
+            className="team-removal-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="remove-contributor-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="team-removal-dialog__icon"><X size={22} /></div>
+            <div>
+              <span className="label">REMOVE CONTRIBUTOR</span>
+              <h3 id="remove-contributor-title">Remove {removalCandidate.name}?</h3>
+              <p>They will disappear from the active team and cannot be included in new payrolls. Existing encrypted payroll and agreement history stays available for audit.</p>
+            </div>
+            <div className="team-removal-dialog__actions">
+              <button type="button" onClick={() => setRemovalCandidateId(null)} disabled={Boolean(removalActionId)} autoFocus>Cancel</button>
+              <button type="button" className="team-removal-dialog__confirm" onClick={() => void removeContributor()} disabled={Boolean(removalActionId)}>
+                {removalActionId ? <LoaderCircle className="spin" size={15} /> : <X size={15} />}
+                {removalActionId ? "Removing…" : "Remove contributor"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

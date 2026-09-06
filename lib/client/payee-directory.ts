@@ -130,6 +130,77 @@ export async function storeEncryptedPayee(input: {
   return prepared.record;
 }
 
+export async function deactivateEncryptedPayee(input: {
+  client: Pick<PayoClient, "storeEncryptedRecords">;
+  record: PayeeDirectoryRecord;
+  directoryPrincipal?: ReturnType<typeof principalRecordSchema.parse>;
+  principal: VaultPrincipalKeyPair;
+  now?: Date;
+}): Promise<{
+  record: PayeeDirectoryRecord;
+  directoryPrincipal: ReturnType<typeof principalRecordSchema.parse> | null;
+}> {
+  if (input.record.status === "inactive") {
+    return { record: input.record, directoryPrincipal: input.directoryPrincipal ?? null };
+  }
+  if (
+    input.directoryPrincipal
+    && (input.directoryPrincipal.organizationId !== input.record.organizationId
+      || input.directoryPrincipal.id !== input.record.principalId)
+  ) {
+    throw new Error("The contributor and directory identity do not match.");
+  }
+  const now = input.now ?? new Date();
+  const updatedAt = now.toISOString();
+  const record = payeeRecordSchema.parse({
+    ...input.record,
+    revision: input.record.revision + 1,
+    updatedAt,
+    status: "inactive",
+  });
+  const directoryPrincipal = input.directoryPrincipal?.status === "revoked"
+    ? input.directoryPrincipal
+    : input.directoryPrincipal
+      ? principalRecordSchema.parse({
+          ...input.directoryPrincipal,
+          revision: input.directoryPrincipal.revision + 1,
+          updatedAt,
+          status: "revoked",
+        })
+      : null;
+  const records = [{
+    recordId: record.id,
+    recordType: "payee",
+    revision: record.revision,
+    envelope: encryptVaultRecord(record, {
+      schemaVersion: 1,
+      organizationId: record.organizationId,
+      recordType: "payee",
+      recordId: record.id,
+      revision: record.revision,
+    }, [input.principal]),
+  }];
+  if (directoryPrincipal && directoryPrincipal !== input.directoryPrincipal) {
+    records.push({
+      recordId: directoryPrincipal.id,
+      recordType: "principal",
+      revision: directoryPrincipal.revision,
+      envelope: encryptVaultRecord(directoryPrincipal, {
+        schemaVersion: 1,
+        organizationId: directoryPrincipal.organizationId,
+        recordType: "principal",
+        recordId: directoryPrincipal.id,
+        revision: directoryPrincipal.revision,
+      }, [input.principal]),
+    });
+  }
+  await input.client.storeEncryptedRecords({
+    organizationId: record.organizationId,
+    records,
+  });
+  return { record, directoryPrincipal };
+}
+
 type EncryptedRecordMetadata = {
   id: string;
   recordType: string;

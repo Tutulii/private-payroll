@@ -55,13 +55,10 @@ import {
   proofPackageExportFilename,
   publicIdentityFilename,
   serializePayoJson,
-  type PayoProofPackageExport,
   type ProofPackageOpenFailure,
-  type ReadableProofPackageReport,
 } from "@/lib/client/proof-package-files";
 import {
   verifyLiveProofTransaction,
-  type LiveProofTransactionEvidence,
 } from "@/lib/client/starknet-proof-evidence";
 import { proofPackageGrantSchema } from "@/lib/disclosure/proof-package";
 import {
@@ -114,10 +111,8 @@ import {
 import {
   encryptedWorkerStatementSourceSchema,
   workerStatementSourceFilename,
-  type EncryptedWorkerStatementSource,
 } from "@/lib/disclosure/worker-statement-source";
 import {
-  familiarTaxEvidenceFilename,
   type FamiliarTaxDocument,
 } from "@/lib/disclosure/tax-evidence";
 import { formatTokenAmount, type PayrollTokenSymbol } from "@/lib/starknet/tokens";
@@ -126,6 +121,10 @@ import {
   resolveDisclosureSelection,
 } from "@/lib/client/disclosure-form";
 import { WageClaimsVNextCard } from "./wage-claims-vnext";
+import {
+  CreatedProofResultCard, OpenProofResultCard, PayrollReportResultCard, WorkerSourceResultCard,
+  type CreatedProofPackageResult, type OpenProofPackageResult, type PayrollReportView, type WorkerSourceView,
+} from "./report-results";
 
 type ActivityKind = "Payroll" | "Agent" | "Vault";
 
@@ -182,44 +181,6 @@ type ExceptionFeedback = {
   message: string;
 };
 
-type CreatedProofPackageResult = {
-  file: PayoProofPackageExport;
-  filename: string;
-  workflowLabel: string;
-};
-
-type OpenProofPackageResult = {
-  report: ReadableProofPackageReport;
-  liveEvidence: LiveProofTransactionEvidence;
-  grantEvidence: "current" | "embedded";
-  filename: string;
-};
-
-type PayrollReportView = {
-  file: EncryptedPayrollReport;
-  filename: string;
-  recipientPrincipalId: string;
-  title: string;
-  scope: string;
-  countLabel: string;
-  totals: string[];
-  periodLabel: string;
-  checkpointRoot: string;
-  blockNumber: string;
-  packageCommitment: string;
-  familiarTaxDocuments: FamiliarTaxDocument[];
-};
-
-type WorkerSourceView = {
-  file: EncryptedWorkerStatementSource;
-  filename: string;
-  workerName: string;
-  recipientAddress: string;
-  identityMode: PayoReportingIdentity["mode"];
-  identityFingerprint: string;
-  sourceCommitment: string;
-};
-
 const MAX_PROOF_PACKAGE_FILE_BYTES = 24 * 1024 * 1024;
 const MAX_PAYROLL_REPORT_FILE_BYTES = 24 * 1024 * 1024;
 const MAX_PUBLIC_IDENTITY_FILE_BYTES = 16 * 1024;
@@ -274,16 +235,16 @@ function payrollReportView(input: {
     const totals = (["STRK", "USDC"] as const).flatMap((token) => {
       const value = verified.totals[token];
       return BigInt(value.grossAtomic) === 0n ? [] : [
-        `${token}: gross ${formatTokenAmount(BigInt(value.grossAtomic), token)} · deductions ${formatTokenAmount(BigInt(value.deductionsAtomic), token)} · net ${formatTokenAmount(BigInt(value.netAtomic), token)}`,
+        { token, gross: formatTokenAmount(BigInt(value.grossAtomic), token), deductions: formatTokenAmount(BigInt(value.deductionsAtomic), token), net: formatTokenAmount(BigInt(value.netAtomic), token) },
       ];
     });
     return {
       file: input.file,
       filename: input.filename,
       recipientPrincipalId: input.recipientPrincipalId,
-      title: input.payload.scope === "tax_authority" ? "Tax-authority payroll book" : "Employer payroll book",
-      scope: input.payload.scope.replaceAll("_", " "),
-      countLabel: `${verified.entryCount} complete on-chain ${verified.entryCount === 1 ? "entry" : "entries"}`,
+      title: input.payload.scope === "tax_authority" ? "Payroll book for tax review" : "Complete employer payroll book",
+      scope: input.payload.scope,
+      countLabel: `${verified.entryCount} payroll ${verified.entryCount === 1 ? "entry" : "entries"} · complete book`,
       totals,
       periodLabel,
       checkpointRoot: input.payload.checkpoint.accumulatorRoot,
@@ -298,14 +259,15 @@ function payrollReportView(input: {
   };
   const totals = (["STRK", "USDC"] as const).flatMap((token) => BigInt(verified.netTotals[token]) === 0n
     ? []
-    : [`${token}: income ${formatTokenAmount(BigInt(verified.netTotals[token]), token)}`]);
+    : [{ token, net: formatTokenAmount(BigInt(verified.netTotals[token]), token) }]);
   return {
     file: input.file,
     filename: input.filename,
     recipientPrincipalId: input.recipientPrincipalId,
-    title: `${input.payload.recipientReference} · private income statement`,
+    title: "Your private income statement",
+    workerName: input.payload.recipientReference,
     scope: "worker",
-    countLabel: `${verified.lineCount} privately disclosed ${verified.lineCount === 1 ? "payroll line" : "payroll lines"}`,
+    countLabel: `${verified.lineCount} of your payroll ${verified.lineCount === 1 ? "line" : "lines"} verified`,
     totals,
     periodLabel,
     checkpointRoot: input.payload.checkpoint.accumulatorRoot,
@@ -350,6 +312,7 @@ type ActivityEvent = {
 };
 
 const activityFilters = ["All", "Payroll", "Agent", "Vault"] as const;
+const ACTIVITY_PAGE_SIZE = 8;
 
 function dateParts(value: string) {
   const date = new Date(value);
@@ -432,6 +395,7 @@ export default function ActivityPage() {
   const starknet = useStarknetWallet();
   const [filter, setFilter] = useState<(typeof activityFilters)[number]>("All");
   const [query, setQuery] = useState("");
+  const [visibleEventCount, setVisibleEventCount] = useState(ACTIVITY_PAGE_SIZE);
   const [copiedHash, setCopiedHash] = useState("");
   const [settlements, setSettlements] = useState<SettlementSummary[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditSummary[]>([]);
@@ -713,11 +677,17 @@ export default function ActivityPage() {
     ? agreementOptions.filter(({ agreement }) => claimRunAgreementIds.includes(agreement.agreement.id))
     : [], [agreementOptions, claimRunAgreementIds]);
 
-  const visibleEvents = useMemo(() => events.filter((event) => {
+  const filteredEvents = useMemo(() => events.filter((event) => {
     const matchesFilter = filter === "All" || event.kind === filter;
     const matchesQuery = `${event.title} ${event.detail} ${event.amount}`.toLowerCase().includes(query.toLowerCase());
     return matchesFilter && matchesQuery;
   }), [events, filter, query]);
+
+  const visibleEvents = useMemo(
+    () => filteredEvents.slice(0, visibleEventCount),
+    [filteredEvents, visibleEventCount],
+  );
+  const hiddenEventCount = Math.max(0, filteredEvents.length - visibleEvents.length);
 
   const groupedEvents = visibleEvents.reduce<Record<string, ActivityEvent[]>>((groups, event) => {
     (groups[event.day] ??= []).push(event);
@@ -1828,14 +1798,14 @@ export default function ActivityPage() {
 
       <div className="activity-layout reveal reveal--four">
         <section className="activity-feed-card">
-          <div className="feed-header"><div><span className="label">AUDIT TRAIL</span><h3>Real activity</h3></div><label className="search-box"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search records" aria-label="Search activity" /></label></div>
+          <div className="feed-header"><div><span className="label">AUDIT TRAIL</span><h3>Real activity</h3></div><label className="search-box"><Search size={16} /><input value={query} onChange={(event) => { setQuery(event.target.value); setVisibleEventCount(ACTIVITY_PAGE_SIZE); }} placeholder="Search records" aria-label="Search activity" /></label></div>
           <div className="filter-tabs feed-tabs" role="tablist" aria-label="Filter activity">
-            {activityFilters.map((item) => <button type="button" role="tab" aria-selected={filter === item} className={filter === item ? "filter-tab filter-tab--active" : "filter-tab"} key={item} onClick={() => setFilter(item)}>{item}</button>)}
+            {activityFilters.map((item) => <button type="button" role="tab" aria-selected={filter === item} className={filter === item ? "filter-tab filter-tab--active" : "filter-tab"} key={item} onClick={() => { setFilter(item); setVisibleEventCount(ACTIVITY_PAGE_SIZE); }}>{item}</button>)}
             <button type="button" className="feed-filter-more" aria-label="Refresh activity" onClick={() => void refreshActivity()} disabled={!vault.session || loading}><Filter size={14} /> Refresh</button>
           </div>
 
           {activityError && <p className="team-directory-error"><KeyRound size={15} /> {activityError}</p>}
-          <div className="timeline">
+          <div className="timeline" id="activity-timeline">
             {Object.entries(groupedEvents).map(([day, dayEvents]) => (
               <div className="timeline-day" key={day}>
                 <div className="timeline-day__label"><span>{day}</span><i /></div>
@@ -1853,6 +1823,23 @@ export default function ActivityPage() {
             {loading && events.length === 0 && <div className="directory-empty"><LoaderCircle className="spin" size={24} /><strong>Loading durable records</strong><span>PAYO is reading tenant-scoped operational metadata.</span></div>}
             {!loading && vault.session && visibleEvents.length === 0 && <div className="directory-empty"><Search size={24} /><strong>No records found</strong><span>{events.length ? "Try a different search or filter." : "The first proof or settlement will appear here."}</span></div>}
           </div>
+          {filteredEvents.length > 0 && (
+            <div className="activity-feed-pagination">
+              <span>Showing {visibleEvents.length} of {filteredEvents.length} records</span>
+              <div>
+                {visibleEventCount > ACTIVITY_PAGE_SIZE && (
+                  <button type="button" className="button button--soft" onClick={() => setVisibleEventCount(ACTIVITY_PAGE_SIZE)} aria-controls="activity-timeline">
+                    Show recent only
+                  </button>
+                )}
+                {hiddenEventCount > 0 && (
+                  <button type="button" className="button button--ink" onClick={() => setVisibleEventCount((count) => count + ACTIVITY_PAGE_SIZE)} aria-controls="activity-timeline">
+                    Show {Math.min(ACTIVITY_PAGE_SIZE, hiddenEventCount)} older records
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </section>
 
         <aside className="activity-side">
@@ -1888,45 +1875,13 @@ export default function ActivityPage() {
               <p>PAYO rebuilds the exact payroll, claim, or remediation manifest locally, requires both on-chain verifier shards, creates a balanced journal, and encrypts the package only to this recipient. Worker packages contain one workflow-specific Merkle opening; auditor and tax scopes omit restricted fields.</p>
               <button type="submit" className="button button--ink button--wide" disabled={creatingReceipt || !disclosureSettlement || (disclosureScope === "worker" && disclosureSettlement.workflowType === "payroll" && !disclosureAgreementId)}>{creatingReceipt ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />} Verify, encrypt and download</button>
             </form>}
-            {createdProofPackage && showProofPackageState && <div className="proof-package-success" role="status">
-              <div className="proof-package-result-title"><CheckCircle2 size={19} /><span><small>PACKAGE CREATED</small><strong>{createdProofPackage.workflowLabel}</strong></span></div>
-              <dl>
-                <div><dt>State</dt><dd>Verified &amp; encrypted</dd></div>
-                <div><dt>Scope</dt><dd>{createdProofPackage.file.scope}</dd></div>
-                <div><dt>Expires</dt><dd>{new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(createdProofPackage.file.grant.expiresAt))}</dd></div>
-                <div><dt>Commitment</dt><dd>{shortId(createdProofPackage.file.encryptedPackage.packageCommitment)}</dd></div>
-                <div><dt>File</dt><dd>{createdProofPackage.filename}</dd></div>
-              </dl>
-              <div className="proof-package-result-actions">
-                <button type="button" onClick={() => void openCreatedProofPackageLocally()} disabled={openingProofPackage || !createdPackageForCurrentVault}><Eye size={14} /> Open package</button>
-                <button type="button" onClick={() => downloadJson(createdProofPackage.file, createdProofPackage.filename)}><Download size={14} /> Download</button>
-                <button type="button" onClick={() => void copyPackageCommitment(createdProofPackage.file.encryptedPackage.packageCommitment)}><Copy size={14} /> Copy commitment</button>
-              </div>
-              {!createdPackageForCurrentVault && <p>The package is encrypted to the imported recipient. Send them the JSON; only their matching PAYO vault can open it.</p>}
-            </div>}
-            {openProofPackageResult && showProofPackageState && <div className="proof-package-inspector" aria-live="polite">
-              <div className="proof-package-result-title"><FileText size={19} /><span><small>PROOF PACKAGE INSPECTOR</small><strong>{openProofPackageResult.report.workflowLabel}</strong></span><i className={`proof-evidence-status proof-evidence-status--${openProofPackageResult.liveEvidence.status}`}>{openProofPackageResult.liveEvidence.status === "confirmed" && openProofPackageResult.liveEvidence.proofStateStatus === "verified" ? "On-chain proof verified" : openProofPackageResult.liveEvidence.status === "confirmed" ? "Proof tx confirmed" : openProofPackageResult.liveEvidence.status === "failed" ? "Proof tx failed" : openProofPackageResult.liveEvidence.status === "pending" ? "Proof tx pending" : "Live check unavailable"}</i></div>
-              <p className="proof-package-verdict"><ShieldCheck size={15} /> {openProofPackageResult.report.publicInputsBinding === "verified" ? "Archive integrity, manifest hashes, recipient key, grant window, balanced journal and proof public-input digest verified locally." : "Archive integrity, recipient authorization, grant window and balanced journal verified. This legacy package does not contain a reconstructable proof public-input digest."}</p>
-              {openProofPackageResult.report.publicInputsBinding === "verified" && openProofPackageResult.liveEvidence.status === "confirmed" && openProofPackageResult.liveEvidence.proofStateStatus !== "verified" && <p className="proof-package-live-warning">The transaction receipt is confirmed, but PAYO could not confirm the bound seal state. Do not treat this as an on-chain proof verification yet.</p>}
-              {openProofPackageResult.report.claim && <div className="proof-claim-context">
-                <small>LINKED CLAIM CONTEXT</small>
-                <strong>{openProofPackageResult.report.claim.typeLabel ?? "Private wage exception"}</strong>
-                <span>Claim {shortId(openProofPackageResult.report.claim.id)}{openProofPackageResult.report.claim.amountLabel ? ` · ${openProofPackageResult.report.claim.amountLabel}` : ""}</span>
-                <span>Settlement · {openProofPackageResult.report.claim.settlementState.replaceAll("_", " ")}</span>
-              </div>}
-              <dl>
-                <div><dt>Disclosure</dt><dd>{openProofPackageResult.report.scope} · {openProofPackageResult.report.fieldScope.join(", ")}</dd></div>
-                <div><dt>Grant</dt><dd>{shortId(openProofPackageResult.report.grantId)} · expires {new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(openProofPackageResult.report.expiresAt))}</dd></div>
-                <div><dt>Proof</dt><dd>Version {openProofPackageResult.report.proofVersion} · {shortId(openProofPackageResult.report.verificationTransactionHash)}</dd></div>
-                <div><dt>Commitment</dt><dd>{shortId(openProofPackageResult.report.packageCommitment)}</dd></div>
-                <div><dt>Opened file</dt><dd>{openProofPackageResult.filename}</dd></div>
-              </dl>
-              <div className="proof-package-result-actions">
-                <a href={`${STARKNET_MAINNET_EXPLORER}/tx/${openProofPackageResult.report.verificationTransactionHash}`} target="_blank" rel="noreferrer"><ShieldCheck size={14} /> Verification tx</a>
-                <button type="button" onClick={() => void copyPackageCommitment(openProofPackageResult.report.packageCommitment)}><Copy size={14} /> Copy commitment</button>
-              </div>
-              <p>{openProofPackageResult.grantEvidence === "current" ? "Revocation was checked against this organization’s current grant record." : "This package came from another organization; expiry and embedded grant integrity were checked, but current revocation and issuer identity require a fresh authenticated record from the issuer."}</p>
-            </div>}
+            {createdProofPackage && showProofPackageState && <CreatedProofResultCard
+              result={createdProofPackage} canOpen={createdPackageForCurrentVault} busy={openingProofPackage}
+              open={() => void openCreatedProofPackageLocally()} download={downloadJson} copy={(value) => void copyPackageCommitment(value)}
+            />}
+            {openProofPackageResult && showProofPackageState && <OpenProofResultCard
+              result={openProofPackageResult} copy={(value) => void copyPackageCommitment(value)}
+            />}
             {proofPackageFailure && showProofPackageState && <div className={`proof-package-failure proof-package-failure--${proofPackageFailure.code}`} role="alert">
               <span>!</span><div><small>PACKAGE REJECTED</small><strong>{proofPackageFailure.title}</strong><p>{proofPackageFailure.message}</p></div>
             </div>}
@@ -1988,51 +1943,14 @@ export default function ActivityPage() {
             </form>
             <button type="button" className="button button--soft button--wide" onClick={() => payrollReportInput.current?.click()} disabled={!vault.session || payrollReportBusy}><Eye size={16} /> Open report or worker source</button>
             <input ref={payrollReportInput} className="proof-package-file-input" type="file" accept="application/json,.json" onChange={(event) => void inspectPayrollReportFile(event)} tabIndex={-1} aria-hidden="true" />
-            {workerSourceViewState && showPayrollReportState && <div className="proof-package-success payroll-report-result" role="status">
-              <div className="proof-package-result-title"><ShieldCheck size={19} /><span><small>WORKER-CONTROLLED SOURCE READY</small><strong>{workerSourceViewState.workerName}</strong></span></div>
-              <p className="proof-package-verdict"><LockKeyhole size={15} /> Complete book checked first; this source is encrypted only to the worker&apos;s {workerSourceViewState.identityMode === "direct_strk20_viewing_key" ? "direct STRK20-derived" : "Ready PAYO fallback"} identity.</p>
-              <dl>
-                <div><dt>Recipient</dt><dd>{shortId(workerSourceViewState.recipientAddress)}</dd></div>
-                <div><dt>Identity</dt><dd>{shortId(workerSourceViewState.identityFingerprint)}</dd></div>
-                <div><dt>Commitment</dt><dd>{shortId(workerSourceViewState.sourceCommitment)}</dd></div>
-                <div><dt>Next</dt><dd>Worker opens this file and generates the final statement locally.</dd></div>
-              </dl>
-              <div className="proof-package-result-actions">
-                <button type="button" onClick={() => downloadJson(workerSourceViewState.file, workerSourceViewState.filename)}><Download size={14} /> Download source</button>
-                <button type="button" onClick={() => void copyPackageCommitment(workerSourceViewState.sourceCommitment)}><Copy size={14} /> Copy commitment</button>
-              </div>
-            </div>}
-            {payrollReportViewState && showPayrollReportState && <div className="proof-package-success payroll-report-result" role="status">
-              <div className="proof-package-result-title"><CheckCircle2 size={19} /><span><small>CHAIN-COMPLETE REPORT VERIFIED</small><strong>{payrollReportViewState.title}</strong></span></div>
-              <p className="proof-package-verdict"><ShieldCheck size={15} /> Every disclosed line reconstructs its proved roots; every entry reconstructs the on-chain accumulator.</p>
-              <dl>
-                <div><dt>Coverage</dt><dd>{payrollReportViewState.countLabel}</dd></div>
-                <div><dt>Period</dt><dd>{payrollReportViewState.periodLabel}</dd></div>
-                <div><dt>Scope</dt><dd>{payrollReportViewState.scope}</dd></div>
-                <div><dt>On-chain root</dt><dd>{shortId(payrollReportViewState.checkpointRoot)} · block {payrollReportViewState.blockNumber}</dd></div>
-                <div><dt>Package</dt><dd>{shortId(payrollReportViewState.packageCommitment)}</dd></div>
-              </dl>
-              {payrollReportViewState.totals.length > 0 && <div className="payroll-report-totals">{payrollReportViewState.totals.map((total) => <span key={total}>{total}</span>)}</div>}
-              {payrollReportViewState.familiarTaxDocuments.length > 0
-                ? <div className="familiar-tax-documents">
-                    <div className="familiar-tax-documents__heading"><span>READABLE VERIFIED EVIDENCE</span><small>Generated locally after the complete on-chain book and exact policy roots pass verification.</small></div>
-                    {payrollReportViewState.familiarTaxDocuments.map((document) => <article key={document.documentCommitment}>
-                      <header><span><small>{document.jurisdictionCode} · {document.taxYear}</small><strong>{document.title}</strong></span><i>{document.token}</i></header>
-                      <dl>{document.fields.map((field) => <div key={field.code}><dt>{field.code} · {field.label}</dt><dd>{formatTokenAmount(BigInt(field.amountAtomic), document.token)}</dd></div>)}</dl>
-                      <p>Policy {document.policyBindings.map(({ policyId, policyRevision }) => `${policyId} r${policyRevision}`).join(" · ")} · root {shortId(document.checkpointRoot)}</p>
-                      <button type="button" onClick={() => downloadJson(document, familiarTaxEvidenceFilename(document))}><Download size={14} /> Download readable JSON</button>
-                    </article>)}
-                    <p className="familiar-tax-documents__warning">These plaintext files contain private compensation data. Share only with the named worker or authorized reviewer.</p>
-                  </div>
-                : <p className="familiar-tax-empty">No employee line in this report maps to the supported US, UK or Canadian familiar views. The canonical encrypted book remains verified.</p>}
-              <div className="proof-package-result-actions">
-                <button type="button" onClick={() => downloadJson(payrollReportViewState.file, payrollReportViewState.filename)}><Download size={14} /> Download</button>
-                <button type="button" onClick={() => void openCreatedPayrollReport()} disabled={payrollReportBusy || (payrollReportViewState.recipientPrincipalId !== vault.session?.principal.principalId && payrollReportViewState.recipientPrincipalId !== localReportingKey?.principal.principalId)}><Eye size={14} /> Verify again</button>
-                <button type="button" onClick={() => void copyPackageCommitment(payrollReportViewState.packageCommitment)}><Copy size={14} /> Copy commitment</button>
-              </div>
-              {payrollReportViewState.recipientPrincipalId !== vault.session?.principal.principalId && payrollReportViewState.recipientPrincipalId !== localReportingKey?.principal.principalId && <p>This file is encrypted to the imported recipient. Only their matching reporting key can open the disclosed salaries.</p>}
-              <p>Readable tax-style evidence only. PAYO does not claim this is an official W-2, P60, T4 or legal filing.</p>
-            </div>}
+            {workerSourceViewState && !payrollReportViewState && showPayrollReportState && <WorkerSourceResultCard
+              view={workerSourceViewState} download={downloadJson} copy={(value) => void copyPackageCommitment(value)}
+            />}
+            {payrollReportViewState && showPayrollReportState && <PayrollReportResultCard
+              view={payrollReportViewState} busy={payrollReportBusy}
+              canReverify={payrollReportViewState.recipientPrincipalId === vault.session?.principal.principalId || payrollReportViewState.recipientPrincipalId === localReportingKey?.principal.principalId}
+              download={downloadJson} reverify={() => void openCreatedPayrollReport()} copy={(value) => void copyPackageCommitment(value)}
+            />}
           </section>
 
           <WageClaimsVNextCard />

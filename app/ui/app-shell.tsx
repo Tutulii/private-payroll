@@ -3,14 +3,11 @@
 import {
   Check,
   ChevronDown,
-  CircleHelp,
   Clock3,
   LayoutDashboard,
   Menu,
-  MoreHorizontal,
   Plus,
   Send,
-  Settings,
   ShieldCheck,
   Sparkles,
   Users,
@@ -35,7 +32,7 @@ const navItems = [
 ];
 
 const pageTitles: Record<string, { eyebrow: string; title: string }> = {
-  "/": { eyebrow: "Sunday, August 23", title: "Good morning, Tutul" },
+  "/": { eyebrow: "Today", title: "Welcome to Payo" },
   "/payroll": { eyebrow: "Payroll workspace", title: "Payday, made private" },
   "/team": { eyebrow: "Your organization", title: "People & agents" },
   "/activity": { eyebrow: "Private records", title: "Activity & receipts" },
@@ -73,10 +70,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const vault = usePayoVault();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [toast, setToast] = useState("");
+  const [overviewDateLabel, setOverviewDateLabel] = useState("Today");
   const proofRecoveryRunsRef = useRef(new Set<string>());
   const proofRecoveryOrganizationRef = useRef("");
 
-  const title = pageTitles[pathname] ?? pageTitles["/"];
+  const configuredTitle = pageTitles[pathname] ?? pageTitles["/"];
+  const title = pathname === "/"
+    ? { ...configuredTitle, eyebrow: overviewDateLabel }
+    : configuredTitle;
   const openPayroll = useCallback(() => {
     if (pathname === "/payroll") {
       window.history.replaceState(null, "", "/payroll#private-payroll");
@@ -95,6 +96,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     const timeout = window.setTimeout(() => setToast(""), 2600);
     return () => window.clearTimeout(timeout);
   }, [toast]);
+
+  useEffect(() => {
+    const updateDateLabel = () => setOverviewDateLabel(new Intl.DateTimeFormat(undefined, {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+    }).format(new Date()));
+    updateDateLabel();
+    const interval = window.setInterval(updateDateLabel, 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     if (pathname.startsWith("/payo-browser-evidence")) return;
@@ -279,7 +291,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 >
                   <Icon size={19} strokeWidth={2.2} />
                   <span>{label}</span>
-                  {label === "People & agents" && <span className="nav-count">16</span>}
                 </Link>
               );
             })}
@@ -293,20 +304,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             <Sparkles className="privacy-note__spark" size={20} />
           </div>
 
-          <nav className="nav-list nav-list--secondary" aria-label="Secondary navigation">
-            <button type="button" className="nav-item" onClick={() => setToast("Help center coming soon")}>
-              <CircleHelp size={19} /><span>Help</span>
-            </button>
-            <button type="button" className="nav-item" onClick={() => setToast("Settings coming soon")}>
-              <Settings size={19} /><span>Settings</span>
-            </button>
-          </nav>
-
-          <div className="profile-chip">
-            <div className="avatar avatar--ink">TA</div>
-            <div><strong>Tutul</strong><span>Acorn Labs</span></div>
-            <MoreHorizontal size={18} />
-          </div>
         </aside>
 
         {mobileNavOpen && <button className="nav-scrim" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)} />}

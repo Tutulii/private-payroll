@@ -48,6 +48,10 @@ import {
 } from "@/lib/client/employer-statement";
 import { formatTokenAmount, PAYROLL_TOKENS } from "@/lib/starknet/tokens";
 
+import { WageClaimResultCard, WageRemediationResultCard } from "./wage-result-cards";
+import { ResultActions } from "./report-results";
+import styles from "./wage-claims.module.css";
+
 const claimKinds = [
   ["missing_obligation", "Missing obligation"],
   ["below_committed_floor", "Below FX floor"],
@@ -607,21 +611,21 @@ export function WageClaimsVNextCard() {
   }, [employerRuns, employerStatements]);
 
   if (!vault.session || !vault.authenticated) {
-    return <section className="receipts-card wage-vnext-card">
-      <span className="label">WAGE PROTECTION vNEXT</span>
-      <h3>Worker-owned claims.<br />Employer-bound fixes.</h3>
+    return <section className={`receipts-card wage-vnext-card ${styles.wageCard}`}>
+      <span className="label">WAGE PROTECTION</span>
+      <h3>Private wage claims</h3>
       <p>Sign in with Ready and unlock your own PAYO vault. A worker never needs access to the employer&apos;s organization vault.</p>
     </section>;
   }
 
-  return <section className="receipts-card wage-vnext-card">
+  return <section className={`receipts-card wage-vnext-card ${styles.wageCard}`}>
     <div className="wage-vnext-heading">
-      <div><span className="label">WAGE PROTECTION vNEXT</span><h3>Claim v6 → Remediation v7</h3></div>
+      <div><span className="label">WAGE PROTECTION</span><h3>Claims &amp; corrective payments</h3></div>
       <button type="button" className="button button--soft" onClick={() => void refresh()} disabled={loading || Boolean(activeId)}>
         {loading ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />} Refresh
       </button>
     </div>
-    <p>Claim type, salary, recipient, token and amount stay encrypted. Starknet receives only bounded commitments and nullifiers.</p>
+    <p>Raise a private wage claim or resolve an accepted claim. Pay amounts and worker details stay encrypted.</p>
     {stage && <p className="private-exception-feedback private-exception-feedback--progress" role="status"><LoaderCircle className="spin" size={14} /> {stage}</p>}
     {error && <p className="private-exception-feedback private-exception-feedback--error" role="alert"><ShieldAlert size={14} /> {error}</p>}
     {success && <p className="private-exception-feedback private-exception-feedback--success" role="status"><CheckCircle2 size={14} /> {success}</p>}
@@ -638,11 +642,9 @@ export function WageClaimsVNextCard() {
               {activeId === grant.id + ":" + kind ? <LoaderCircle className="spin" size={14} /> : <ShieldCheck size={14} />} {label}
             </button>)}
           </div>}
-          {existing.map((claim) => <div className="wage-vnext-state" key={claim.id}>
-            <span><strong>Claim {shortId(claim.id)}</strong><small>{claim.state.replaceAll("_", " ")}</small></span>
-            {claim.state !== "accepted" && <button type="button" onClick={() => void resumeWorkerClaim(claim)} disabled={Boolean(activeId)}>{activeId === claim.id ? <LoaderCircle className="spin" size={14} /> : <ShieldCheck size={14} />} Resume</button>}
-            {claim.state === "accepted" && <i><CheckCircle2 size={13} /> On-chain accepted</i>}
-          </div>)}
+          {existing.map((claim) => <WageClaimResultCard key={claim.id} claim={claim} audience="worker">
+            {claim.state !== "accepted" && <ResultActions><button type="button" data-primary onClick={() => void resumeWorkerClaim(claim)} disabled={Boolean(activeId)}>{activeId === claim.id ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />} Resume claim</button></ResultActions>}
+          </WageClaimResultCard>)}
         </article>;
       })}
     </div>
@@ -687,36 +689,35 @@ export function WageClaimsVNextCard() {
     </div>}
 
     {employerMode && <div className="wage-vnext-section">
-      <div className="wage-vnext-section__title"><WalletCards size={17} /><span><small>EMPLOYER</small><strong>Accepted claims &amp; private fixes</strong></span></div>
-      {employerClaims.filter(({ state }) => state === "accepted").length === 0 && <p className="wage-vnext-empty">No accepted Claim v6 is waiting for remediation.</p>}
+      <div className="wage-vnext-section__title"><WalletCards size={17} /><span><small>EMPLOYER</small><strong>Accepted claims &amp; private payments</strong></span></div>
+      {employerClaims.filter(({ state }) => state === "accepted").length === 0 && <p className="wage-vnext-empty">No accepted wage claim is waiting for a corrective payment.</p>}
       {employerClaims.filter(({ state }) => state === "accepted").map((claim) => {
         const remediation = activeRemediationByClaim.get(claim.id);
-        let readable = "Encrypted accepted claim";
+        let issue = "Encrypted accepted claim";
+        let amount: string | undefined;
         try {
           const opened = openAcceptedWorkerClaimV2({ claim, principal: vault.session!.principal });
-          const amount = opened.claimKind === "below_committed_floor"
+          amount = opened.claimKind === "below_committed_floor"
             ? (Number(opened.claimFact.shortfallAtomic) / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 6 })
               + " " + opened.claimFact.shortfallUnit.slice(0, 3).toUpperCase()
             : formatTokenAmount(
                 BigInt(opened.claimFact.shortfallAtomic),
                 PAYROLL_TOKENS[opened.claimFact.obligationToken],
               ) + " " + opened.claimFact.obligationToken;
-          readable = claimLabel(opened.claimKind) + " · " + amount;
+          issue = claimLabel(opened.claimKind);
         } catch { /* The action fails closed if this employer is not an envelope recipient. */ }
-        return <article className="wage-vnext-item" key={claim.id}>
-          <div><small>Accepted Claim v6</small><strong>{readable}</strong><span>Claim {shortId(claim.id)}</span></div>
-          {!remediation && <button type="button" onClick={() => void createRemediation(claim)} disabled={Boolean(activeId)}>{activeId === claim.id ? <LoaderCircle className="spin" size={14} /> : <ShieldCheck size={14} />} Prove exact remediation</button>}
-          {remediation && <div className="wage-vnext-state">
-            <span><strong>Remediation {shortId(remediation.id)}</strong><small>{remediation.state.replaceAll("_", " ")}</small></span>
-            {["prepared", "proved", "authorization_pending", "failed", "authorized", "payment_pending"].includes(remediation.state) && <button type="button" onClick={() => void continueRemediation(remediation)} disabled={Boolean(activeId)}>{activeId === remediation.id ? <LoaderCircle className="spin" size={14} /> : remediation.state === "authorized" || remediation.state === "payment_pending" ? <WalletCards size={14} /> : <ShieldCheck size={14} />} {remediation.state === "authorized" ? "Pay privately" : remediation.state === "payment_pending" ? "Recover Ready payment" : "Resume"}</button>}
-            {remediation.state === "payment_pending" && <button type="button" className="button button--soft" onClick={() => void cancelRemediationPayment(remediation)} disabled={Boolean(activeId)}>Cancel unsigned request</button>}
-            {remediation.state === "payment_confirmed" && <i><CheckCircle2 size={13} /> Payment confirmed · reconciliation evidence pending</i>}
-            {remediation.state === "reconciled" && <i><CheckCircle2 size={13} /> Payment reconciled</i>}
-            {remediationFeedbackId === remediation.id && stage && <p className="private-exception-feedback private-exception-feedback--progress" role="status"><LoaderCircle className="spin" size={14} /> {stage}</p>}
-            {remediationFeedbackId === remediation.id && error && <p className="private-exception-feedback private-exception-feedback--error" role="alert"><ShieldAlert size={14} /> {error}</p>}
-            {remediationFeedbackId === remediation.id && success && <p className="private-exception-feedback private-exception-feedback--success" role="status"><CheckCircle2 size={14} /> {success}</p>}
-          </div>}
-        </article>;
+        if (!remediation) return <WageClaimResultCard key={claim.id} claim={claim} audience="employer" issue={issue} amount={amount}>
+          <ResultActions><button type="button" data-primary onClick={() => void createRemediation(claim)} disabled={Boolean(activeId)}>{activeId === claim.id ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />} Prove exact remediation</button></ResultActions>
+        </WageClaimResultCard>;
+        return <WageRemediationResultCard key={claim.id} remediation={remediation} issue={issue} amount={amount}>
+          {["prepared", "proved", "authorization_pending", "failed", "authorized", "payment_pending"].includes(remediation.state) && <ResultActions>
+            <button type="button" data-primary onClick={() => void continueRemediation(remediation)} disabled={Boolean(activeId)}>{activeId === remediation.id ? <LoaderCircle className="spin" size={16} /> : remediation.state === "authorized" || remediation.state === "payment_pending" ? <WalletCards size={16} /> : <ShieldCheck size={16} />} {remediation.state === "authorized" ? "Pay privately" : remediation.state === "payment_pending" ? "Recover Ready payment" : "Resume"}</button>
+            {remediation.state === "payment_pending" && <button type="button" onClick={() => void cancelRemediationPayment(remediation)} disabled={Boolean(activeId)}>Cancel unsigned request</button>}
+          </ResultActions>}
+          {remediationFeedbackId === remediation.id && stage && <p className="private-exception-feedback private-exception-feedback--progress" role="status"><LoaderCircle className="spin" size={14} /> {stage}</p>}
+          {remediationFeedbackId === remediation.id && error && <p className="private-exception-feedback private-exception-feedback--error" role="alert"><ShieldAlert size={14} /> {error}</p>}
+          {remediationFeedbackId === remediation.id && success && <p className="private-exception-feedback private-exception-feedback--success" role="status"><CheckCircle2 size={14} /> {success}</p>}
+        </WageRemediationResultCard>;
       })}
     </div>}
   </section>;

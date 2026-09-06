@@ -780,8 +780,11 @@ export default function PayrollPage() {
       setAgentCapabilities(loadedAgentCapabilities);
       setSnapshotSyncError(snapshotListing.error);
       setDashboardNow(Date.now());
+      const activePayeeIds = new Set(loadedPayees
+        .filter(({ status }) => status === "active")
+        .map(({ id }) => id));
       const activeSchedules = synchronizedAgreements
-        .filter(({ effectiveUntil }) => !effectiveUntil)
+        .filter(({ effectiveUntil, payeeId }) => !effectiveUntil && activePayeeIds.has(payeeId))
         .map(obligationScheduleForRecord);
       try {
         if (activeSchedules.length > 0) {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { generateVaultPrincipal } from "@/lib/crypto/vault";
+import { decryptVaultRecord, generateVaultPrincipal } from "@/lib/crypto/vault";
 import {
+  deactivateEncryptedPayee,
   loadEncryptedPayees,
   prepareEncryptedPayee,
   storeEncryptedPayee,
@@ -28,6 +29,37 @@ describe("encrypted payee directory", () => {
     const request = storeEncryptedRecords.mock.calls[0][0];
     expect(request.records.map(({ recordType }: { recordType: string }) => recordType)).toEqual(["principal", "payee"]);
     expect(JSON.stringify(request.records)).not.toContain("Scout");
+  });
+
+  it("stores encrypted inactive payee and revoked principal revisions when removing a contributor", async () => {
+    const principal = generateVaultPrincipal("admin:test");
+    const prepared = prepareEncryptedPayee({
+      organizationId,
+      displayName: "Maya",
+      principalKind: "human",
+      recipientAddress: "0x456",
+      tokenPreference: "USDC",
+      jurisdictionCode: "GB",
+      principal,
+      now,
+    });
+    const storeEncryptedRecords = vi.fn().mockResolvedValue({ records: [] });
+    const removedAt = new Date("2026-08-25T18:30:00.000Z");
+    const result = await deactivateEncryptedPayee({
+      client: { storeEncryptedRecords } as never,
+      record: prepared.record,
+      directoryPrincipal: prepared.principalRecord,
+      principal,
+      now: removedAt,
+    });
+
+    expect(result.record).toMatchObject({ revision: 2, status: "inactive", updatedAt: removedAt.toISOString() });
+    expect(result.directoryPrincipal).toMatchObject({ revision: 2, status: "revoked", updatedAt: removedAt.toISOString() });
+    const request = storeEncryptedRecords.mock.calls[0][0];
+    expect(request.records.map(({ recordType }: { recordType: string }) => recordType)).toEqual(["payee", "principal"]);
+    expect(decryptVaultRecord(request.records[0].envelope, principal)).toMatchObject({ status: "inactive", revision: 2 });
+    expect(decryptVaultRecord(request.records[1].envelope, principal)).toMatchObject({ status: "revoked", revision: 2 });
+    expect(JSON.stringify(request.records)).not.toContain("Maya");
   });
 
   it("decrypts only authenticated payee envelopes and binds storage identity", async () => {

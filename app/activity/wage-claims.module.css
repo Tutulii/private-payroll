@@ -1,0 +1,27 @@
+.wageCard { background: #f8f5ee; border-color: #d3c8b4; box-shadow: 0 5px 20px #6453350a; }
+.wageCard :global(.wage-vnext-heading) { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 14px; margin-bottom: 12px; }
+.wageCard :global(.wage-vnext-heading) h3 { margin-right: 0; line-height: 1.25; }
+.wageCard :global(.wage-vnext-section) { display: grid; gap: 16px; margin-top: 24px; padding-top: 20px; border-top: 1px solid #ded7c9; }
+.wageCard :global(.wage-vnext-section__title) { display: flex; align-items: flex-start; gap: 10px; color: #85602e; }
+.wageCard :global(.wage-vnext-section__title) span { display: grid; gap: 5px; }
+.wageCard :global(.wage-vnext-section__title) small { font-size: 11px; font-weight: 700; letter-spacing: .08em; }
+.wageCard :global(.wage-vnext-section__title) strong { color: #3c4350; font-size: 15px; font-weight: 700; line-height: 1.4; }
+.wageCard :global(.wage-vnext-section) > p { margin: 0; color: #6c6b67; font-size: 13px; line-height: 1.65; }
+.wageCard :global(.wage-vnext-empty) { padding: 16px; border: 1px dashed #d9d0be; border-radius: 10px; background: #fffdf8; }
+.wageCard :global(.wage-vnext-item) { display: grid; gap: 15px; padding: 17px; background: #fffdf8; border: 1px solid #ded7c9; border-radius: 13px; }
+.wageCard :global(.wage-vnext-item) > div:first-child { display: grid; gap: 6px; }
+.wageCard :global(.wage-vnext-item) > div:first-child > small { color: #826339; font-size: 12px; font-weight: 650; }
+.wageCard :global(.wage-vnext-item) > div:first-child > strong { color: #384051; font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }
+.wageCard :global(.wage-vnext-item) > div:first-child > span { color: #626b76; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.wageCard :global(.wage-vnext-item) > i { display: flex; align-items: center; gap: 7px; color: #42694f; font-size: 12px; font-weight: 650; font-style: normal; }
+.wageCard :global(.wage-vnext-actions) { display: flex; flex-wrap: wrap; gap: 8px; }
+.wageCard :global(.wage-vnext-actions) > button, .wageCard :global(.wage-vnext-item) > button { display: inline-flex; justify-content: center; align-items: center; gap: 7px; padding: 11px 13px; min-height: 44px; color: #705526; background: #faf3e5; border: 1px solid #d9c8a7; border-radius: 9px; font: 650 12px/1.5 Inter, system-ui, sans-serif; cursor: pointer; }
+.wageCard :global(.wage-vnext-actions) > button:hover:not(:disabled), .wageCard :global(.wage-vnext-item) > button:hover:not(:disabled) { background: #f2e7d1; }
+.wageCard :global(.wage-vnext-actions) > button:disabled, .wageCard :global(.wage-vnext-item) > button:disabled { opacity: .55; cursor: not-allowed; }
+.wageCard button:focus-visible { outline: 3px solid #80bfff; outline-offset: 3px; }
+.wageCard :global(.wage-vnext-item):has([data-report-result]) { padding: 0; background: transparent; border: 0; }
+.wageCard :global(.wage-vnext-item):has([data-report-result]) > div:first-child { padding-inline: 4px; }
+.wageCard :global(.private-exception-feedback) { margin-block: 0; font-size: 12px; }
+@media (max-width: 600px) {
+  .wageCard :global(.wage-vnext-actions) > button { flex: 1 1 200px; }
+}
