@@ -43,6 +43,7 @@ import {
   preparePayrollObligationRoot,
   recoverSealedProvenPayroll,
   resumePendingPayrollApproval,
+  resumeProvenPayrollAuthorization,
   resumePendingPayrollSubmission,
   type PayrollExecutionStage,
   type PayrollExecutionResult,
@@ -95,7 +96,7 @@ import {
 import { isAgreementDue } from "@/lib/domain/obligations";
 import type { ObligationSnapshotPlanSummary } from "@/lib/domain/obligation-snapshot-plan";
 import type { AgentExecutionReceipt } from "@/lib/domain/agent-execution";
-import type { DirectPrivacyActivationEstimate } from "@/lib/client/payo-client";
+import { PayoApiError, type DirectPrivacyActivationEstimate } from "@/lib/client/payo-client";
 import {
   assertExternalAttestationUsable,
   openExternalAttestationProofPackage,
@@ -1679,6 +1680,20 @@ export default function PayrollPage() {
         principal: vault.session.principal,
         persistPendingSubmission,
         onStage: setPayrollStage,
+      }).catch(async (error: unknown) => {
+        if (!(error instanceof PayoApiError) || error.code !== "SEALED_SUBMISSION_NOT_FOUND") throw error;
+        if (!starknet.isConnected || !starknet.isMainnet) {
+          throw new Error("Connect Ready on Starknet Mainnet to resume this saved payroll.");
+        }
+        const bookSealAddress = process.env.NEXT_PUBLIC_PAYO_VESTING_BOOK_SEAL_ADDRESS?.trim();
+        if (!bookSealAddress) throw new Error("The payroll-book seal is not configured.");
+        return resumeProvenPayrollAuthorization({
+          client: vault.client!, organizationId: vault.session!.organizationId,
+          runId: run.id, principal: vault.session!.principal,
+          chainId: starknet.chainId, bookSealAddress,
+          submitPayroll: starknet.runProofBoundPayroll,
+          persistPendingSubmission, onStage: setPayrollStage,
+        });
       });
       setPayrollReceipt(result);
       setProofDeliveryNotice(result.proofDeliveryWarning ?? "");
@@ -2525,9 +2540,9 @@ export default function PayrollPage() {
         <div className="runs-card">
           <div className="table-head"><span>Payroll</span><span>Recipients</span><span>Status</span><span>Total</span><span /></div>
           {visibleRuns.map((run, index) => (
-            <button type="button" className="run-row" key={run.id} disabled={recoveringRunId === run.id} onClick={() => run.state === "proven" && !run.transactionHash ? void recoverSealedRun(run) : notify(`Run ${run.cycleId} · ${runStateLabel(run.state)}`)}>
+            <button type="button" className="run-row" key={run.id} disabled={Boolean(recoveringRunId) || busy} onClick={() => run.state === "proven" && !run.transactionHash ? void recoverSealedRun(run) : notify(`Run ${run.cycleId} · ${runStateLabel(run.state)}`)}>
               <span className={`run-mark run-mark--${["coral", "blue", "green", "yellow"][index % 4]}`}>{run.cycleId.slice(0, 3).toUpperCase()}</span>
-              <span className="run-name"><strong>{run.cycleId}</strong><small>{run.state === "proven" && !run.transactionHash ? "Tap to recover its canonical sealed transaction" : `Due ${runDate(run.dueAt)} · updated ${runDate(run.updatedAt)}`}</small></span>
+              <span className="run-name"><strong>{run.cycleId}</strong><small>{run.state === "proven" && !run.transactionHash ? "Resume saved payroll · reuse its existing proofs" : `Due ${runDate(run.dueAt)} · updated ${runDate(run.updatedAt)}`}</small></span>
               <span className="run-recipients">{run.recipientCount} encrypted {run.recipientCount === 1 ? "recipient" : "recipients"}</span>
               <span className={`run-status run-status--${runCategory(run.state).toLowerCase().replace("attention", "draft")}`}><i />{runStateLabel(run.state)}</span>
               <strong className="run-amount">{formatTokenAmount(run.totals.STRK, "STRK")} STRK · {formatTokenAmount(run.totals.USDC, "USDC")} USDC</strong>

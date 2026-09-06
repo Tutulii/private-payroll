@@ -142,7 +142,28 @@ function assertPayrollBundle(
   }
 }
 
-function publicJob(job: typeof vestingAuthorizationJobs.$inferSelect, replayed = false) {
+const publicJobColumns = {
+  id: vestingAuthorizationJobs.id,
+  organizationId: vestingAuthorizationJobs.organizationId,
+  runId: vestingAuthorizationJobs.runId,
+  payrollProofBundleId: vestingAuthorizationJobs.payrollProofBundleId,
+  state: vestingAuthorizationJobs.state,
+  activeStep: vestingAuthorizationJobs.activeStep,
+  transactionHash: vestingAuthorizationJobs.transactionHash,
+  beginTransactionHash: vestingAuthorizationJobs.beginTransactionHash,
+  payrollShard0TransactionHash: vestingAuthorizationJobs.payrollShard0TransactionHash,
+  payrollShard1TransactionHash: vestingAuthorizationJobs.payrollShard1TransactionHash,
+  transitionShard0TransactionHash: vestingAuthorizationJobs.transitionShard0TransactionHash,
+  transitionShard1TransactionHash: vestingAuthorizationJobs.transitionShard1TransactionHash,
+  attempts: vestingAuthorizationJobs.attempts,
+  lastErrorCode: vestingAuthorizationJobs.lastErrorCode,
+  lastErrorMessage: vestingAuthorizationJobs.lastErrorMessage,
+  authorizedAt: vestingAuthorizationJobs.authorizedAt,
+  createdAt: vestingAuthorizationJobs.createdAt,
+  updatedAt: vestingAuthorizationJobs.updatedAt,
+};
+
+function publicJob(job: Pick<typeof vestingAuthorizationJobs.$inferSelect, keyof typeof publicJobColumns>, replayed = false) {
   return {
     id: job.id,
     organizationId: job.organizationId,
@@ -207,7 +228,7 @@ export async function enqueueVestingAuthorization(input: {
       || payrollBundle.runId !== run.id
       || payrollBundle.proofType !== "payroll_integrity"
       || payrollBundle.subjectRecordId !== run.id
-      || payrollBundle.verificationState !== "locally_verified") {
+      || !["locally_verified", "onchain_verified"].includes(payrollBundle.verificationState)) {
       throw new ApiError(404, "The Advanced v2 proof bundle does not belong to this run.", "PAYROLL_PROOF_BUNDLE_INVALID");
     }
     const payrollMetadata = payrollIntegrityBundleMetadataSchema.parse(payrollBundle.proofPackage);
@@ -255,10 +276,6 @@ export async function enqueueVestingAuthorization(input: {
         throw new ApiError(409, "The payroll-book owner differs from the protected payday owner.", "VESTING_BOOK_OWNER_MISMATCH");
       }
     }
-    const nowSeconds = BigInt(Math.floor(Date.now() / 1_000));
-    if (BigInt(payrollMetadata.commonInputs.validityExpiry) <= nowSeconds + 120n) {
-      throw new ApiError(409, "The linked proofs have too little validity remaining.", "VESTING_PROOF_EXPIRED");
-    }
     const [existing] = await transaction.select().from(vestingAuthorizationJobs)
       .where(eq(vestingAuthorizationJobs.runId, run.id)).limit(1).for("update");
     if (existing) {
@@ -272,6 +289,13 @@ export async function enqueueVestingAuthorization(input: {
         throw new ApiError(409, "This run already has a different state/book authorization.", "VESTING_AUTHORIZATION_CONFLICT");
       }
       return publicJob(existing, true);
+    }
+    const nowSeconds = BigInt(Math.floor(Date.now() / 1_000));
+    if (BigInt(payrollMetadata.commonInputs.validityExpiry) <= nowSeconds + 120n) {
+      throw new ApiError(409, "The linked proofs have too little validity remaining.", "VESTING_PROOF_EXPIRED");
+    }
+    if (payrollBundle.verificationState !== "locally_verified") {
+      throw new ApiError(409, "The verified proof has no matching authorization.", "PAYROLL_PROOF_BUNDLE_INVALID");
     }
     const id = generateUuidV7();
     const [job] = await transaction.insert(vestingAuthorizationJobs).values({
@@ -472,11 +496,11 @@ export async function advanceVestingAuthorizationJob(
 
 export async function deferVestingAuthorizationJob(
   job: LeasedVestingAuthorizationJob,
-  input: { errorCode: string; errorMessage: string; clearTransaction?: boolean; permanent?: boolean },
+  input: { errorCode: string; errorMessage: string; clearTransaction?: boolean; permanent?: boolean; waitingForFunding?: boolean },
   now = new Date(),
 ) {
-  const attempts = job.attempts + 1;
-  const dead = input.permanent === true || attempts >= MAX_ATTEMPTS;
+  const attempts = job.attempts + (input.waitingForFunding ? 0 : 1);
+  const dead = input.permanent === true || (!input.waitingForFunding && attempts >= MAX_ATTEMPTS);
   const database = getDatabase();
   return database.transaction(async (transaction) => {
     await assertLease(transaction, job);
@@ -484,7 +508,7 @@ export async function deferVestingAuthorizationJob(
       state: dead ? "dead" : "pending",
       ...(input.clearTransaction ? { transactionHash: null } : {}),
       attempts,
-      availableAt: new Date(now.getTime() + retryDelayMs(attempts)),
+      availableAt: new Date(now.getTime() + (input.waitingForFunding ? 60_000 : retryDelayMs(attempts))),
       leaseOwner: null,
       leaseExpiresAt: null,
       lastErrorCode: dead && !input.permanent ? "VESTING_AUTHORIZATION_TIMEOUT" : input.errorCode,
@@ -544,7 +568,7 @@ export async function getVestingAuthorizationJob(
   principal: AuthenticatedPrincipal,
 ) {
   const database = getDatabase();
-  const [job] = await database.select().from(vestingAuthorizationJobs)
+  const [job] = await database.select(publicJobColumns).from(vestingAuthorizationJobs)
     .where(eq(vestingAuthorizationJobs.runId, runId)).limit(1);
   if (!job) throw new ApiError(404, "State/book authorization job not found.", "VESTING_AUTHORIZATION_NOT_FOUND");
   await requireOrganizationRole(job.organizationId, principal, ["admin", "operator", "reviewer"]);

@@ -6,6 +6,7 @@ import { processPayrollAuthorizationBatch } from "@/lib/server/payroll-authoriza
 import { processProofVerificationBatch } from "@/lib/server/proof-relayer";
 import { processVestingAuthorizationBatch } from "@/lib/server/vesting-authorization-relayer";
 import { withStarknetRelayerSubmissionLock } from "@/lib/persistence/relayer-lock";
+import { submitFundedProofCall } from "@/lib/server/proof-relayer-funding";
 
 export const runtime = "nodejs";
 
@@ -66,8 +67,7 @@ export async function POST(request: Request) {
           // PAYO relays large deterministic verifier payloads. Do not depend on
           // Starknet.js tip sampling: sparse recent V3 blocks can make that
           // heuristic fail before the RPC receives an otherwise valid invoke.
-          const response = await account.execute(call, { tip: 0 });
-          return { transactionHash: response.transaction_hash };
+          return submitFundedProofCall({ provider, account, call });
         }),
     };
     const workerId = request.headers.get("x-payo-worker-id") || "payo-proof-relayer";

@@ -31,6 +31,7 @@ import {
   recoverConfirmedPayrollVerification,
   recoverSealedProvenPayroll,
   resumePendingPayrollApproval,
+  resumeProvenPayrollAuthorization,
   resumePendingPayrollSubmission,
   type PendingPayrollSubmission,
 } from "./payroll-execution";
@@ -232,6 +233,7 @@ function client(ready = true) {
     updatedAt: now.toISOString(),
   });
   return {
+    getProofRelayerReadiness: vi.fn().mockResolvedValue({ readiness: { ready: true, code: "PROOF_RELAYER_READY", message: "Ready" } }),
     getFxSnapshots: vi.fn().mockImplementation((tokens: Array<"STRK" | "USDC">) =>
       Promise.resolve({ blockNumber: 1, snapshots: tokens.map((token) => snapshot(token)) })),
     getProtectedFxSnapshots: vi.fn(),
@@ -816,6 +818,69 @@ describe("proof-bound payroll browser orchestration", () => {
     })).resolves.toMatchObject({ settlementId: result.settlementId, verificationQueued: true });
     expect(persistence).toHaveBeenLastCalledWith(null);
   });
+
+  it("stops before proving when the relayer lacks its gas reserve", async () => {
+    const mockClient = client();
+    const input = await snapshotExecutionInput(mockClient);
+    mockClient.getProofRelayerReadiness.mockResolvedValue({ readiness: {
+      ready: false, code: "PROOF_RELAYER_FUNDING_REQUIRED", message: "Proof service needs gas funding",
+    } });
+    await expect(executeProofBoundPayroll(input)).rejects.toMatchObject({ code: "PROOF_RELAYER_FUNDING_REQUIRED" });
+    expect(input.prove).not.toHaveBeenCalled();
+    expect(input.submitPayroll).not.toHaveBeenCalled();
+    expect(mockClient.createSettlementIntent).not.toHaveBeenCalled();
+  });
+
+  it.each(["resume", "changed_root", "expired", "funding"] as const)(
+    "recovers authorization before a wallet intent exists: %s", async (scenario) => {
+      const mockClient = client();
+      const input = await snapshotExecutionInput(mockClient);
+      const vestingBook = {
+        ownerAddress: input.snapshotPlan.snapshot.ownerAddress, bookSealAddress: sealAddress,
+        entryKind: "ordinary" as const,
+      };
+      mockClient.enqueueVestingAuthorization.mockRejectedValueOnce(new PayoApiError("paused", "PAUSED", 409));
+      await expect(executeProofBoundPayroll({ ...input, vestingBook })).rejects.toThrow("paused");
+      const persistedRun = mockClient.createPayrollRun.mock.calls[0][0];
+      const storedProof = mockClient.storeEncryptedProofBundle.mock.calls[0][0];
+      expect(mockClient.createSettlementIntent).not.toHaveBeenCalled();
+      mockClient.getPayrollRun.mockResolvedValue({ run: {
+        ...persistedRun, state: "proven", transactionHash: null,
+        ...(scenario === "changed_root" ? { manifestRoot: `0x${"12".repeat(32)}` } : {}),
+      } });
+      mockClient.getEncryptedProofBundle.mockResolvedValue(storedProofResponse(storedProof));
+      const { authorization } = await mockClient.getVestingAuthorization(persistedRun.id);
+      mockClient.getVestingAuthorization.mockResolvedValue({ authorization: {
+        ...authorization, payrollProofBundleId: storedProof.id,
+        ...(scenario === "funding" ? { state: "pending", lastErrorCode: "PROOF_RELAYER_FUNDING_REQUIRED" } : {}),
+      } });
+      mockClient.createSettlementIntent.mockImplementation(async (intent) => {
+        mockClient.getSettlement.mockResolvedValue({ settlement: {
+          ...intent, state: "approval_pending", transactionHash: null,
+        } });
+        return { settlement: { id: intent.id } };
+      });
+      const result = resumeProvenPayrollAuthorization({
+        client: mockClient as unknown as PayoClient, organizationId, runId: persistedRun.id,
+        principal, chainId, bookSealAddress: sealAddress, submitPayroll: input.submitPayroll,
+        persistPendingSubmission: input.persistPendingSubmission,
+        now: scenario === "expired" ? () => new Date("2026-08-25T12:00:00Z") : input.now,
+      });
+      if (scenario === "resume") {
+        await expect(result).resolves.toMatchObject({ transactionHash: "0xfeed", runId: persistedRun.id });
+        expect(input.submitPayroll).toHaveBeenCalledTimes(1);
+        expect(mockClient.createSettlementIntent).toHaveBeenCalledTimes(2);
+        expect(mockClient.createSettlementIntent.mock.calls[1]).toEqual(mockClient.createSettlementIntent.mock.calls[0]);
+      } else {
+        await expect(result).rejects.toThrow(scenario === "changed_root" ? "commitments"
+          : scenario === "expired" ? "expired" : "gas funding");
+        expect(input.submitPayroll).not.toHaveBeenCalled();
+        expect(mockClient.createSettlementIntent).not.toHaveBeenCalled();
+      }
+      expect(input.prove).toHaveBeenCalledTimes(1);
+      expect(mockClient.storeEncryptedProofBundle).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("reopens Ready from the exact stored v3 proof after the first wallet call never opened", async () => {
     const mockClient = client();

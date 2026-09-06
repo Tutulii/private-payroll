@@ -19,6 +19,7 @@ import {
 } from "@/lib/starknet/payo-vesting-book";
 import { observeStarknetTransaction, type ConfirmationRpc } from "./confirmation-worker";
 import type { PayoVestingBookConfig } from "./payo-deployment";
+import { ProofRelayerFundingError } from "./proof-relayer-funding";
 
 export type VestingAuthorizationRpc = ConfirmationRpc & {
   callContract: (call: Call, blockIdentifier?: number) => Promise<unknown>;
@@ -295,8 +296,10 @@ async function processLeasedJob(input: {
     return "submitted";
   } catch (error) {
     const result = await dependencies.defer(job, {
-      errorCode: "VESTING_AUTHORIZATION_SUBMISSION_FAILED",
+      errorCode: error instanceof ProofRelayerFundingError
+        ? error.code : "VESTING_AUTHORIZATION_SUBMISSION_FAILED",
       errorMessage: errorText(error),
+      ...(error instanceof ProofRelayerFundingError ? { waitingForFunding: true } : {}),
       clearTransaction: true,
     }, now);
     return result.state;

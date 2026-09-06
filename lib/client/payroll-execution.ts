@@ -666,6 +666,12 @@ async function stageAutonomousPayrollRun(input: {
   };
 }
 
+function retryableAuthorizationRead(error: unknown): boolean {
+  return error instanceof PayoApiError
+    ? error.status === 408 || error.status === 429 || error.status >= 500
+    : error instanceof TypeError;
+}
+
 export async function waitForPayrollAuthorization(input: {
   client: Pick<PayoClient, "getPayrollAuthorization">;
   runId: string;
@@ -684,7 +690,13 @@ export async function waitForPayrollAuthorization(input: {
   const deadline = Date.now() + timeoutMs;
   let authorization = input.initial;
   while (Date.now() < deadline) {
-    authorization ??= (await input.client.getPayrollAuthorization(input.runId)).authorization;
+    try {
+      authorization ??= (await input.client.getPayrollAuthorization(input.runId)).authorization;
+    } catch (error) {
+      if (!retryableAuthorizationRead(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(3_000, Math.max(0, deadline - Date.now()))));
+      continue;
+    }
     if (authorization.runId !== input.runId) {
       throw new Error("PAYO returned an authorization for another payroll run.");
     }
@@ -701,11 +713,17 @@ export async function waitForPayrollAuthorization(input: {
           : "Payroll proof authorization failed permanently.",
       );
     }
-    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-    authorization = (await input.client.getPayrollAuthorization(input.runId)).authorization;
+    if (authorization.lastErrorCode === "PROOF_RELAYER_FUNDING_REQUIRED") {
+      throw new PayoApiError(
+        "PAYO's proof service needs gas funding. Your proofs are saved; use Resume saved payroll after the service is funded.",
+        "PROOF_RELAYER_FUNDING_REQUIRED", 409,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollIntervalMs, Math.max(0, deadline - Date.now()))));
+    authorization = undefined;
   }
   throw new Error(
-    "PAYO did not finish proof-first payroll authorization within 30 minutes. No Ready payment was requested; resume this authorization safely.",
+    "Payroll authorization is still pending. Your proofs are saved; resume this payroll from its saved run.",
   );
 }
 
@@ -727,7 +745,13 @@ export async function waitForVestingAuthorization(input: {
   const deadline = Date.now() + timeoutMs;
   let authorization = input.initial;
   while (Date.now() < deadline) {
-    authorization ??= (await input.client.getVestingAuthorization(input.runId)).authorization;
+    try {
+      authorization ??= (await input.client.getVestingAuthorization(input.runId)).authorization;
+    } catch (error) {
+      if (!retryableAuthorizationRead(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(3_000, Math.max(0, deadline - Date.now()))));
+      continue;
+    }
     if (authorization.runId !== input.runId) {
       throw new Error("PAYO returned a state/book authorization for another payroll run.");
     }
@@ -744,11 +768,17 @@ export async function waitForVestingAuthorization(input: {
           : "State/book proof authorization failed permanently.",
       );
     }
-    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-    authorization = (await input.client.getVestingAuthorization(input.runId)).authorization;
+    if (authorization.lastErrorCode === "PROOF_RELAYER_FUNDING_REQUIRED") {
+      throw new PayoApiError(
+        "PAYO's proof service needs gas funding. Your proofs are saved; use Resume saved payroll after the service is funded.",
+        "PROOF_RELAYER_FUNDING_REQUIRED", 409,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollIntervalMs, Math.max(0, deadline - Date.now()))));
+    authorization = undefined;
   }
   throw new Error(
-    "PAYO did not finish state/book proof authorization within 30 minutes. No Ready payment was requested; resume this authorization safely.",
+    "Payroll authorization is still pending. Your proofs are saved; use Resume saved payroll to continue.",
   );
 }
 
@@ -770,7 +800,7 @@ async function authorizePayrollBookProof(input: {
     || stateProof.verificationKeySha256 !== VESTING_TRANSITION_VERIFICATION_KEY_SHA256) {
     throw new Error("The state/book proof is not bound to the pinned PAYO v3 circuit and verification key.");
   }
-  const queued = await input.client.enqueueVestingAuthorization({
+  const queued = await retryDurableWrite(() => input.client.enqueueVestingAuthorization({
     runId: input.runId,
     request: {
       payrollProofBundleId: input.proofBundleId,
@@ -797,7 +827,7 @@ async function authorizePayrollBookProof(input: {
         })) as typeof stateProof.shards,
       },
     },
-  });
+  }));
   await waitForVestingAuthorization({
     client: input.client,
     runId: input.runId,
@@ -1035,6 +1065,115 @@ export async function resumePendingPayrollApproval(input: {
     persistPendingSubmission: input.persistPendingSubmission,
     onStage: input.onStage,
   });
+}
+
+/** Resume a durable authorization before a Ready approval intent ever existed. */
+export async function resumeProvenPayrollAuthorization(input: {
+  client: PayoClient;
+  organizationId: string;
+  runId: string;
+  principal: VaultPrincipalKeyPair;
+  chainId: string;
+  bookSealAddress: string;
+  submitPayroll: Parameters<typeof resumePendingPayrollApproval>[0]["submitPayroll"];
+  persistPendingSubmission?: (submission: PendingPayrollSubmission | null) => void;
+  onStage?: (stage: PayrollExecutionStage) => void;
+  now?: () => Date;
+}): Promise<PayrollExecutionResult> {
+  input.onStage?.("proof_authorization");
+  const [{ run }, { authorization }] = await Promise.all([
+    input.client.getPayrollRun(input.runId),
+    input.client.getVestingAuthorization(input.runId),
+  ]);
+  if (run.id !== input.runId || run.organizationId !== input.organizationId
+    || run.state !== "proven" || run.transactionHash
+    || authorization.runId !== run.id || authorization.organizationId !== run.organizationId
+    || run.envelope.aad.recordId !== run.id
+    || run.envelope.aad.organizationId !== run.organizationId
+    || run.envelope.aad.recordType !== "payroll-run") {
+    throw new Error("The saved authorization does not match an unpaid payroll in this workspace.");
+  }
+  const recovered = await openStoredPayrollBookProof({
+    ...input,
+    proofBundleId: authorization.payrollProofBundleId,
+    expectedEntryKinds: ["ordinary", "vesting"],
+  });
+  const payload = resumablePayrollPayloadSchema.parse(decryptVaultRecord(run.envelope, input.principal));
+  const buildInput = payload.claimProofSource.buildInput as SerializedPayrollIntegrityBuildRequest;
+  const rebuilt = await buildPayrollIntegrityInputsFromSerialized(buildInput);
+  const proofInputs = recovered.payrollProof.shards[0].publicInputs;
+  for (const key of ["agreementRoot", "manifestRoot", "policyRoot", "fxRoot", "runNullifier"] as const) {
+    if (!sameField(run[key], rebuilt[key]) || !sameField(payload[key], rebuilt[key])
+      || !sameField(rootFromLimbs(proofInputs[`${key}High`], proofInputs[`${key}Low`]), rebuilt[key])) {
+      throw new Error("The saved authorization differs from the encrypted payroll commitments.");
+    }
+  }
+  rebuilt.witness.circuitInputs = [{}, {}];
+  if (BigInt(buildInput.chainId) !== BigInt(input.chainId)
+    || BigInt(buildInput.sealAddress) !== BigInt(proofInputs.sealAddress)
+    || BigInt(buildInput.validityStart) !== BigInt(proofInputs.validityStart)
+    || BigInt(buildInput.validityExpiry) !== BigInt(proofInputs.validityExpiry)) {
+    throw new Error("The saved payroll has different chain or proof-window bindings.");
+  }
+  if (BigInt(proofInputs.validityExpiry) <= BigInt(Math.floor((input.now?.() ?? new Date()).getTime() / 1_000)) + 60n) {
+    throw new Error("This saved proof has expired. No payment was requested; a fresh protected payroll is required.");
+  }
+  // Validate the complete callback before creating any approval intent.
+  buildVestingBookAction({
+    sealAddress: input.bookSealAddress,
+    chainId: input.chainId,
+    payrollShards: recovered.payrollProof.shards,
+    vestingBook: recovered.vestingBook,
+  });
+  await waitForVestingAuthorization({ client: input.client, runId: run.id, initial: authorization });
+
+  const tokenTotals = { STRK: 0n, USDC: 0n };
+  for (const line of buildInput.lines) {
+    const net = line.earningsAtomic.reduce((sum, value) => sum + BigInt(value), 0n)
+      - line.deductionsAtomic.reduce((sum, value) => sum + BigInt(value), 0n);
+    if (net <= 0n) throw new Error("The saved payroll contains a non-positive payment.");
+    tokenTotals[line.token] += net;
+  }
+  const settlementId = generateUuidV7();
+  const walletRequestId = generateUuidV7();
+  const idempotencyKey = `payroll:${run.id}:${walletRequestId}`;
+  const tokenTotalsCommitment = commitTokenTotals({
+    organizationId: run.organizationId, runId: run.id,
+    totals: { STRK: tokenTotals.STRK.toString(), USDC: tokenTotals.USDC.toString() },
+  });
+  const createdAt = new Date().toISOString();
+  const record = settlementRecordSchema.parse({
+    schemaVersion: 1, id: settlementId, organizationId: run.organizationId, revision: 1,
+    createdAt, updatedAt: createdAt, runId: run.id, walletRequestId, idempotencyKey,
+    tokenTotals: { STRK: tokenTotals.STRK.toString(), USDC: tokenTotals.USDC.toString() },
+    tokenTotalsCommitment, state: "approval_pending", noteEvidenceState: "unavailable",
+  });
+  const settlementEnvelope = encryptVaultRecord(record, {
+    schemaVersion: 1, organizationId: run.organizationId, recordType: "settlement",
+    recordId: settlementId, revision: 1,
+  }, [input.principal]);
+  const pending: PendingPayrollSubmission = {
+    version: 5, organizationId: run.organizationId, runId: run.id,
+    proofBundleId: recovered.proofBundle.id, settlementId, walletRequestId, idempotencyKey,
+    tokenTotalsCommitment, settlementEnvelope, createdAt, authorizationMode: "vesting_book_v3",
+    proofShards: recovered.payrollProof.shards.map((shard) => shard.proofCalldata) as [string[], string[]],
+  };
+  input.onStage?.("recording");
+  try {
+    const response = await retryDurableWrite(() => input.client.createSettlementIntent({
+      id: settlementId, organizationId: run.organizationId, runId: run.id,
+      workflowType: "payroll", subjectRecordId: run.id, walletRequestId, idempotencyKey,
+      tokenTotalsCommitment, envelope: settlementEnvelope,
+    }));
+    if (returnedId(response.settlement, "settlement") !== settlementId) {
+      throw new Error("PAYO returned a different settlement for the saved payroll.");
+    }
+  } catch (error) {
+    if (retryableAuthorizationRead(error)) input.persistPendingSubmission?.(pending);
+    throw error;
+  }
+  input.persistPendingSubmission?.(pending);
+  return resumePendingPayrollApproval({ ...input, pending });
 }
 
 const sealedRecoveryProofSchema = z.object({
@@ -1583,6 +1722,13 @@ export async function executeProofBoundPayroll(
     },
     [input.principal],
   );
+  // Refuse expensive proof generation while the service lacks its operating
+  // gas reserve. Every later submission also checks its exact live fee bounds.
+  if (input.vestingBook || input.proveSnapshot) {
+    input.onStage?.("preflight");
+    const { readiness } = await input.client.getProofRelayerReadiness();
+    if (!readiness.ready) throw new PayoApiError(readiness.message, readiness.code, 409);
+  }
   const proof = await (input.prove ?? proveEncryptedPayroll)({
     encryptedWitness,
     principal: input.principal,

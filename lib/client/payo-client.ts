@@ -1590,6 +1590,12 @@ export class PayoClient {
     );
   }
 
+  async getProofRelayerReadiness() {
+    return this.request<{ readiness: { ready: boolean; code: string; message: string } }>(
+      "/api/v1/proof-relayer-readiness",
+    );
+  }
+
   async getVestingAuthorization(runId: string) {
     return this.request<{ authorization: VestingAuthorizationStatus }>(
       `/api/v1/runs/${encodeURIComponent(runId)}/vesting-authorization`,

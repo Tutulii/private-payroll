@@ -26,6 +26,8 @@ import { listPayrollBookReportSources } from "./payroll-book-report-repository";
 import {
   advanceVestingAuthorizationJob,
   completeVestingAuthorizationJob,
+  deferVestingAuthorizationJob,
+  getVestingAuthorizationJob,
   enqueueVestingAuthorization,
   leaseVestingAuthorizationJobs,
   recordVestingAuthorizationSubmission,
@@ -349,8 +351,18 @@ export function registerVestingAuthorizationRepositoryIntegrationTests(): void {
     );
     expect(job).toMatchObject({ activeStep: "begin", transactionHash: null });
 
-    const steps: VestingAuthorizationStep[] = ["begin", "payroll0", "payroll1", "transition0", "transition1"];
     let stepTime = new Date(startedAt.getTime() + 120_001);
+    await deferVestingAuthorizationJob(job, {
+      errorCode: "PROOF_RELAYER_FUNDING_REQUIRED", errorMessage: "Gas funding required", waitingForFunding: true,
+    }, stepTime);
+    expect(await getVestingAuthorizationJob(value.runId, principal)).toMatchObject({
+      state: "pending", attempts: 0, lastErrorCode: "PROOF_RELAYER_FUNDING_REQUIRED",
+    });
+    await expect(leaseVestingAuthorizationJobs("funding-wait", 1, new Date(stepTime.getTime() + 59_999)))
+      .resolves.toEqual([]);
+    stepTime = new Date(stepTime.getTime() + 60_001);
+    [job] = await leaseVestingAuthorizationJobs("funding-resume", 1, stepTime);
+    const steps: VestingAuthorizationStep[] = ["begin", "payroll0", "payroll1", "transition0", "transition1"];
     for (let index = 0; index < steps.length; index += 1) {
       const current = steps[index];
       await recordVestingAuthorizationSubmission(job, current, `0x${(100 + index).toString(16)}`, stepTime);
@@ -364,6 +376,13 @@ export function registerVestingAuthorizationRepositoryIntegrationTests(): void {
       }
     }
     await completeVestingAuthorizationJob(job, stepTime);
+    await expect(enqueueVestingAuthorization({
+      runId: value.runId, request: value.request, principal,
+      chainId: value.commonInputs.chainId, sealAddress: value.commonInputs.sealAddress,
+    })).resolves.toMatchObject({ state: "complete", replayed: true, transactionHash: "0x68" });
+    const publicStatus = await getVestingAuthorizationJob(value.runId, principal);
+    expect(publicStatus).not.toHaveProperty("transitionMetadata");
+    expect(publicStatus).not.toHaveProperty("payrollShard0Calldata");
 
     expect((await getDatabase().select().from(vestingAuthorizationJobs))[0]).toMatchObject({
       state: "complete",

@@ -1,3 +1,4 @@
+import { ProofRelayerFundingError } from "./proof-relayer-funding";
 import { describe, expect, it, vi } from "vitest";
 import {
   hiddenPayrollBookTotals,
@@ -262,6 +263,19 @@ describe("PAYO state/book authorization relayer", () => {
     expect(callContract).toHaveBeenCalledWith(expect.objectContaining({
       entrypoint: "get_pending_authorization",
     }), 321);
+  });
+
+  it("retains a resumable job when the relayer needs funding", async () => {
+    const job = leasedJob();
+    const { deps, defer, recordSubmission } = dependencies(job, chainState(job));
+    const submit = vi.fn().mockRejectedValue(new ProofRelayerFundingError());
+    await processVestingAuthorizationBatch({
+      rpc: rpc(), submitter: { submit }, deployment, workerId: "worker-1", now, dependencies: deps,
+    });
+    expect(defer).toHaveBeenCalledWith(job, expect.objectContaining({
+      errorCode: "PROOF_RELAYER_FUNDING_REQUIRED", waitingForFunding: true,
+    }), now);
+    expect(recordSubmission).not.toHaveBeenCalled();
   });
 
   it("submits the compact begin call before proof calldata", async () => {
