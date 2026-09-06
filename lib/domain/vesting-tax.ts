@@ -11,6 +11,11 @@ import {
 } from "@/lib/crypto/encoding";
 import { atomicAmountSchema, payrollTokenSchema } from "./payroll";
 import { commitmentSchema, starknetAddressSchema } from "./records";
+import {
+  UNIVERSAL_PAYROLL_BOOK_ENTRY_VERSION,
+  universalPayrollBookEntryCommitment,
+  universalPayrollBookEntrySchema,
+} from "./universal-payroll-book";
 
 const u32Schema = z.number().int().nonnegative().max(0xffff_ffff);
 const unixSecondsSchema = z
@@ -64,7 +69,7 @@ export const vestingTransitionSchema = z.object({
 }).strict();
 export type VestingTransition = z.infer<typeof vestingTransitionSchema>;
 
-export const payrollBookEntrySchema = z.object({
+const legacyPayrollBookEntrySchema = z.object({
   entryVersion: z.literal("payo-payroll-book-entry-v1"),
   chainId: starknetAddressSchema,
   sealAddress: starknetAddressSchema,
@@ -91,6 +96,12 @@ export const payrollBookEntrySchema = z.object({
     });
   }
 });
+
+/** Reads both historical v1 leaves and the proof-bound universal v2 leaves used on Mainnet. */
+export const payrollBookEntrySchema = z.union([
+  universalPayrollBookEntrySchema,
+  legacyPayrollBookEntrySchema,
+]);
 export type PayrollBookEntry = z.infer<typeof payrollBookEntrySchema>;
 
 export const payrollBookCheckpointSchema = z.object({
@@ -287,6 +298,9 @@ export function assertVestingTransition(input: VestingTransition): {
 
 export function payrollBookEntryCommitment(input: PayrollBookEntry): `0x${string}` {
   const entry = payrollBookEntrySchema.parse(input);
+  if (entry.entryVersion === UNIVERSAL_PAYROLL_BOOK_ENTRY_VERSION) {
+    return universalPayrollBookEntryCommitment(entry);
+  }
   return hashFixed(
     "PAYO_PAYROLL_BOOK_ENTRY_V1",
     addressBytes(entry.chainId),
@@ -373,7 +387,9 @@ export function verifyCompletePayrollBook(input: CompletePayrollBook): {
       || entry.periodEnd !== checkpoint.periodEnd) {
       throw new Error("Payroll-book entry belongs to a different owner or reporting period.");
     }
-    const runKey = entry.runNullifier.toLowerCase();
+    const runKey = (entry.entryVersion === UNIVERSAL_PAYROLL_BOOK_ENTRY_VERSION
+      ? entry.subjectNullifier
+      : entry.runNullifier).toLowerCase();
     if (runNullifiers.has(runKey)) throw new Error("Payroll book duplicates a finalized payroll run.");
     runNullifiers.add(runKey);
     const expectedCommitment = payrollBookEntryCommitment(entry);

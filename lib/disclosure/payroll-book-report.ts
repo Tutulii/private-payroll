@@ -117,12 +117,21 @@ export const payrollBookReportSourceSchema = z.object({
   runId: uuidV7Schema,
   runRevision: z.number().int().positive(),
   runEnvelope: encryptedVaultRecordSchema,
-  entryKind: z.enum(["ordinary", "vesting"]),
+  entryKind: z.enum(["ordinary", "vesting", "agent"]),
   bookEntry: payrollBookEntrySchema,
   bookEntryCommitment: commitmentSchema,
   integrityVerificationTransactionHash: starknetAddressSchema,
   settlementTransactionHash: starknetAddressSchema,
-}).strict();
+}).strict().superRefine((source, context) => {
+  if (source.bookEntry.entryVersion === "payo-payroll-book-entry-v2"
+    && source.bookEntry.entryKind !== source.entryKind) {
+    context.addIssue({
+      code: "custom",
+      path: ["entryKind"],
+      message: "The report source kind differs from its universal payroll-book entry.",
+    });
+  }
+});
 export type PayrollBookReportSource = z.infer<typeof payrollBookReportSourceSchema>;
 
 export const completePayrollBookReportSchema = z.object({
@@ -457,6 +466,39 @@ export async function buildPayrollBookReportEntry(input: {
     || !sameField(entry.manifestRoot, input.payroll.manifestRoot)
     || !sameField(entry.runNullifier, input.payroll.runNullifier)) {
     throw new Error("The payroll-book entry is not bound to this proved payroll run.");
+  }
+  if (entry.entryVersion === "payo-payroll-book-entry-v2") {
+    if (
+      !["ordinary", "vesting", "agent"].includes(entry.entryKind)
+      || !sameField(entry.chainId, input.payroll.publicInputs[0].chainId)
+      || !sameField(entry.sourceSealAddress, input.payroll.publicInputs[0].sealAddress)
+      || !sameField(entry.policyRoot, input.payroll.policyRoot)
+      || !sameField(entry.fxRoot, input.payroll.fxRoot)
+      || entry.sourceProofVersion !== 2
+      || entry.contributorCount !== input.payroll.proofBindings.length
+    ) {
+      throw new Error("The universal payroll-book entry differs from its proved payroll bindings.");
+    }
+    if (entry.totalsDisclosure === "public") {
+      const totals = {
+        STRK: { grossAtomic: 0n, deductionsAtomic: 0n, netAtomic: 0n },
+        USDC: { grossAtomic: 0n, deductionsAtomic: 0n, netAtomic: 0n },
+      };
+      for (const line of input.payroll.calculatedLines) {
+        totals[line.token].grossAtomic += BigInt(line.grossAtomic);
+        totals[line.token].deductionsAtomic += BigInt(line.deductionsTotalAtomic);
+        totals[line.token].netAtomic += BigInt(line.netAtomic);
+      }
+      for (const token of ["STRK", "USDC"] as const) {
+        if (
+          BigInt(entry.totals[token].grossAtomic) !== totals[token].grossAtomic
+          || BigInt(entry.totals[token].deductionsAtomic) !== totals[token].deductionsAtomic
+          || BigInt(entry.totals[token].netAtomic) !== totals[token].netAtomic
+        ) {
+          throw new Error(`The universal payroll-book ${token} totals differ from the proved payroll.`);
+        }
+      }
+    }
   }
   const policies = new Map(input.policies.map((policy) => [policy.id, policyPackSchema.parse(policy)]));
   if (policies.size !== input.policies.length) throw new Error("Statutory policy IDs must be unique.");

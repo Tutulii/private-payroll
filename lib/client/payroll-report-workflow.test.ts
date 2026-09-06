@@ -11,6 +11,10 @@ import {
   payrollBookEntryCommitment,
 } from "@/lib/domain/vesting-tax";
 import {
+  derivePayrollBookTotalsSalt,
+  payrollBookTotalsCommitment,
+} from "@/lib/domain/universal-payroll-book";
+import {
   buildPayrollIntegrityInputsFromSerialized,
   PAYO_NET_INVOICE_POLICY,
   serializePayrollIntegrityBuildRequest,
@@ -95,17 +99,42 @@ async function fixture() {
     }],
   });
   const payroll = await buildPayrollIntegrityInputsFromSerialized(buildInput);
+  const totals = {
+    STRK: { grossAtomic: "100", deductionsAtomic: "0", netAtomic: "100" },
+    USDC: { grossAtomic: "0", deductionsAtomic: "0", netAtomic: "0" },
+  };
+  const totalsSalt = derivePayrollBookTotalsSalt({
+    organizationSecret: hex("1"),
+    runNullifier: payroll.runNullifier,
+  });
   const bookEntry = {
-    entryVersion: "payo-payroll-book-entry-v1" as const,
+    entryVersion: "payo-payroll-book-entry-v2" as const,
+    entryKind: "ordinary" as const,
     chainId: CHAIN,
     sealAddress: SEAL,
+    sourceSealAddress: SEAL,
     ownerAddress: OWNER,
     periodStart: PERIOD_START.toString(),
     periodEnd: PERIOD_END.toString(),
     agreementRoot: payroll.agreementRoot,
     manifestRoot: payroll.manifestRoot,
+    policyRoot: payroll.policyRoot,
+    fxRoot: payroll.fxRoot,
     runNullifier: payroll.runNullifier,
-    payrollProofVersion: 2,
+    subjectNullifier: payroll.runNullifier,
+    parentFactCommitment: ZERO,
+    factCommitment: ZERO,
+    sourceProofVersion: 2,
+    attestationRoot: ZERO,
+    contributorCount: 1,
+    totalsDisclosure: "public" as const,
+    totalsCommitment: payrollBookTotalsCommitment({
+      subjectNullifier: payroll.runNullifier,
+      contributorCount: 1,
+      totals,
+      salt: totalsSalt,
+    }),
+    totals,
     vestingScheduleId: ZERO,
     vestingStateCommitment: ZERO,
   };
@@ -397,5 +426,60 @@ describe("complete private payroll report workflow", () => {
       agreements: data.agreements,
       payees: data.payees,
     })).rejects.toThrow("changed agreement commitment");
+  });
+
+  it("fails closed when universal v2 book bindings differ from the proved payroll", async () => {
+    const data = await fixture();
+    const changedPolicy = structuredClone(data.source);
+    changedPolicy.bookEntry.policyRoot = hex("f");
+    data.client.getPayrollBookSources.mockResolvedValueOnce({ sources: [changedPolicy] });
+    await expect(createEncryptedPayrollReportFromBook({
+      client: data.client as never,
+      organizationId: ORGANIZATION_ID,
+      ownerAddress: OWNER,
+      periodStart: PERIOD_START.toString(),
+      periodEnd: PERIOD_END.toString(),
+      principal: data.employer,
+      recipient: data.employer,
+      kind: "employer_book",
+      agreements: data.agreements,
+      payees: data.payees,
+    })).rejects.toThrow("differs from its proved payroll bindings");
+
+    const changedTotals = structuredClone(data.source);
+    changedTotals.bookEntry.totals.STRK.grossAtomic = "101";
+    changedTotals.bookEntry.totals.STRK.netAtomic = "101";
+    data.client.getPayrollBookSources.mockResolvedValueOnce({ sources: [changedTotals] });
+    await expect(createEncryptedPayrollReportFromBook({
+      client: data.client as never,
+      organizationId: ORGANIZATION_ID,
+      ownerAddress: OWNER,
+      periodStart: PERIOD_START.toString(),
+      periodEnd: PERIOD_END.toString(),
+      principal: data.employer,
+      recipient: data.employer,
+      kind: "tax_book",
+      agreements: data.agreements,
+      payees: data.payees,
+    })).rejects.toThrow("STRK totals differ from the proved payroll");
+
+    const changedKind = {
+      ...structuredClone(data.source),
+      entryKind: "agent" as const,
+    };
+    data.client.getPayrollBookSources.mockResolvedValueOnce({ sources: [changedKind] });
+    await expect(createEncryptedPayrollReportFromBook({
+      client: data.client as never,
+      organizationId: ORGANIZATION_ID,
+      ownerAddress: OWNER,
+      periodStart: PERIOD_START.toString(),
+      periodEnd: PERIOD_END.toString(),
+      principal: data.employer,
+      recipient: data.employer,
+      kind: "worker_statement",
+      workerPayeeId: PAYEE_ID,
+      agreements: data.agreements,
+      payees: data.payees,
+    })).rejects.toThrow("differs from its universal payroll-book entry");
   });
 });
