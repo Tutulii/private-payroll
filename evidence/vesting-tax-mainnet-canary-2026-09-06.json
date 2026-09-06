@@ -1,0 +1,10 @@
+{
+  "transactionHash": "0x06aea439656addfd17b315879696f0ace3880d9878ec01221033ee367d0deaf1",
+  "ownerAddress": "0x309eca7155f96dc41d77063a9f9948bb3b99858259022f205df79a986aacff4",
+  "periodStart": "1767225600",
+  "periodEnd": "1798761600",
+  "scheduleId": "0xb2f5bb427957db835ce63bfda781301cf42028735e8b210bd8ea6aeb09eb3718",
+  "nextStateCommitment": "0xc1ba9863ce1d03b01318b642be385ad1539d8ef747b3a6a06c75d43c67d52b00",
+  "releaseNullifier": "0xd8edc925ed03ed6c03d674dda75eda1940a947ecdd5915a3cf882bf4348b1433",
+  "bookEntryCommitment": "0x631e8fb4ab7b1b694a6547a41805f5da1373e632a3cccf04fc6ddd6b9cfd82c7"
+}

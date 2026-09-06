@@ -53,6 +53,53 @@ describe("durable Starknet event indexer", () => {
     }));
   });
 
+  it("indexes selected recovery events from both seal contracts", async () => {
+    const persistBlock = vi.fn(async (input: { blockNumber: bigint; blockHash: string }) => ({
+      blockNumber: input.blockNumber,
+      blockHash: input.blockHash,
+      replayed: false,
+    }));
+    const rpc = {
+      getBlockNumber: vi.fn(async () => 10),
+      getBlockWithTxHashes: vi.fn(async (number: number) => block(number)),
+      getEvents: vi.fn(async (filter: { address?: string; keys?: string[][] }) => {
+        void filter;
+        return { events: [
+          { transaction_hash: "0xaa", from_address: "0x00bb", keys: ["0x1"], data: [] },
+          { transaction_hash: "0xcc", from_address: "0xcc", keys: ["0x2"], data: [] },
+          { transaction_hash: "0xdd", from_address: "0xdd", keys: ["0x2"], data: [] },
+        ] };
+      }),
+    };
+    await processEventIndexBatch({
+      rpc,
+      chainId: "SN_MAIN",
+      consumer: "payo-seal",
+      fromBlock: 10n,
+      maxBlocks: 1,
+      addresses: ["0xbb", "0xcc"],
+      keys: [["0x1", "0x2"]],
+      persistence: {
+        getCursor: vi.fn(async () => ({
+          chainId: "SN_MAIN", consumer: "payo-seal", blockNumber: 9n, blockHash: "0x19", updatedAt: new Date(),
+        })),
+        getBlock: vi.fn(),
+        persistBlock,
+        rollback: vi.fn(),
+      },
+    });
+    expect(rpc.getEvents).toHaveBeenCalledWith(expect.objectContaining({
+      keys: [["0x1", "0x2"]],
+    }));
+    expect(rpc.getEvents.mock.calls[0][0]).not.toHaveProperty("address");
+    expect(persistBlock).toHaveBeenCalledWith(expect.objectContaining({
+      events: [
+        expect.objectContaining({ transactionHash: "0xaa", contractAddress: "0xbb", eventIndex: 0 }),
+        expect.objectContaining({ transactionHash: "0xcc", contractAddress: "0xcc", eventIndex: 1 }),
+      ],
+    }));
+  });
+
   it("finds a common ancestor, rolls back, and indexes the replacement chain", async () => {
     const rollback = vi.fn(async () => ({ rolledBack: 2n, cursor: { blockNumber: 10n, blockHash: "0xa0" } }));
     const rpc = {

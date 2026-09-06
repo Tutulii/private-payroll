@@ -3,6 +3,7 @@ import "server-only";
 import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { hashCanonicalJson } from "@/lib/crypto/digest";
 import { generateUuidV7 } from "@/lib/domain/records";
+import { vestingBookProofSubmissionSchema } from "@/lib/domain/proof-bundle";
 import {
   assertSettlementTransition,
   settlementWorkflowSchema,
@@ -12,6 +13,11 @@ import {
 import { encryptedVaultRecordSchema, type EncryptedVaultRecord } from "@/lib/crypto/vault";
 import type { AuthenticatedPrincipal } from "@/lib/server/auth";
 import { ApiError } from "@/lib/server/auth";
+import {
+  PAYROLL_BOOK_ENTRY_APPENDED_EVENT_SELECTOR,
+  PAYROLL_SEALED_EVENT_SELECTOR,
+  PRIVATE_ACTION_INVOKED_EVENT_SELECTOR,
+} from "@/lib/starknet/payo-event-selectors";
 import {
   applyLinkedAgentSettlementObservationWith,
   cancelLinkedAgentExecutionApprovalWith,
@@ -25,16 +31,17 @@ import {
   idempotencyRequests,
   indexedChainEvents,
   organizations,
+  payrollAuthorizationJobs,
   payrollRuns,
   proofBundles,
   proofVerificationJobs,
   settlements,
+  exceptionAuthorizationJobs,
+  vestingAuthorizationJobs,
   vaultRecords,
   wageRemediations,
 } from "./schema";
 
-const PAYROLL_SEALED_EVENT_SELECTOR = "0x1b9fd7bf429246efa243b5f4b5eb036c1ab31a548ec13cc42f97a03b34f38ea";
-const PRIVATE_ACTION_INVOKED_EVENT_SELECTOR = "0x35aecaf019d9809fd216be64aa8e5f6f6feda13fa33ae33e886585668aaa28f";
 
 type SealRecoveryBinding = {
   eventSelector: typeof PAYROLL_SEALED_EVENT_SELECTOR;
@@ -56,7 +63,19 @@ type PrivateActionRecoveryBinding = {
   actionLow: bigint;
 };
 
-type ApprovalRecoveryBinding = SealRecoveryBinding | PrivateActionRecoveryBinding;
+type BookEntryRecoveryBinding = {
+  eventSelector: typeof PAYROLL_BOOK_ENTRY_APPENDED_EVENT_SELECTOR;
+  owner: bigint;
+  periodStart: bigint;
+  periodEnd: bigint;
+  entryHigh: bigint;
+  entryLow: bigint;
+};
+
+type ApprovalRecoveryBinding =
+  | SealRecoveryBinding
+  | PrivateActionRecoveryBinding
+  | BookEntryRecoveryBinding;
 
 type SealRecoveryCandidate = {
   workflowType: SettlementWorkflow;
@@ -64,6 +83,10 @@ type SealRecoveryCandidate = {
   proofType: string;
   proofVersion: string;
   proofPackage: unknown;
+  vestingAuthorizationState?: string | null;
+  vestingTransitionMetadata?: unknown;
+  exceptionAuthorizationState?: string | null;
+  exceptionTransitionMetadata?: unknown;
 };
 
 const RECOVERY_PROFILE = {
@@ -164,8 +187,34 @@ function privateActionRecoveryBinding(
   };
 }
 
-function approvalRecoveryBinding(candidate: SealRecoveryCandidate): ApprovalRecoveryBinding | null {
-  return privateActionRecoveryBinding(candidate) ?? sealRecoveryBinding(candidate);
+function bookEntryRecoveryBinding(candidate: SealRecoveryCandidate): BookEntryRecoveryBinding | null {
+  const state = candidate.workflowType === "payroll"
+    ? candidate.vestingAuthorizationState
+    : candidate.exceptionAuthorizationState;
+  const metadata = candidate.workflowType === "payroll"
+    ? candidate.vestingTransitionMetadata
+    : candidate.exceptionTransitionMetadata;
+  if (state !== "complete") return null;
+  const parsed = vestingBookProofSubmissionSchema.safeParse(metadata);
+  if (!parsed.success) return null;
+  const commitment = BigInt(parsed.data.bookEntryCommitment);
+  return {
+    eventSelector: PAYROLL_BOOK_ENTRY_APPENDED_EVENT_SELECTOR,
+    owner: BigInt(parsed.data.bookEntry.ownerAddress),
+    periodStart: BigInt(parsed.data.bookEntry.periodStart),
+    periodEnd: BigInt(parsed.data.bookEntry.periodEnd),
+    entryHigh: commitment >> 128n,
+    entryLow: commitment & ((1n << 128n) - 1n),
+  };
+}
+
+function approvalRecoveryBinding(
+  candidate: SealRecoveryCandidate,
+  allowBookEntry: boolean,
+): ApprovalRecoveryBinding | null {
+  return (allowBookEntry ? bookEntryRecoveryBinding(candidate) : null)
+    ?? privateActionRecoveryBinding(candidate)
+    ?? sealRecoveryBinding(candidate);
 }
 
 function payrollSealedEventMatches(payload: unknown, binding: SealRecoveryBinding): boolean {
@@ -203,10 +252,35 @@ function privateActionEventMatches(
     && values[7] === binding.actionLow;
 }
 
+function payrollBookEntryEventMatches(
+  payload: unknown,
+  binding: BookEntryRecoveryBinding,
+): boolean {
+  const event = record(payload);
+  const keys = event?.keys;
+  const data = event?.data;
+  if (!Array.isArray(keys) || keys.length < 4 || !Array.isArray(data) || data.length < 4) return false;
+  const values = [keys[0], keys[1], keys[2], keys[3], data[0], data[1], data[2], data[3]]
+    .map(bigintValue);
+  return values.every((value) => value !== null)
+    && values[0] === BigInt(binding.eventSelector)
+    && values[1] === binding.owner
+    && values[2] === binding.periodStart
+    && values[3] === binding.periodEnd
+    && values[4]! >= 0n
+    && values[5] === binding.entryHigh
+    && values[6] === binding.entryLow
+    && values[7]! >= 0n;
+}
+
 function approvalEventMatches(payload: unknown, binding: ApprovalRecoveryBinding): boolean {
-  return binding.eventSelector === PRIVATE_ACTION_INVOKED_EVENT_SELECTOR
-    ? privateActionEventMatches(payload, binding)
-    : payrollSealedEventMatches(payload, binding);
+  if (binding.eventSelector === PRIVATE_ACTION_INVOKED_EVENT_SELECTOR) {
+    return privateActionEventMatches(payload, binding);
+  }
+  if (binding.eventSelector === PAYROLL_BOOK_ENTRY_APPENDED_EVENT_SELECTOR) {
+    return payrollBookEntryEventMatches(payload, binding);
+  }
+  return payrollSealedEventMatches(payload, binding);
 }
 
 const IDEMPOTENCY_LOCK_MS = 60_000;
@@ -579,14 +653,15 @@ export async function recordSettlementSubmission(input: {
 /**
  * Recovers a wallet submission when Ready executed the atomic STRK20 request
  * but did not resolve `wallet_strk20InvokeTransaction` with its transaction
- * hash. Legacy workflows require their exact canonical PayrollSealed binding;
- * Remediation v7 requires the canonical PrivateActionInvoked mode, subject,
- * fact, and action commitments. Salary, token totals, and recipients are
- * neither indexed nor inspected.
+ * hash. Legacy workflows require their exact canonical PayrollSealed or
+ * PrivateActionInvoked binding. Universal-book workflows require the exact
+ * owner, reporting period, and proved entry commitment. Salary, token totals,
+ * and recipients are neither indexed nor inspected.
  */
 export async function recoverApprovalSubmissionsFromSealEvents(input: {
   chainId: string;
   sealAddress: string;
+  bookSealAddress?: string;
   limit?: number;
 }) {
   const limit = input.limit ?? 100;
@@ -605,6 +680,10 @@ export async function recoverApprovalSubmissionsFromSealEvents(input: {
       proofType: proofBundles.proofType,
       proofVersion: proofBundles.proofVersion,
       proofPackage: proofBundles.proofPackage,
+      vestingAuthorizationState: vestingAuthorizationJobs.state,
+      vestingTransitionMetadata: vestingAuthorizationJobs.transitionMetadata,
+      exceptionAuthorizationState: exceptionAuthorizationJobs.state,
+      exceptionTransitionMetadata: exceptionAuthorizationJobs.transitionMetadata,
     })
     .from(settlements)
     .innerJoin(proofBundles, and(
@@ -616,6 +695,15 @@ export async function recoverApprovalSubmissionsFromSealEvents(input: {
         and(eq(settlements.workflowType, "wage_claim"), eq(proofBundles.proofType, "wage_claim")),
         and(eq(settlements.workflowType, "wage_remediation"), eq(proofBundles.proofType, "wage_remediation")),
       ),
+    ))
+    .leftJoin(vestingAuthorizationJobs, and(
+      eq(vestingAuthorizationJobs.runId, settlements.runId),
+      eq(vestingAuthorizationJobs.payrollProofBundleId, proofBundles.id),
+    ))
+    .leftJoin(exceptionAuthorizationJobs, and(
+      eq(exceptionAuthorizationJobs.proofBundleId, proofBundles.id),
+      eq(exceptionAuthorizationJobs.workflowType, settlements.workflowType),
+      eq(exceptionAuthorizationJobs.subjectRecordId, settlements.subjectRecordId),
     ))
     .where(and(
       or(
@@ -629,11 +717,36 @@ export async function recoverApprovalSubmissionsFromSealEvents(input: {
   if (candidates.length === 0) return { recovered: 0 };
 
   let normalizedSeal: string;
+  let normalizedBookSeal: string | null = null;
   try {
     normalizedSeal = `0x${BigInt(input.sealAddress).toString(16)}`;
+    if (input.bookSealAddress) {
+      normalizedBookSeal = `0x${BigInt(input.bookSealAddress).toString(16)}`;
+    }
   } catch {
-    throw new Error("A valid PAYO seal address is required for approval recovery.");
+    throw new Error("Valid PAYO seal addresses are required for approval recovery.");
   }
+  const recoveryEventScope = normalizedBookSeal
+    ? or(
+        and(
+          eq(indexedChainEvents.contractAddress, normalizedSeal),
+          or(
+            eq(indexedChainEvents.eventName, PAYROLL_SEALED_EVENT_SELECTOR),
+            eq(indexedChainEvents.eventName, PRIVATE_ACTION_INVOKED_EVENT_SELECTOR),
+          ),
+        ),
+        and(
+          eq(indexedChainEvents.contractAddress, normalizedBookSeal),
+          eq(indexedChainEvents.eventName, PAYROLL_BOOK_ENTRY_APPENDED_EVENT_SELECTOR),
+        ),
+      )
+    : and(
+        eq(indexedChainEvents.contractAddress, normalizedSeal),
+        or(
+          eq(indexedChainEvents.eventName, PAYROLL_SEALED_EVENT_SELECTOR),
+          eq(indexedChainEvents.eventName, PRIVATE_ACTION_INVOKED_EVENT_SELECTOR),
+        ),
+      );
   const events = await database
     .select({
       transactionHash: indexedChainEvents.transactionHash,
@@ -644,11 +757,7 @@ export async function recoverApprovalSubmissionsFromSealEvents(input: {
     .from(indexedChainEvents)
     .where(and(
       eq(indexedChainEvents.chainId, input.chainId),
-      eq(indexedChainEvents.contractAddress, normalizedSeal),
-      or(
-        eq(indexedChainEvents.eventName, PAYROLL_SEALED_EVENT_SELECTOR),
-        eq(indexedChainEvents.eventName, PRIVATE_ACTION_INVOKED_EVENT_SELECTOR),
-      ),
+      recoveryEventScope,
       eq(indexedChainEvents.canonical, true),
     ))
     .orderBy(desc(indexedChainEvents.blockNumber))
@@ -658,7 +767,10 @@ export async function recoverApprovalSubmissionsFromSealEvents(input: {
   const matches = candidates.flatMap((candidate) => {
     const workflowType = settlementWorkflowSchema.safeParse(candidate.workflowType);
     if (!workflowType.success) return [];
-    const binding = approvalRecoveryBinding({ ...candidate, workflowType: workflowType.data });
+    const binding = approvalRecoveryBinding(
+      { ...candidate, workflowType: workflowType.data },
+      normalizedBookSeal !== null,
+    );
     if (!binding) return [];
     return events
       .filter(({ payload }) => approvalEventMatches(payload, binding))
@@ -760,6 +872,7 @@ export async function getSealedRunRecoveryEvidence(input: {
   runId: string;
   chainId: string;
   sealAddress: string;
+  bookSealAddress?: string;
   principal: AuthenticatedPrincipal;
 }) {
   const database = getDatabase();
@@ -783,8 +896,19 @@ export async function getSealedRunRecoveryEvidence(input: {
       proofVersion: proofBundles.proofVersion,
       subjectRecordId: proofBundles.subjectRecordId,
       proofPackage: proofBundles.proofPackage,
+      payrollAuthorizationState: payrollAuthorizationJobs.state,
+      vestingAuthorizationState: vestingAuthorizationJobs.state,
+      vestingTransitionMetadata: vestingAuthorizationJobs.transitionMetadata,
     })
     .from(proofBundles)
+    .leftJoin(payrollAuthorizationJobs, and(
+      eq(payrollAuthorizationJobs.runId, proofBundles.runId),
+      eq(payrollAuthorizationJobs.payrollProofBundleId, proofBundles.id),
+    ))
+    .leftJoin(vestingAuthorizationJobs, and(
+      eq(vestingAuthorizationJobs.runId, proofBundles.runId),
+      eq(vestingAuthorizationJobs.payrollProofBundleId, proofBundles.id),
+    ))
     .where(and(
       eq(proofBundles.runId, run.id),
       eq(proofBundles.organizationId, run.organizationId),
@@ -823,8 +947,15 @@ export async function getSealedRunRecoveryEvidence(input: {
         "PAYROLL_SETTLEMENT_MISMATCH",
       );
     }
+    const authorizationMode = bundle.vestingAuthorizationState === "complete"
+      ? "vesting_book_v3" as const
+      : bundle.payrollAuthorizationState === "complete"
+        ? "staged_vnext" as const
+        : null;
     return {
       recoveryKind: "verification" as const,
+      proofDeliveryState: authorizationMode ? "authorization_complete" as const : "verification_required" as const,
+      ...(authorizationMode ? { authorizationMode } : {}),
       runId: run.id,
       proofBundleId: bundle.id,
       settlementId: settlement.id,
@@ -836,11 +967,27 @@ export async function getSealedRunRecoveryEvidence(input: {
   if (run.state !== "proven" || run.transactionHash || !run.runNullifier) {
     throw new ApiError(409, "This payroll has no recoverable sealed submission.", "RUN_NOT_RECOVERABLE");
   }
+  const binding = approvalRecoveryBinding(
+    {
+      workflowType: "payroll",
+      subjectRecordId: run.id,
+      proofType: bundle.proofType,
+      proofVersion: bundle.proofVersion,
+      proofPackage: bundle.proofPackage,
+      vestingAuthorizationState: bundle.vestingAuthorizationState,
+      vestingTransitionMetadata: bundle.vestingTransitionMetadata,
+    },
+    Boolean(input.bookSealAddress),
+  );
   let normalizedSeal: string;
   try {
-    normalizedSeal = `0x${BigInt(input.sealAddress).toString(16)}`;
+    const eventAddress = binding?.eventSelector === PAYROLL_BOOK_ENTRY_APPENDED_EVENT_SELECTOR
+      ? input.bookSealAddress
+      : input.sealAddress;
+    if (!eventAddress) throw new Error("missing");
+    normalizedSeal = `0x${BigInt(eventAddress).toString(16)}`;
   } catch {
-    throw new Error("A valid PAYO seal address is required for run recovery.");
+    throw new Error("A valid PAYO event address is required for run recovery.");
   }
   const events = await database
     .select({
@@ -852,26 +999,22 @@ export async function getSealedRunRecoveryEvidence(input: {
     .where(and(
       eq(indexedChainEvents.chainId, input.chainId),
       eq(indexedChainEvents.contractAddress, normalizedSeal),
-      eq(indexedChainEvents.eventName, PAYROLL_SEALED_EVENT_SELECTOR),
+      eq(indexedChainEvents.eventName, binding?.eventSelector ?? PAYROLL_SEALED_EVENT_SELECTOR),
       eq(indexedChainEvents.canonical, true),
     ))
     .orderBy(desc(indexedChainEvents.blockNumber))
     .limit(1_000);
-  const binding = sealRecoveryBinding({
-    workflowType: "payroll",
-    subjectRecordId: run.id,
-    proofType: bundle.proofType,
-    proofVersion: bundle.proofVersion,
-    proofPackage: bundle.proofPackage,
-  });
   const evidence = binding
-    ? events.find(({ payload }) => payrollSealedEventMatches(payload, binding))
+    ? events.find(({ payload }) => approvalEventMatches(payload, binding))
     : undefined;
-  if (!evidence) {
-    throw new ApiError(404, "No canonical PayrollSealed event matches this run.", "SEALED_SUBMISSION_NOT_FOUND");
+  if (!binding || !evidence) {
+    throw new ApiError(404, "No canonical proof-bound event matches this run.", "SEALED_SUBMISSION_NOT_FOUND");
   }
   return {
     recoveryKind: "submission" as const,
+    ...(binding.eventSelector === PAYROLL_BOOK_ENTRY_APPENDED_EVENT_SELECTOR
+      ? { authorizationMode: "vesting_book_v3" as const }
+      : {}),
     runId: run.id,
     proofBundleId: bundle.id,
     transactionHash: evidence.transactionHash,

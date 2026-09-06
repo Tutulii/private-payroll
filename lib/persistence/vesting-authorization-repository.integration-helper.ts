@@ -22,6 +22,13 @@ import {
 } from "@/lib/proof/starknet-calldata";
 import type { AuthenticatedPrincipal } from "@/lib/server/auth";
 import { getDatabase } from "./db";
+import { persistIndexedBlock } from "./chain-indexer-repository";
+import { enqueueProofVerification } from "./proof-verification-repository";
+import {
+  getSealedRunRecoveryEvidence,
+  recoverApprovalSubmissionsFromSealEvents,
+} from "./settlement-repository";
+import { PAYROLL_BOOK_ENTRY_APPENDED_EVENT_SELECTOR } from "@/lib/starknet/payo-event-selectors";
 import { listPayrollBookReportSources } from "./payroll-book-report-repository";
 import {
   advanceVestingAuthorizationJob,
@@ -467,4 +474,122 @@ export function registerVestingAuthorizationRepositoryIntegrationTests(): void {
       principal,
     })).resolves.toEqual([]);
   }, 120_000);
+
+  it("recovers a missing Ready hash from the exact universal-book entry", async () => {
+    const organizationId = await seed();
+    const value = fixture();
+    await getDatabase().insert(payrollRuns).values({
+      id: value.runId,
+      organizationId,
+      cycleId: "vesting-book-wallet-recovery",
+      revision: 1,
+      state: "approval_pending",
+      dueAt: new Date(),
+      runNullifier: combine(value.commonInputs.runNullifierHigh, value.commonInputs.runNullifierLow),
+    });
+    await getDatabase().insert(proofBundles).values({
+      id: value.payrollProofBundleId,
+      organizationId,
+      runId: value.runId,
+      proofType: "payroll_integrity",
+      proofVersion: "2",
+      subjectRecordId: value.runId,
+      proofPackage: value.payrollMetadata,
+      proofHash: `0x${"a1".repeat(32)}`,
+      verificationState: "onchain_verified",
+    });
+    await getDatabase().insert(vestingAuthorizationJobs).values({
+      id: generateUuidV7(),
+      organizationId,
+      runId: value.runId,
+      payrollProofBundleId: value.payrollProofBundleId,
+      transitionMetadata: value.request.vestingBook,
+      payrollShard0Calldata: value.payrollShards[0],
+      payrollShard1Calldata: value.payrollShards[1],
+      transitionShard0Calldata: value.request.vestingBook.shards[0].proofCalldata,
+      transitionShard1Calldata: value.request.vestingBook.shards[1].proofCalldata,
+      state: "complete",
+      activeStep: "transition1",
+      transactionHash: "0x99",
+      authorizedAt: new Date(),
+    });
+    const settlementId = generateUuidV7();
+    await getDatabase().insert(settlements).values({
+      id: settlementId,
+      organizationId,
+      runId: value.runId,
+      workflowType: "payroll",
+      subjectRecordId: value.runId,
+      walletRequestId: generateUuidV7(),
+      idempotencyKey: `vesting-book-recovery:${settlementId}`,
+      state: "approval_pending",
+      tokenTotalsCommitment: `0x${"a2".repeat(32)}`,
+    });
+
+    const commitment = BigInt(value.request.vestingBook.bookEntryCommitment);
+    const bookSealAddress = "0x5208";
+    await persistIndexedBlock({
+      chainId: "SN_MAIN",
+      consumer: "payo-seal",
+      blockNumber: 77n,
+      blockHash: "0x77",
+      parentHash: "0x76",
+      events: [{
+        transactionHash: "0xbeef",
+        eventIndex: 0,
+        contractAddress: bookSealAddress,
+        eventName: PAYROLL_BOOK_ENTRY_APPENDED_EVENT_SELECTOR,
+        payload: {
+          keys: [
+            PAYROLL_BOOK_ENTRY_APPENDED_EVENT_SELECTOR,
+            value.request.vestingBook.bookEntry.ownerAddress,
+            `0x${BigInt(value.request.vestingBook.bookEntry.periodStart).toString(16)}`,
+            `0x${BigInt(value.request.vestingBook.bookEntry.periodEnd).toString(16)}`,
+          ],
+          data: [
+            "0x2",
+            `0x${(commitment >> 128n).toString(16)}`,
+            `0x${(commitment & U128_MASK).toString(16)}`,
+            "0x1234",
+          ],
+        },
+      }],
+    });
+
+    await expect(recoverApprovalSubmissionsFromSealEvents({
+      chainId: "SN_MAIN",
+      sealAddress: "0x123",
+      bookSealAddress,
+    })).resolves.toEqual({ recovered: 1 });
+    expect((await getDatabase().select().from(settlements))[0]).toMatchObject({
+      id: settlementId,
+      state: "submitted",
+      transactionHash: "0xbeef",
+    });
+    expect((await getDatabase().select().from(payrollRuns))[0]).toMatchObject({
+      state: "submitted",
+      transactionHash: "0xbeef",
+    });
+    await expect(getSealedRunRecoveryEvidence({
+      runId: value.runId,
+      chainId: "SN_MAIN",
+      sealAddress: "0x123",
+      bookSealAddress,
+      principal,
+    })).resolves.toMatchObject({
+      recoveryKind: "verification",
+      proofDeliveryState: "authorization_complete",
+      authorizationMode: "vesting_book_v3",
+      settlementId,
+      transactionHash: "0xbeef",
+    });
+    await expect(enqueueProofVerification({
+      settlementId,
+      request: {
+        proofBundleId: value.payrollProofBundleId,
+        shards: value.payrollShards,
+      },
+      principal,
+    })).rejects.toMatchObject({ code: "PROOF_DELIVERY_ALREADY_AUTHORIZED" });
+  });
 }

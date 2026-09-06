@@ -73,6 +73,43 @@ describe("confirmed payroll browser recovery", () => {
     expect(persist).toHaveBeenLastCalledWith(null);
   });
 
+  it("recognizes completed payroll-book authorization without queuing the legacy verifier", async () => {
+    const client = {
+      getSealedPayrollRecovery: vi.fn().mockResolvedValue({
+        recovery: {
+          recoveryKind: "verification",
+          proofDeliveryState: "authorization_complete",
+          authorizationMode: "vesting_book_v3",
+          runId,
+          proofBundleId,
+          settlementId,
+          transactionHash: "0xfeed",
+          blockNumber: "123",
+        },
+      }),
+      getEncryptedRecord: vi.fn(),
+      enqueueProofVerification: vi.fn(),
+    };
+
+    await expect(recoverConfirmedPayrollFromBrowser({
+      client: client as unknown as PayoClient,
+      organizationId,
+      runId,
+      indexedTransactionHash: "0xfeed",
+      principal,
+      pendingSubmission: null,
+      persistPendingSubmission: vi.fn(),
+    })).resolves.toMatchObject({
+      runId,
+      settlementId,
+      transactionHash: "0xfeed",
+      verificationQueued: false,
+      proofDeliveryState: "authorization_complete",
+    });
+    expect(client.getEncryptedRecord).not.toHaveBeenCalled();
+    expect(client.enqueueProofVerification).not.toHaveBeenCalled();
+  });
+
   it("fails closed when local and indexed transaction hashes disagree", async () => {
     const local = { ...pending(), transactionHash: "0xabc" };
     await expect(recoverConfirmedPayrollFromBrowser({

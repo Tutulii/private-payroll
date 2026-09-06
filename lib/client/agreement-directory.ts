@@ -1,7 +1,11 @@
 import { hashRecipientCommitment } from "@/lib/crypto/commitments";
 import { hashCanonicalJson } from "@/lib/crypto/digest";
 import { toHex } from "@/lib/crypto/encoding";
-import type { VaultPrincipalKeyPair } from "@/lib/crypto/vault";
+import {
+  decryptVaultRecord,
+  type EncryptedVaultRecord,
+  type VaultPrincipalKeyPair,
+} from "@/lib/crypto/vault";
 import { advancedObligationCommitment } from "@/lib/domain/advanced-obligation-commitment";
 import {
   buildClassificationAssessment,
@@ -32,6 +36,7 @@ import { parseTokenAmount, type PayrollTokenSymbol } from "@/lib/starknet/tokens
 import { resolveExecutionPolicy } from "@/lib/policy/execution-catalog";
 import type { PayoClient } from "./payo-client";
 import type { PayeeDirectoryRecord } from "./payee-directory";
+import { materializedPayrollRuns } from "./payroll-run-listing";
 import {
   loadCanonicalEncryptedRecords,
   storeCanonicalEncryptedRecord,
@@ -214,6 +219,98 @@ export type PayrollScheduleRun = {
   obligationSnapshotPlanId?: string | null;
   lines: readonly PayrollScheduleReference[];
 };
+
+type EncryptedPayrollScheduleLine = {
+  agreementId?: unknown;
+  scheduleCommitment?: unknown;
+  earningsAtomic?: unknown;
+  deductionsAtomic?: unknown;
+};
+
+/**
+ * The payment plan advances by its proved gross entitlement. Deductions lower
+ * the private token transfer, but they do not lower the amount that vested or
+ * became due under the agreement.
+ */
+export function payrollScheduleReferenceFromManifestLine(
+  line: EncryptedPayrollScheduleLine,
+): PayrollScheduleReference & { paidAtomic: string } {
+  if (
+    typeof line.agreementId !== "string"
+    || typeof line.scheduleCommitment !== "string"
+    || !/^0x[0-9a-fA-F]{64}$/.test(line.scheduleCommitment)
+    || !Array.isArray(line.earningsAtomic)
+    || !Array.isArray(line.deductionsAtomic)
+    || line.earningsAtomic.some((amount) => typeof amount !== "string" || !/^\d+$/.test(amount))
+    || line.deductionsAtomic.some((amount) => typeof amount !== "string" || !/^\d+$/.test(amount))
+  ) throw new Error("An encrypted payroll line is missing its schedule binding.");
+  const grossAtomic = line.earningsAtomic.reduce(
+    (total, amount) => total + BigInt(amount as string),
+    0n,
+  );
+  const deductionsAtomic = line.deductionsAtomic.reduce(
+    (total, amount) => total + BigInt(amount as string),
+    0n,
+  );
+  if (grossAtomic <= 0n || grossAtomic - deductionsAtomic <= 0n) {
+    throw new Error("An encrypted payroll line has no positive settlement value.");
+  }
+  return {
+    agreementId: line.agreementId,
+    scheduleCommitment: line.scheduleCommitment,
+    paidAtomic: grossAtomic.toString(),
+  };
+}
+
+/**
+ * Loads only finalized encrypted manifests needed to repair agreement state.
+ * This lets any directory view converge after Ready or the browser failed to
+ * return the transaction hash during the original payroll flow.
+ */
+export async function loadConfirmedPayrollScheduleRuns(input: {
+  client: Pick<PayoClient, "listPayrollRuns" | "getEncryptedRecord">;
+  organizationId: string;
+  principal: VaultPrincipalKeyPair;
+}): Promise<PayrollScheduleRun[]> {
+  const { runs } = await input.client.listPayrollRuns(input.organizationId);
+  const confirmed = materializedPayrollRuns(runs).filter((candidate) =>
+    candidate.state === "confirmed" || candidate.state === "reconciled");
+  return Promise.all(confirmed.map(async (candidate) => {
+    const run = candidate as {
+      id?: unknown;
+      state?: unknown;
+      dueAt?: unknown;
+      updatedAt?: unknown;
+      obligationSnapshotPlanId?: unknown;
+    };
+    if (
+      typeof run.id !== "string"
+      || typeof run.state !== "string"
+      || !(typeof run.dueAt === "string" || run.dueAt instanceof Date)
+      || !(typeof run.updatedAt === "string" || run.updatedAt instanceof Date)
+    ) throw new Error("PAYO returned incomplete confirmed payroll metadata.");
+    const response = await input.client.getEncryptedRecord({
+      organizationId: input.organizationId,
+      recordId: run.id,
+    }) as { record: { envelope?: EncryptedVaultRecord } };
+    if (!response.record.envelope) throw new Error("An encrypted payroll manifest is missing.");
+    const privateRun = decryptVaultRecord<{
+      manifest?: { lines?: EncryptedPayrollScheduleLine[] };
+    }>(response.record.envelope, input.principal);
+    if (!Array.isArray(privateRun.manifest?.lines)) {
+      throw new Error("An encrypted payroll manifest has an invalid shape.");
+    }
+    return {
+      state: run.state,
+      dueAt: run.dueAt instanceof Date ? run.dueAt.toISOString() : run.dueAt,
+      updatedAt: run.updatedAt instanceof Date ? run.updatedAt.toISOString() : run.updatedAt,
+      obligationSnapshotPlanId: typeof run.obligationSnapshotPlanId === "string"
+        ? run.obligationSnapshotPlanId
+        : null,
+      lines: privateRun.manifest.lines.map(payrollScheduleReferenceFromManifestLine),
+    };
+  }));
+}
 
 export function lockedPayrollScheduleCommitments(
   runs: readonly PayrollScheduleRun[],

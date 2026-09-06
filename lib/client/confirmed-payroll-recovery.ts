@@ -13,6 +13,7 @@ export type ConfirmedPayrollRecoveryResult = {
   proofBundleId: string;
   transactionHash: string;
   verificationQueued: boolean;
+  proofDeliveryState: "authorization_complete" | "verification_queued" | "verification_pending";
   proofDeliveryWarning?: string;
 };
 
@@ -41,12 +42,21 @@ export async function recoverConfirmedPayrollFromBrowser(input: {
       indexedTransactionHash: input.indexedTransactionHash,
     });
     if (!transactionHash) throw new Error("The confirmed payroll is missing its indexed transaction hash.");
-    return resumePendingPayrollSubmission({
+    const recovered = await resumePendingPayrollSubmission({
       client: input.client,
       pending,
       transactionHash,
       persistPendingSubmission: input.persistPendingSubmission,
     });
+    return {
+      ...recovered,
+      verificationQueued: pending.authorizationMode ? false : recovered.verificationQueued,
+      proofDeliveryState: pending.authorizationMode
+        ? "authorization_complete"
+        : recovered.verificationQueued
+          ? "verification_queued"
+          : "verification_pending",
+    };
   }
 
   return recoverConfirmedPayrollVerification({

@@ -108,7 +108,7 @@
       "blockNumber": 14391190
     }
   },
-  "updatedAt": "2026-09-05T07:55:20.191Z",
+  "updatedAt": "2026-09-06T17:03:39.108Z",
   "deployment": {
     "names": [
       "vestingVerifier",
@@ -152,8 +152,8 @@
   },
   "verification": {
     "passed": true,
-    "observedAt": "2026-09-05T07:55:20.182Z",
-    "blockNumber": 14392605,
+    "observedAt": "2026-09-06T12:30:21.430Z",
+    "blockNumber": 14454086,
     "dependencies": [
       {
         "code": "chain",
@@ -244,7 +244,25 @@
       "fixtureSealBinding": "0x456",
       "attestationRoot": "0x05a649755746757000454e5d6fcbb95460522e05ba4c5469dfea413ce724818f"
     },
-    "balanceFri": "278089224220459129477",
+    "balanceFri": "113441911246093898522",
     "canaryRequired": true
+  },
+  "canary": {
+    "passed": true,
+    "observedAt": "2026-09-06T17:03:39.101Z",
+    "transactionHash": "0x06aea439656addfd17b315879696f0ace3880d9878ec01221033ee367d0deaf1",
+    "blockNumber": 14461163,
+    "scheduleId": "0xb2f5bb427957db835ce63bfda781301cf42028735e8b210bd8ea6aeb09eb3718",
+    "nextStateCommitment": "0xc1ba9863ce1d03b01318b642be385ad1539d8ef747b3a6a06c75d43c67d52b00",
+    "releaseNullifier": "0xd8edc925ed03ed6c03d674dda75eda1940a947ecdd5915a3cf882bf4348b1433",
+    "bookEntryCommitment": "0x631e8fb4ab7b1b694a6547a41805f5da1373e632a3cccf04fc6ddd6b9cfd82c7",
+    "bookEntryIndex": 2,
+    "bookEntryCount": 3,
+    "bookAccumulatorRoot": "0x7939168b2e65494379eec64d0885403ee78d4a5170f365cd15d2234f120a0b1",
+    "allBookEntries": [
+      "0xd887df1d0ff3be13dc315fc6c38f9b9e062848f47a9bc76f911b6a93a5f06a61",
+      "0x91fb8a28f1976aa8ccb1a79c7053b38ce37ae7568a43c90aae33b83c56800452",
+      "0x631e8fb4ab7b1b694a6547a41805f5da1373e632a3cccf04fc6ddd6b9cfd82c7"
+    ]
   }
 }

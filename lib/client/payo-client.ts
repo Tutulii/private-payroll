@@ -772,6 +772,8 @@ export class PayoClient {
     return this.request<{
       recovery: {
         recoveryKind: "submission" | "verification";
+        proofDeliveryState?: "authorization_complete" | "verification_required";
+        authorizationMode?: "staged_vnext" | "vesting_book_v3";
         runId: string;
         proofBundleId: string;
         settlementId?: string;

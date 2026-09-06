@@ -54,6 +54,13 @@ function bigintField(value: RpcRecord, ...names: string[]): bigint | undefined {
   return undefined;
 }
 
+function normalizedAddress(value: string): string {
+  if (!/^0x[0-9a-fA-F]{1,64}$/.test(value)) {
+    throw new Error("Indexer contract addresses must be Starknet felts.");
+  }
+  return "0x" + BigInt(value).toString(16);
+}
+
 function parseBlock(value: unknown): { blockNumber: bigint; blockHash: string; parentHash: string } {
   const block = record(value);
   const blockNumber = bigintField(block, "block_number", "blockNumber");
@@ -68,17 +75,19 @@ function parseBlock(value: unknown): { blockNumber: bigint; blockHash: string; p
 async function loadBlockEvents(input: {
   rpc: StarknetEventIndexerRpc;
   blockNumber: bigint;
-  address?: string;
+  addresses: readonly string[];
   keys?: string[][];
 }): Promise<IndexedBlockInput["events"]> {
   const events: IndexedBlockInput["events"] = [];
+  const allowedAddresses = new Set(input.addresses);
+  const rpcAddress = input.addresses.length === 1 ? input.addresses[0] : undefined;
   let continuationToken: string | undefined;
   for (let page = 0; page < 100; page += 1) {
     const response = record(await input.rpc.getEvents({
       from_block: { block_number: Number(input.blockNumber) },
       to_block: { block_number: Number(input.blockNumber) },
       chunk_size: 100,
-      ...(input.address ? { address: input.address } : {}),
+      ...(rpcAddress ? { address: rpcAddress } : {}),
       ...(input.keys ? { keys: input.keys } : {}),
       ...(continuationToken ? { continuation_token: continuationToken } : {}),
     }));
@@ -86,10 +95,12 @@ async function loadBlockEvents(input: {
     for (const candidate of pageEvents) {
       const event = record(candidate);
       const transactionHash = stringField(event, "transaction_hash", "transactionHash");
-      const contractAddress = stringField(event, "from_address", "fromAddress");
+      const rawContractAddress = stringField(event, "from_address", "fromAddress");
       const keys = Array.isArray(event.keys) ? event.keys.filter((key): key is string => typeof key === "string") : [];
       const data = Array.isArray(event.data) ? event.data.filter((item): item is string => typeof item === "string") : [];
-      if (!transactionHash || !contractAddress) throw new Error("Starknet RPC returned an event without identity fields.");
+      if (!transactionHash || !rawContractAddress) throw new Error("Starknet RPC returned an event without identity fields.");
+      const contractAddress = normalizedAddress(rawContractAddress);
+      if (allowedAddresses.size > 0 && !allowedAddresses.has(contractAddress)) continue;
       events.push({
         transactionHash,
         eventIndex: events.length,
@@ -112,12 +123,19 @@ export async function processEventIndexBatch(input: {
   maxBlocks?: number;
   finalityLag?: number;
   address?: string;
+  addresses?: readonly string[];
   keys?: string[][];
   maxReorgDepth?: number;
   prefetchConcurrency?: number;
   persistence?: IndexerPersistence;
 }) {
   const persistence = input.persistence ?? defaultPersistence;
+  if (input.address && input.addresses) {
+    throw new Error("Configure either one indexer address or an address list.");
+  }
+  const addresses = [...new Set(
+    (input.addresses ?? (input.address ? [input.address] : [])).map(normalizedAddress),
+  )];
   const maxBlocks = input.maxBlocks ?? 20;
   const finalityLag = input.finalityLag ?? 0;
   const maxReorgDepth = input.maxReorgDepth ?? 128;
@@ -184,7 +202,12 @@ export async function processEventIndexBatch(input: {
       const blockNumber = nextBlock + BigInt(offset);
       const [blockValue, events] = await Promise.all([
         input.rpc.getBlockWithTxHashes(Number(blockNumber)),
-        loadBlockEvents({ ...input, blockNumber }),
+        loadBlockEvents({
+          rpc: input.rpc,
+          blockNumber,
+          addresses,
+          ...(input.keys ? { keys: input.keys } : {}),
+        }),
       ]);
       const block = parseBlock(blockValue);
       if (block.blockNumber !== blockNumber) {

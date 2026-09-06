@@ -1261,8 +1261,7 @@ export async function recoverSealedProvenPayroll(input: {
     },
     [input.principal],
   );
-  const pending: PendingPayrollSubmission & { transactionHash: string } = {
-    version: 3,
+  const recoveredBase = {
     organizationId: input.organizationId,
     runId: input.runId,
     proofBundleId: recovery.proofBundleId,
@@ -1271,10 +1270,14 @@ export async function recoverSealedProvenPayroll(input: {
     idempotencyKey,
     tokenTotalsCommitment,
     settlementEnvelope,
-    proofShards: [proof.shards[0].proofCalldata, proof.shards[1].proofCalldata],
+    proofShards: [proof.shards[0].proofCalldata, proof.shards[1].proofCalldata] as [string[], string[]],
     transactionHash: recovery.transactionHash,
     createdAt: timestamp,
   };
+  const pending: PendingPayrollSubmission & { transactionHash: string } =
+    recovery.authorizationMode === "vesting_book_v3"
+      ? { ...recoveredBase, version: 5, authorizationMode: "vesting_book_v3" }
+      : { ...recoveredBase, version: 3 };
   input.persistPendingSubmission?.(pending);
   try {
     const created = await retryDurableWrite(() => input.client.createSettlementIntent({
@@ -1335,7 +1338,8 @@ export async function recoverConfirmedPayrollVerification(input: {
   settlementId: string;
   proofBundleId: string;
   transactionHash: string;
-  verificationQueued: true;
+  verificationQueued: boolean;
+  proofDeliveryState: "authorization_complete" | "verification_queued";
 }> {
   input.onStage?.("recording");
   const { recovery } = await input.client.getSealedPayrollRecovery(input.runId);
@@ -1346,6 +1350,16 @@ export async function recoverConfirmedPayrollVerification(input: {
     || !/^0x[0-9a-fA-F]{1,64}$/.test(recovery.transactionHash)
   ) {
     throw new Error("PAYO returned invalid confirmed-payroll recovery evidence.");
+  }
+  if (recovery.proofDeliveryState === "authorization_complete") {
+    return {
+      runId: recovery.runId,
+      settlementId: recovery.settlementId,
+      proofBundleId: recovery.proofBundleId,
+      transactionHash: recovery.transactionHash,
+      verificationQueued: false,
+      proofDeliveryState: "authorization_complete",
+    };
   }
   const response = await input.client.getEncryptedRecord({
     organizationId: input.organizationId,
@@ -1381,6 +1395,7 @@ export async function recoverConfirmedPayrollVerification(input: {
     proofBundleId: recovery.proofBundleId,
     transactionHash: recovery.transactionHash,
     verificationQueued: true,
+    proofDeliveryState: "verification_queued",
   };
 }
 

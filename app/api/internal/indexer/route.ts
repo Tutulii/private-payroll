@@ -2,6 +2,7 @@ import { RpcProvider } from "starknet";
 import { recoverApprovalSubmissionsFromSealEvents } from "@/lib/persistence/settlement-repository";
 import { processEventIndexBatch } from "@/lib/server/chain-indexer";
 import { authorizeInternalWorker } from "@/lib/server/internal-auth";
+import { PAYO_RECOVERY_EVENT_SELECTORS } from "@/lib/starknet/payo-event-selectors";
 
 export const runtime = "nodejs";
 
@@ -28,6 +29,8 @@ export async function POST(request: Request) {
   }
   const rpcUrl = process.env.STARKNET_RPC_URL ?? process.env.NEXT_PUBLIC_STARKNET_RPC_URL;
   const contractAddress = process.env.PAYO_INDEX_CONTRACT_ADDRESS;
+  const bookSealAddress = process.env.PAYO_VESTING_BOOK_SEAL_ADDRESS
+    ?? process.env.NEXT_PUBLIC_PAYO_VESTING_BOOK_SEAL_ADDRESS;
   const fromBlock = configuredBlockNumber(process.env.PAYO_INDEX_FROM_BLOCK);
   const batchSize = configuredNumber(process.env.PAYO_INDEX_BATCH_SIZE, 100, 1, 100);
   const finalityLag = configuredNumber(process.env.PAYO_INDEX_FINALITY_LAG, 2, 0, 10_000);
@@ -65,11 +68,15 @@ export async function POST(request: Request) {
       finalityLag,
       prefetchConcurrency,
       maxReorgDepth,
-      address: contractAddress,
+      addresses: bookSealAddress
+        ? [contractAddress, bookSealAddress]
+        : [contractAddress],
+      keys: [[...PAYO_RECOVERY_EVENT_SELECTORS]],
     });
     const recovery = await recoverApprovalSubmissionsFromSealEvents({
       chainId,
       sealAddress: contractAddress,
+      ...(bookSealAddress ? { bookSealAddress } : {}),
     });
     return Response.json({
       ...result,

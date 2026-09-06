@@ -621,7 +621,9 @@ async function verifyCanary(plan, input) {
       BigInt(index),
     ]));
   }
-  if (canaryIndex < 0 || accumulator !== BigInt(book[2] ?? 0)) {
+  // PayrollBookRecord has ten scalar fields and six u256 totals before its root.
+  const accumulatorRoot = BigInt(book[22] ?? 0);
+  if (canaryIndex < 0 || accumulator !== accumulatorRoot) {
     throw new Error("The canary entry is absent or the complete Mainnet book accumulator is invalid.");
   }
   return {

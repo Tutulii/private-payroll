@@ -34,8 +34,10 @@ import {
 } from "@/lib/client/proof-package-files";
 import {
   obligationScheduleForRecord,
+  loadConfirmedPayrollScheduleRuns,
   loadEncryptedPayAgreements,
   scheduleEncryptedVestingRelease,
+  synchronizeConfirmedRecurringAgreements,
   type PayAgreementDirectoryRecord,
 } from "@/lib/client/agreement-directory";
 import {
@@ -213,8 +215,17 @@ export default function TeamPage() {
           if (current()) setPayees(loaded);
         } },
         { label: "Agreements", run: async () => {
-          const loaded = await loadEncryptedPayAgreements({ client, organizationId, principal });
-          if (current()) setAgreements(loaded);
+          const [loaded, confirmedRuns] = await Promise.all([
+            loadEncryptedPayAgreements({ client, organizationId, principal }),
+            loadConfirmedPayrollScheduleRuns({ client, organizationId, principal }),
+          ]);
+          const synchronized = await synchronizeConfirmedRecurringAgreements({
+            client,
+            agreements: loaded,
+            runs: confirmedRuns,
+            principal,
+          });
+          if (current()) setAgreements(synchronized);
         } },
         { label: "Principals", run: async () => {
           const loaded = await loadEncryptedPrincipals({ client, organizationId, principal });

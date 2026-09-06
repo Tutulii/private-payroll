@@ -82,6 +82,7 @@ import {
   recordProofScheduleCommitment,
   loadEncryptedPayAgreements,
   lockedPayrollScheduleCommitments,
+  payrollScheduleReferenceFromManifestLine,
   synchronizeConfirmedRecurringAgreements,
   type PayAgreementDirectoryRecord,
 } from "@/lib/client/agreement-directory";
@@ -742,10 +743,7 @@ export default function PayrollPage() {
             || line.earningsAtomic.some((amount) => typeof amount !== "string" || !/^\d+$/.test(amount))
             || line.deductionsAtomic.some((amount) => typeof amount !== "string" || !/^\d+$/.test(amount))
           ) throw new Error("An encrypted payroll line is missing its schedule binding.");
-          const paidAtomic = line.earningsAtomic.reduce((total, amount) => total + BigInt(amount as string), 0n)
-            - line.deductionsAtomic.reduce((total, amount) => total + BigInt(amount as string), 0n);
-          if (paidAtomic <= 0n) throw new Error("An encrypted payroll line has no positive settlement value.");
-          return { agreementId: line.agreementId, scheduleCommitment: line.scheduleCommitment, paidAtomic: paidAtomic.toString() };
+          return payrollScheduleReferenceFromManifestLine(line);
         });
         return {
           id: run.id,
@@ -987,11 +985,12 @@ export default function PayrollPage() {
       const detail = (event as CustomEvent<{
         runId?: string;
         verificationQueued?: boolean;
+        proofDeliveryState?: "authorization_complete" | "verification_queued" | "verification_pending";
         proofDeliveryWarning?: string;
       }>).detail;
       if (!detail?.runId || recoverableSubmission?.runId !== detail.runId) return;
       setRecoverableSubmission(null);
-      setPayrollStage(detail.verificationQueued === false ? "recorded" : "queued");
+      setPayrollStage(detail.proofDeliveryState === "verification_pending" ? "recorded" : "queued");
       setProofDeliveryNotice(detail.proofDeliveryWarning ?? "");
       setFormError("");
       setShowManualHashRecovery(false);

@@ -11,12 +11,15 @@ export async function GET(request: Request, context: RunRecoveryContext) {
     const { id } = await context.params;
     const chainId = process.env.PAYO_INDEX_CHAIN_ID ?? "SN_MAIN";
     const sealAddress = process.env.PAYO_INDEX_CONTRACT_ADDRESS ?? process.env.PAYO_SEAL_ADDRESS;
+    const bookSealAddress = process.env.PAYO_VESTING_BOOK_SEAL_ADDRESS
+      ?? process.env.NEXT_PUBLIC_PAYO_VESTING_BOOK_SEAL_ADDRESS;
     if (!sealAddress) throw new Error("PAYO seal recovery is not configured.");
     return Response.json({
       recovery: await getSealedRunRecoveryEvidence({
         runId: uuidV7Schema.parse(id),
         chainId,
         sealAddress,
+        ...(bookSealAddress ? { bookSealAddress } : {}),
         principal,
       }),
     });

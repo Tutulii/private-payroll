@@ -8,6 +8,7 @@ import {
   agreementProofScheduleCommitment,
   agreementScheduleCommitment,
   lockedPayrollScheduleCommitments,
+  payrollScheduleReferenceFromManifestLine,
   scheduleEncryptedVestingRelease,
   storeEncryptedAdvancedAgreement,
   storeEncryptedRecurringAgreement,
@@ -18,6 +19,20 @@ const organizationId = "018f1000-0000-7000-8000-000000000001";
 const now = new Date("2026-08-24T12:00:00.000Z");
 
 describe("encrypted pay agreements", () => {
+  it("advances taxed vesting by gross entitlement while preserving the net transfer", () => {
+    const reference = payrollScheduleReferenceFromManifestLine({
+      agreementId: "vesting-agreement",
+      scheduleCommitment: `0x${"12".repeat(32)}`,
+      earningsAtomic: ["4620"],
+      deductionsAtomic: ["1016"],
+    });
+    expect(reference).toEqual({
+      agreementId: "vesting-agreement",
+      scheduleCommitment: `0x${"12".repeat(32)}`,
+      paidAtomic: "4620",
+    });
+  });
+
   it("stores exact atomic compensation and commitment salts only as ciphertext", async () => {
     const principal = generateVaultPrincipal("admin:test");
     const payee = prepareEncryptedPayee({

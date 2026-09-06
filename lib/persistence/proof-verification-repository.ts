@@ -19,10 +19,12 @@ import { requireOrganizationRole } from "./repository";
 import {
   auditEvents,
   organizationMembers,
+  payrollAuthorizationJobs,
   payrollRuns,
   proofBundles,
   proofVerificationJobs,
   settlements,
+  vestingAuthorizationJobs,
 } from "./schema";
 
 function assertCommonInputs(
@@ -114,6 +116,25 @@ export async function enqueueProofVerification(input: {
         "Proof bundle does not match the settlement workflow subject.",
         "PROOF_SETTLEMENT_WORKFLOW_MISMATCH",
       );
+    }
+    if (settlement.workflowType === "payroll") {
+      const [bookAuthorization] = await transaction
+        .select({ id: vestingAuthorizationJobs.id })
+        .from(vestingAuthorizationJobs)
+        .where(eq(vestingAuthorizationJobs.payrollProofBundleId, proofBundle.id))
+        .limit(1);
+      const [stagedAuthorization] = bookAuthorization ? [] : await transaction
+        .select({ id: payrollAuthorizationJobs.id })
+        .from(payrollAuthorizationJobs)
+        .where(eq(payrollAuthorizationJobs.payrollProofBundleId, proofBundle.id))
+        .limit(1);
+      if (bookAuthorization || stagedAuthorization) {
+        throw new ApiError(
+          409,
+          "This payroll proof already uses its proof-first authorization path.",
+          "PROOF_DELIVERY_ALREADY_AUTHORIZED",
+        );
+      }
     }
     if (!["locally_verified", "onchain_verified"].includes(proofBundle.verificationState)) {
       throw new ApiError(409, "Proof bundle has not passed local verification.", "PROOF_NOT_LOCALLY_VERIFIED");
