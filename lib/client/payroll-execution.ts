@@ -1269,8 +1269,8 @@ export async function executeProofBoundPayroll(
 
   const now = input.now?.() ?? new Date();
   const nowUnix = BigInt(Math.floor(now.getTime() / 1_000));
-  const validityStart = nowUnix - 30n;
-  const validityExpiry = validityStart + 3_600n;
+  const requestedValidityStart = nowUnix - 30n;
+  const requestedValidityExpiry = requestedValidityStart + 3_600n;
   const snapshotPlan = input.snapshotPlan;
   const runId = snapshotPlan?.runId ?? generateUuidV7(now.getTime());
   const cycleId = snapshotPlan?.cycleId ?? derivePayrollCycleId(input.organizationId, input.obligations);
@@ -1361,8 +1361,8 @@ export async function executeProofBoundPayroll(
   let snapshots: FxSnapshot[];
   let lines: PayrollIntegrityLineInput[];
   let buildInput: SerializedPayrollIntegrityBuildRequest;
-  let proofValidityStart = validityStart;
-  let proofValidityExpiry = validityExpiry;
+  let proofValidityStart = requestedValidityStart;
+  let proofValidityExpiry = requestedValidityExpiry;
   if (resumableRun) {
     buildInput = resumableRun.buildInput;
     proofValidityStart = BigInt(buildInput.validityStart);
@@ -1380,6 +1380,18 @@ export async function executeProofBoundPayroll(
       medianTokens: medianOnlyTokens,
     });
     snapshots = fxCatalog.snapshots;
+    const latestFxObservation = BigInt(fxCatalogPublicationWindow(snapshots).observedAt);
+    // The FX catalog is fetched after the browser starts this operation. A
+    // fresh on-chain observation may therefore be newer than the preliminary
+    // clock value. Bind the proof at or after that authenticated observation;
+    // otherwise Noir correctly rejects it as "FX snapshot is from the future".
+    proofValidityStart = latestFxObservation > requestedValidityStart
+      ? latestFxObservation
+      : requestedValidityStart;
+    proofValidityExpiry = proofValidityStart + 3_600n;
+    if (snapshotPlan && proofValidityStart > BigInt(snapshotPlan.snapshot.claimEndsAt)) {
+      throw new Error("The protected payday expired before its FX catalog could be bound.");
+    }
     const advancedScheduleCommitments = new Map<string, `0x${string}`>(await Promise.all(
       input.obligations.flatMap(({ agreement }) => agreement.agreement.agreementVersion === "payo-agreement-v2"
         ? [advancedPlanProofCommitment(agreement.agreement).then((commitment) => [agreement.agreement.id, commitment] as const)]
@@ -1388,7 +1400,7 @@ export async function executeProofBoundPayroll(
     lines = buildPayrollExecutionLines({
       organizationId: input.organizationId,
       obligations: input.obligations,
-      validityStart,
+      validityStart: proofValidityStart,
       advancedScheduleCommitments,
     });
     buildInput = serializePayrollIntegrityBuildRequest({
@@ -1397,8 +1409,8 @@ export async function executeProofBoundPayroll(
       organizationSecret: input.organizationSecret,
       cycleId,
       revision,
-      validityStart,
-      validityExpiry,
+      validityStart: proofValidityStart,
+      validityExpiry: proofValidityExpiry,
       policies,
       fxSnapshots: snapshots,
       lines,
@@ -1672,7 +1684,7 @@ export async function executeProofBoundPayroll(
     revision,
     dueAt: snapshotPlan
       ? new Date(Number(snapshotPlan.snapshot.dueAt) * 1_000).toISOString()
-      : new Date(Number(validityStart) * 1_000).toISOString(),
+      : new Date(Number(proofValidityStart) * 1_000).toISOString(),
     lines: privateLines,
     lineRecordMetadata: input.obligations.map(({ agreement, payee }) => ({
       agreementId: agreement.agreement.id,

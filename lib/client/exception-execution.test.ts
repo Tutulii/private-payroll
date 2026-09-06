@@ -29,6 +29,8 @@ const agreementId = "0198f300-0000-7000-8000-000000000003";
 const claimId = "0198f300-0000-7000-8000-000000000004";
 const now = new Date("2026-08-26T04:00:00.000Z");
 const nowUnix = BigInt(Math.floor(now.getTime() / 1_000));
+const sourceValidityStart = nowUnix - 3_600n;
+const sourceObservedAt = new Date(Number(sourceValidityStart) * 1_000);
 
 function sourceRequest() {
   return serializePayrollIntegrityBuildRequest({
@@ -37,7 +39,7 @@ function sourceRequest() {
     organizationSecret: `0x${"31".repeat(32)}`,
     cycleId: "claim-execution-source",
     revision: 1,
-    validityStart: nowUnix - 3_600n,
+    validityStart: sourceValidityStart,
     validityExpiry: nowUnix - 3_000n,
     policies: [PAYO_NET_INVOICE_POLICY],
     fxSnapshots: [buildFxSnapshot({
@@ -48,8 +50,16 @@ function sourceRequest() {
       maximumAgeSeconds: 300,
       minimumSources: 3,
       aggregatedSourceCount: 5,
-      quotes: [{ source: "pragma-usdc", priceAtomic: "1000000", observedAt: now.toISOString() }],
-      now,
+      // This models the FX observation that was actually bound when the
+      // historical payroll proof was produced. A quote observed at `now`
+      // cannot validly belong to a proof whose validity window began an hour
+      // earlier.
+      quotes: [{
+        source: "pragma-usdc",
+        priceAtomic: "1000000",
+        observedAt: sourceObservedAt.toISOString(),
+      }],
+      now: sourceObservedAt,
     })],
     lines: [{
       agreementId,

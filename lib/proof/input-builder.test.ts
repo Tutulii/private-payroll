@@ -130,5 +130,27 @@ describe("production PayrollIntegrity input builder", () => {
       fxSnapshots: [snapshot("USDC", "1000000")],
       lines: [{ ...base, classification: { declared: 1, score: 2, employeeThreshold: 5 } }],
     })).rejects.toThrow("classification facts");
+
+    const temporalInput = {
+      chainId: "0x1",
+      sealAddress: "0x12345",
+      organizationSecret: `0x${"55".repeat(32)}`,
+      revision: 1,
+      policies: [PAYO_NET_INVOICE_POLICY],
+      fxSnapshots: [snapshot("USDC", "1000000")],
+      lines: [base],
+    };
+    await expect(buildPayrollIntegrityInputs({
+      ...temporalInput,
+      cycleId: "future-fx-builder",
+      validityStart: 999n,
+      validityExpiry: 1_100n,
+    })).rejects.toThrow("FX snapshot is from the future");
+    await expect(buildPayrollIntegrityInputs({
+      ...temporalInput,
+      cycleId: "stale-fx-builder",
+      validityStart: 1_031n,
+      validityExpiry: 1_100n,
+    })).rejects.toThrow("FX snapshot is stale");
   });
 });

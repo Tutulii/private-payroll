@@ -508,6 +508,30 @@ describe("proof-bound payroll browser orchestration", () => {
     expect(input.submitPayroll).not.toHaveBeenCalled();
   });
 
+  it("starts the proof window at or after the authenticated FX observation", async () => {
+    const mockClient = client();
+    const input = await executionInput(mockClient);
+    const proveAfterFx = vi.fn(async (request: Parameters<typeof prove>[0]) => {
+      const encrypted = decryptVaultRecord<EncryptedPayrollWitness>(
+        request.encryptedWitness,
+        request.principal,
+      );
+      if (!("buildInput" in encrypted)) throw new Error("expected ordinary payroll witness");
+      const latestObservation = encrypted.buildInput.fxSnapshots.reduce(
+        (latest, entry) => {
+          const observedAt = BigInt(Math.floor(new Date(entry.observedAt).getTime() / 1_000));
+          return observedAt > latest ? observedAt : latest;
+        },
+        0n,
+      );
+      expect(BigInt(encrypted.buildInput.validityStart)).toBeGreaterThanOrEqual(latestObservation);
+      return prove(request);
+    });
+
+    await executeProofBoundPayroll({ ...input, prove: proveAfterFx });
+    expect(proveAfterFx).toHaveBeenCalledTimes(1);
+  });
+
   it("pre-schedules the exact agreement root later produced by the proof witness", async () => {
     const mockClient = client();
     const input = await executionInput(mockClient);

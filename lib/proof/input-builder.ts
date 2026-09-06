@@ -634,6 +634,16 @@ export async function buildPayrollIntegrityInputs(input: {
   }));
   const policyCatalog = committer.buildProofCatalog(policyDetails.map(({ commitment }) => commitment));
   const { details: fxDetails, catalog: fxCatalog } = buildFxCatalog(input.fxSnapshots, committer);
+  for (const { circuit } of fxDetails) {
+    const observedAt = BigInt(circuit.observedAt);
+    const maximumAge = BigInt(circuit.maximumAgeSeconds);
+    if (observedAt > input.validityStart) {
+      throw new Error("FX snapshot is from the future relative to the proof window.");
+    }
+    if (input.validityStart - observedAt > maximumAge) {
+      throw new Error("FX snapshot is stale relative to the proof window.");
+    }
+  }
 
   const agreementPrepared = prepareAgreementDetails({
     lines: input.lines,
