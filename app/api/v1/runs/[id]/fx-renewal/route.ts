@@ -12,12 +12,15 @@ import { apiFailure, readJson } from "@/lib/server/http";
 import {
   getPayoDeploymentConfig,
   getPayoRegistryConfig,
+  getPayoVestingBookConfig,
 } from "@/lib/server/payo-deployment";
 import {
+  assertInvokedPayrollBookFxAnchor,
   assertInvokedPayrollFxAnchor,
   readPayrollRunAnchor,
 } from "@/lib/server/payroll-run-anchor";
 import { readProofSealState } from "@/lib/server/proof-relayer";
+import { readVestingAuthorizationChainState } from "@/lib/server/vesting-authorization-relayer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -72,18 +75,33 @@ export async function POST(request: Request, context: FxRenewalContext) {
     }
     const limbs = rootLimbs(evidence.authorizationNullifier);
     const sealValidation = workflowType === "employer_statement"
-      ? readPayrollRunAnchor({
-          callContract: (call, blockIdentifier) =>
-            provider.callContract(call, blockIdentifier),
-        }, {
-          sealAddress: deployment.sealAddress,
-          runNullifierHigh: limbs.high,
-          runNullifierLow: limbs.low,
-          blockNumber,
-        }).then((anchor) => {
-          try {
-            assertInvokedPayrollFxAnchor(anchor, evidence.catalogRoot);
-          } catch {
+      ? Promise.resolve().then(async () => {
+          const vestingBook = getPayoVestingBookConfig();
+          const validations = await Promise.allSettled([
+            readPayrollRunAnchor({
+              callContract: (call, blockIdentifier) =>
+                provider.callContract(call, blockIdentifier),
+            }, {
+              sealAddress: deployment.sealAddress,
+              runNullifierHigh: limbs.high,
+              runNullifierLow: limbs.low,
+              blockNumber,
+            }).then((anchor) => assertInvokedPayrollFxAnchor(anchor, evidence.catalogRoot)),
+            readVestingAuthorizationChainState({
+              getBlockNumber: async () => blockNumber,
+              callContract: (call, blockIdentifier) =>
+                provider.callContract(call, blockIdentifier),
+            }, {
+              sealAddress: vestingBook.sealAddress,
+              runNullifierHigh: limbs.high,
+              runNullifierLow: limbs.low,
+            }).then((anchor) => assertInvokedPayrollBookFxAnchor(
+              anchor,
+              evidence.catalogRoot,
+              evidence.runNullifier,
+            )),
+          ]);
+          if (validations.every((result) => result.status === "rejected")) {
             throw new ApiError(
               409,
               "The historical payroll is not in the on-chain state required for employer evidence.",

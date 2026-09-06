@@ -123,3 +123,96 @@ export function assertInvokedPayrollFxAnchor(
     throw new Error("The protected payroll run anchor is bound to a different FX root.");
   }
 }
+
+type PayrollBookRunAnchor = {
+  exists: boolean;
+  status: number;
+  payrollState: readonly string[];
+  transitionState: readonly string[];
+  verifiedMask: number;
+};
+
+function exactBytes32(value: string, label: string): bigint {
+  try {
+    const parsed = BigInt(value);
+    if (parsed < 0n || parsed >= 1n << 256n) throw new Error();
+    return parsed;
+  } catch {
+    throw new Error(`${label} is outside bytes32.`);
+  }
+}
+
+function joinedStateCommitment(
+  fields: readonly string[],
+  highIndex: number,
+  label: string,
+): bigint {
+  try {
+    const high = BigInt(fields[highIndex]);
+    const low = BigInt(fields[highIndex + 1]);
+    if (high < 0n || high >= 1n << 128n || low < 0n || low >= 1n << 128n) {
+      throw new Error();
+    }
+    return (high << 128n) | low;
+  } catch {
+    throw new Error(`${label} has invalid u128 limbs.`);
+  }
+}
+
+function stateInteger(value: string | undefined, label: string): bigint {
+  try {
+    const parsed = BigInt(value ?? "");
+    if (parsed < 0n) throw new Error();
+    return parsed;
+  } catch {
+    throw new Error(`${label} is not a non-negative integer.`);
+  }
+}
+
+/**
+ * Accepts the current universal payroll-book finalization as the canonical
+ * equivalent of the legacy exception-seal run anchor. The contract can reach
+ * INVOKED only after all four proof shards are verified and the exact private
+ * payment consumes the authorization.
+ */
+export function assertInvokedPayrollBookFxAnchor(
+  anchor: PayrollBookRunAnchor,
+  catalogRoot: string,
+  runNullifier: string,
+): void {
+  if (!anchor.exists || anchor.status !== 3) {
+    throw new Error("The universal payroll-book authorization is not invoked on-chain.");
+  }
+  if (anchor.verifiedMask !== 15) {
+    throw new Error("The universal payroll-book authorization is missing proof shards.");
+  }
+  if (anchor.payrollState.length !== 14 || anchor.transitionState.length !== 55) {
+    throw new Error("The universal payroll-book authorization returned malformed state.");
+  }
+  if (
+    stateInteger(anchor.payrollState[0], "Payroll-book payroll proof version") !== 2n
+    || stateInteger(anchor.payrollState[1], "Payroll-book payroll schema version") !== 1n
+    || stateInteger(anchor.transitionState[0], "Payroll-book transition proof version") !== 3n
+    || stateInteger(anchor.transitionState[1], "Payroll-book transition schema version") !== 1n
+  ) {
+    throw new Error("The universal payroll-book authorization has an unsupported proof version.");
+  }
+  const entryKind = stateInteger(anchor.transitionState[2], "Payroll-book entry kind");
+  if (entryKind > 2n) {
+    throw new Error("The universal payroll-book entry is not a payroll finalization.");
+  }
+  const expectedFx = exactBytes32(catalogRoot, "The historical payroll FX root");
+  const expectedRun = exactBytes32(runNullifier, "The historical payroll run nullifier");
+  if (
+    joinedStateCommitment(anchor.payrollState, 8, "Payroll-book payroll FX root") !== expectedFx
+    || joinedStateCommitment(anchor.transitionState, 9, "Payroll-book transition FX root") !== expectedFx
+  ) {
+    throw new Error("The universal payroll-book authorization is bound to a different FX root.");
+  }
+  if (
+    joinedStateCommitment(anchor.payrollState, 10, "Payroll-book payroll run nullifier") !== expectedRun
+    || joinedStateCommitment(anchor.transitionState, 11, "Payroll-book transition run nullifier") !== expectedRun
+  ) {
+    throw new Error("The universal payroll-book authorization is bound to a different payroll run.");
+  }
+}
