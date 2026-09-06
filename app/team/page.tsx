@@ -215,10 +215,15 @@ export default function TeamPage() {
           if (current()) setPayees(loaded);
         } },
         { label: "Agreements", run: async () => {
-          const [loaded, confirmedRuns] = await Promise.all([
-            loadEncryptedPayAgreements({ client, organizationId, principal }),
-            loadConfirmedPayrollScheduleRuns({ client, organizationId, principal }),
-          ]);
+          const loaded = await loadEncryptedPayAgreements({ client, organizationId, principal });
+          // Keep the usable directory visible even if one historical confirmed
+          // manifest cannot be opened for post-finality reconciliation.
+          if (current()) setAgreements(loaded);
+          const confirmedRuns = await loadConfirmedPayrollScheduleRuns({
+            client,
+            organizationId,
+            principal,
+          });
           const synchronized = await synchronizeConfirmedRecurringAgreements({
             client,
             agreements: loaded,

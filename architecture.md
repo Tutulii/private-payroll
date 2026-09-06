@@ -428,15 +428,23 @@ and the VestingBook seal is
 `0x5208cc07cb4153235ab5c6ecd1936ee77f9be7a2ea09f6cc69518a6362493f`.
 Deployment class hashes, immutable dependency wiring, the active proof-version-3
 profile, the real ordered proof pair and reversed-shard rejection were read back in
-`evidence/vesting-tax-mainnet.json`. A deliberately small live state-changing canary
-remains a separate release gate.
+`evidence/vesting-tax-mainnet.json`. The approved live canary transaction
+`0x06aea439656addfd17b315879696f0ace3880d9878ec01221033ee367d0deaf1`
+succeeded at block `14461163`. Read-back confirmed its exact next state, consumed
+release nullifier, entry at index 2 of 3 and recomputed complete period accumulator.
+The compact verifier input is retained in
+`evidence/vesting-tax-mainnet-canary-2026-09-06.json`.
 
 The production web and prover machines both pin that exact seal in public build-time
 and private server runtime configuration. The served payroll bundle exposes the same
 address and fails closed for advanced runs when it is absent; the protected prover
 route remains enabled and authentication-gated. Release image identifiers, health
 checks and the green source CI binding are recorded in
-`evidence/vesting-tax-hosted-rollout.json`.
+`evidence/vesting-tax-hosted-rollout.json`. The original Ready callback required
+manual transaction-hash recovery after the live payment. Commit `ffdd3a1` deploys
+exact dual-seal event recovery, completed-v3 authorization recognition and idempotent
+encrypted vesting-state advancement; the recovery path is regression-tested but has
+not consumed funds for a second live canary.
 
 ### Complete private compliance book
 

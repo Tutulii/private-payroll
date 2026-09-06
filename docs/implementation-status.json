@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-09-05",
+  "updatedAt": "2026-09-07",
   "scoring": {
     "complete": 1,
     "partial": 0.5,
@@ -399,7 +399,7 @@
       "id": "P3-04",
       "phase": 3,
       "requirement": "Batch, recurring, checkpoint stream, milestone, and private vesting plans",
-      "status": "partial",
+      "status": "complete",
       "evidence": [
         "app/team/page.tsx",
         "app/payroll/page.tsx",
@@ -442,7 +442,12 @@
         "scripts/payo-vesting-book-mainnet.mjs",
         "evidence/vesting-tax-mainnet-plan.json",
         "evidence/vesting-tax-mainnet.json",
-        "evidence/vesting-tax-hosted-rollout.json"
+        "evidence/vesting-tax-hosted-rollout.json",
+        "evidence/vesting-tax-mainnet-canary-2026-09-06.json",
+        "lib/client/agreement-directory.ts",
+        "lib/client/confirmed-payroll-recovery.ts",
+        "lib/server/chain-indexer.ts",
+        "lib/starknet/payo-event-selectors.ts"
       ],
       "tests": [
         "lib/domain/obligation-schedule.test.ts",
@@ -466,7 +471,11 @@
         "standalone Devnet real-proof verification plus state advance, exact accumulator, changed-proof, replay and stale-genesis rejection",
         "combined official STRK20 SDK private payment plus atomic universal-book append, exact balance delta and replay rejection",
         "read-only Mainnet dependency checks, deterministic topology, undeployed-state read-back, and fee simulation without mutation",
-        "Mainnet three-class declaration, atomic deployment, activation, exact class/wiring read-back, real ordered proof acceptance, and reversed-shard rejection at block 14392605"
+        "Mainnet three-class declaration, atomic deployment, activation, exact class/wiring read-back, real ordered proof acceptance, and reversed-shard rejection at block 14392605",
+        "Mainnet vesting USDC canary finalized transaction 0x06aea439656addfd17b315879696f0ace3880d9878ec01221033ee367d0deaf1 at block 14461163",
+        "Mainnet read-back confirmed consumed release nullifier, exact next state, entry index 2 of 3, and recomputed complete-book accumulator",
+        "17/17 focused agreement, confirmed-payroll recovery, and dual-seal indexer tests",
+        "Linux Chromium Phase 3 production-control regression after confirmed-manifest fallback fix"
       ]
     },
     {
@@ -612,7 +621,8 @@
         "evidence/phase3-devnet-fixtures/rendered-browser-ui-origin.json",
         "docs/VESTING_TAX_REPORTING_PLAN.md",
         "evidence/vesting-tax-mainnet.json",
-        "evidence/vesting-tax-hosted-rollout.json"
+        "evidence/vesting-tax-hosted-rollout.json",
+        "evidence/vesting-tax-mainnet-canary-2026-09-06.json"
       ],
       "tests": [
         "lib/client/proof-package-workflow.test.ts",
@@ -630,7 +640,9 @@
         "tests/browser/phase3-production-controls.spec.ts",
         "complete employer/tax book and worker statement reject omission, duplication, mutation, wrong key and cross-tenant evidence",
         "canonical W-2/P60/T4-style views reject exact-policy substitution and mutated evidence",
-        "Mainnet v3 payroll-book verifier, bundle, seal and active registry profile read back against the reviewed deployment plan"
+        "Mainnet v3 payroll-book verifier, bundle, seal and active registry profile read back against the reviewed deployment plan",
+        "Mainnet complete-book read-back verified all three ordered entries and the canary at index 2",
+        "worker-controlled statement and tax-reviewer encrypted book exercised against the live book; recipient files retained privately"
       ]
     },
     {
@@ -1067,7 +1079,12 @@
         "scripts/payo-vesting-book-mainnet.mjs",
         "evidence/vesting-tax-mainnet-plan.json",
         "evidence/vesting-tax-mainnet.json",
-        "evidence/vesting-tax-hosted-rollout.json"
+        "evidence/vesting-tax-hosted-rollout.json",
+        "evidence/vesting-tax-mainnet-canary-2026-09-06.json"
+      ],
+      "tests": [
+        "Mainnet vesting canary exact state transition and universal payroll-book append",
+        "post-finality agreement reconciliation advances gross vested entitlement exactly once"
       ]
     },
     {
@@ -1097,7 +1114,12 @@
         "lib/client/payroll-report-workflow.ts",
         "lib/disclosure/tax-evidence.ts",
         "evidence/vesting-tax-devnet.json",
-        "evidence/vesting-tax-hosted-rollout.json"
+        "evidence/vesting-tax-hosted-rollout.json",
+        "evidence/vesting-tax-mainnet.json",
+        "evidence/vesting-tax-mainnet-canary-2026-09-06.json"
+      ],
+      "tests": [
+        "live Mainnet book-bound worker statement and tax-reviewer disclosure demonstration"
       ]
     },
     {
@@ -1133,7 +1155,14 @@
         "lib/server/policy-owner-signer-client.ts",
         "lib/persistence/database.integration.test.ts",
         "contracts/tests/test_policy_account.cairo",
-        "docs/phase4-evidence.md"
+        "docs/phase4-evidence.md",
+        "lib/client/confirmed-payroll-recovery.ts",
+        "lib/server/chain-indexer.ts",
+        "lib/starknet/payo-event-selectors.ts"
+      ],
+      "tests": [
+        "missing Ready transaction hash recovered from the exact universal-book event",
+        "completed vesting_book_v3 authorization skips the incompatible legacy verifier queue"
       ]
     },
     {
@@ -1169,7 +1198,12 @@
         "scripts/verify-block5-private-exit-upstream.ts",
         "scripts/verify-pre-hackathon-release.mjs",
         "evidence/block5-private-exit-browser.json",
-        "evidence/block5-private-exit-upstream.json"
+        "evidence/block5-private-exit-upstream.json",
+        "evidence/vesting-tax-mainnet-canary-2026-09-06.json"
+      ],
+      "tests": [
+        "npm run vesting:mainnet:verify-canary independently rereads state, nullifier, ordered entries and accumulator",
+        "Linux Chromium Phase 3 production-control regression passes after recovery fallback"
       ]
     }
   ]

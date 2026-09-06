@@ -1,16 +1,19 @@
 # Pre-hackathon privacy, vesting and compliance plan
 
-Status: active implementation target. This plan extends the completed local/Devnet
-VestingBook work before its first Mainnet deployment. The existing Mainnet fee
-estimate and deterministic v3 addresses become stale if the circuit, verification
-key or contract artifacts change and must be regenerated before deployment.
+Status: evidence checkpoint updated 2026-09-07. The vesting, universal-book,
+worker-statement and private tax-reviewer scope has completed local, Devnet, hosted
+and Mainnet canary gates. The reviewed private-exit instance and autonomous-agent
+Mainnet canaries remain separate Phase 5 work. Any future contract artifact change
+still requires a regenerated deterministic plan and fresh simulation.
 
 ## 1. Universal, accountable private payroll book
 
-Status: **cleared locally/Devnet; Mainnet v3 topology deployed, activated and
-proof-verified on 2026-09-05; live book canary remains Block 6.**
-Evidence: `evidence/universal-payroll-book-private-devnet.json`, 25 focused
-TypeScript tests, 14 VestingBook Cairo lifecycle tests and 5 real generated-verifier
+Status: **complete for the defined scope. Mainnet v3 topology was deployed,
+activated and proof-verified on 2026-09-05; the live vesting/book canary passed on
+2026-09-06.** Evidence: `evidence/universal-payroll-book-private-devnet.json`,
+`evidence/vesting-tax-mainnet.json`,
+`evidence/vesting-tax-mainnet-canary-2026-09-06.json`, 25 focused TypeScript
+tests, 16 VestingBook Cairo lifecycle tests and 5 real generated-verifier
 composition tests.
 
 - Route every new ordinary, vesting, agent, claim and remediation settlement through
@@ -22,8 +25,10 @@ composition tests.
 
 ## 2. Worker-controlled statements
 
-Status: **cleared locally/browser on 2026-09-05; Mainnet live-book canary remains
-Block 6.** Evidence: `lib/crypto/reporting-identity.test.ts`,
+Status: **complete for the defined scope. Cleared locally/browser on 2026-09-05;
+a worker-controlled statement was generated and reopened against the verified live
+Mainnet book on 2026-09-06.** The recipient-encrypted output remains private.
+Evidence: `lib/crypto/reporting-identity.test.ts`,
 `lib/client/payroll-report-workflow.test.ts`,
 `lib/disclosure/payroll-book-report.test.ts`, and
 `evidence/phase3-devnet-fixtures/rendered-browser-ui-origin.json` (16 focused tests
@@ -38,8 +43,10 @@ plus the Linux Chromium production-control flow).
 
 ## 3. Familiar tax evidence and policies
 
-Status: **cleared locally/browser on 2026-09-05; Mainnet live-book export remains
-Block 6.** Evidence: `lib/disclosure/tax-evidence.test.ts`,
+Status: **complete for the defined scope. Cleared locally/browser on 2026-09-05;
+tax-reviewer disclosure was generated and opened against the verified live Mainnet
+book on 2026-09-06.** The reviewer-encrypted output remains private. Evidence:
+`lib/disclosure/tax-evidence.test.ts`,
 `lib/disclosure/payroll-book-report.test.ts`,
 `lib/client/payroll-report-workflow.test.ts`,
 `lib/policy/reference-packs.test.ts`, and
@@ -56,8 +63,9 @@ lint and production build).
 
 ## 4. External fact attestations
 
-Status: **cleared locally/browser/Devnet; Mainnet v3 topology deployed, activated and
-proof-verified on 2026-09-05; live canary remains Block 6.** Evidence:
+Status: **cleared locally/browser/Devnet; Mainnet v3 topology deployed, activated
+and proof-verified on 2026-09-05. The live vesting canary passed on 2026-09-06;
+no separate live issuer-credential canary is claimed.** Evidence:
 `evidence/vesting-tax-devnet.json`, `evidence/vesting-tax-mainnet.json`,
 `evidence/block4-external-attestation-browser.json`, 40 focused TypeScript tests,
 4 Noir tests, 2 catalog-registry Cairo tests, 2 real generated-verifier tests and
@@ -99,26 +107,36 @@ activated on Mainnet on 2026-09-05. The three class hashes, five-field immutable
 wiring and proof-version-3 registry profile match the reviewed plan. A read-only call
 through the deployed verifier and bundle accepted the real ordered proof pair and
 rejected reversed shards. Declarations, deployment and activation consumed exactly
-**227.876862512710972474 STRK**, leaving **278.089224220459129477 STRK** at the final
-read-back. Evidence: `evidence/vesting-tax-mainnet.json`. The deliberately small live
-vesting/book/export canary and the separate private-exit Mainnet instance/canary remain
-pending and require explicit approval.
+**227.876862512710972474 STRK**.
 
-The exact v3 VestingBook seal is also pinned into both the hosted PAYO web release and
+The approved vesting canary succeeded on 2026-09-06 in transaction
+`0x06aea439656addfd17b315879696f0ace3880d9878ec01221033ee367d0deaf1`
+at block `14461163`. Read-back confirmed the exact next state, consumed release
+nullifier, book entry index 2 of 3 and complete accumulator root
+`0x7939168b2e65494379eec64d0885403ee78d4a5170f365cd15d2234f120a0b1`.
+Evidence: `evidence/vesting-tax-mainnet.json` and
+`evidence/vesting-tax-mainnet-canary-2026-09-06.json`. The private-exit Mainnet
+instance/canary remains pending and requires separate explicit approval.
+
+The exact v3 VestingBook seal is pinned into both the hosted PAYO web release and
 self-hosted prover. Both Fly machines are started, both health endpoints pass, the
 served payroll bundle contains the reviewed Mainnet address and advanced payroll fails
-closed if that address is absent. The clean-checkout PAYO CI run for the deployed source
-commit passed. Evidence: `evidence/vesting-tax-hosted-rollout.json`. This verifies hosted
-wiring, not the still-pending state-changing canary.
+closed if that address is absent. Evidence:
+`evidence/vesting-tax-hosted-rollout.json`. The original live Ready callback required
+manual transaction-hash recovery. Commit `ffdd3a1` deploys exact dual-seal event
+recovery, completed-v3 authorization recognition and idempotent encrypted vesting-state
+advancement. Its focused recovery tests and Linux Phase 3 browser regression pass; a
+second paid run has not re-exercised that callback on Mainnet.
 
-- Freeze the final public statement before generating the Noir VK or Garaga verifier.
-- Pass positive and negative TypeScript, PostgreSQL, Noir, Cairo, real-proof
-  composition, Devnet and Linux Chromium gates.
-- Regenerate the deterministic Mainnet plan and fee estimate from fresh artifacts.
-- Obtain explicit user approval before every Mainnet declaration, deployment,
-  activation or canary transaction.
-- Deploy once, read back all class hashes and immutable wiring, then record tiny live
-  ordinary-payroll, vesting, book-export and private-exit evidence.
+- **Complete:** freeze the public statement and generate the matching Noir VK and
+  Garaga verifier.
+- **Complete:** pass positive and negative TypeScript, PostgreSQL, Noir, Cairo,
+  real-proof composition, Devnet and Linux Chromium gates.
+- **Complete:** deploy once and read back all class hashes, wiring and active profile.
+- **Complete:** record and independently verify the approved live vesting/book canary.
+- **Pending separately:** deploy and test the reviewed private-exit instance and
+  complete the autonomous-agent Mainnet canary, each with fresh simulation and
+  immediate explicit approval.
 
 Hackathon completion means a working, cryptographically bound demonstration of these
 flows. It does not mean government e-filing certification, exhaustive worldwide tax

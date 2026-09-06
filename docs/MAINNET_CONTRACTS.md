@@ -43,14 +43,20 @@ read-back, and `evidence/vesting-tax-hosted-rollout.json` records the web/prover
 
 | Component                     | Deterministic address                                               | Current state                       |
 | ----------------------------- | ------------------------------------------------------------------- | ----------------------------------- |
-| VestingTransition verifier v3 | `0x4b35d2d366848169ea4fb32d4fffda498b5251160da2e60fc53030a37d5551c` | Declared and deployed               |
+| VestingTransition verifier v3 | `0x4b35d2d366848169ea4fb32d4fffda498b5251160da2e60fc53030a37d5551c` | Declared, deployed and read back    |
 | VestingTransition bundle v3   | `0x1bc7517191802bf82ccfb60fa4f27f9306d6cfee9160b545d7dea662e8870a8` | Deployed; active profile `0/3`      |
-| VestingBook state/book seal   | `0x5208cc07cb4153235ab5c6ecd1936ee77f9be7a2ea09f6cc69518a6362493f`  | Deployed and wired to web + prover  |
+| VestingBook state/book seal   | `0x5208cc07cb4153235ab5c6ecd1936ee77f9be7a2ea09f6cc69518a6362493f`  | Deployed, wired and canary-verified |
 
 The conservative pre-deployment simulation estimated 600.472824438987809664 STRK;
 the recorded declaration/deployment/activation total was exactly
-227.876862512710972474 STRK. The tiny live vesting/book/tax-export canary remains
-pending and is not authorized merely by documenting this topology.
+227.876862512710972474 STRK. The explicitly approved live vesting canary succeeded on
+2026-09-06 in transaction
+`0x06aea439656addfd17b315879696f0ace3880d9878ec01221033ee367d0deaf1`
+at block `14461163`. Read-back confirmed its exact next state, consumed release
+nullifier, book entry index 2 of 3 and accumulator root
+`0x7939168b2e65494379eec64d0885403ee78d4a5170f365cd15d2234f120a0b1`.
+The full result is in `evidence/vesting-tax-mainnet.json`; the compact public input is
+in `evidence/vesting-tax-mainnet-canary-2026-09-06.json`.
 
 ## Planned private-exit instance
 
@@ -64,8 +70,7 @@ declaration.
 
 `evidence/private-exit-mainnet-plan.json` binds the upstream revision, source and
 artifact hashes, deterministic salt, empty constructor, exact ABI readback and
-read-only fee simulation. The latest 2026-09-05 estimate is
-0.083765866841584179 STRK. Together with the VestingBook estimate, the reviewed
-deployer is short 94.590503572659291892 STRK before fee drift and live canaries.
-Deployment, hosted configuration and a tiny Ready-wallet canary still require
-separate immediate user approval.
+read-only fee simulation. Its 2026-09-05 estimate was 0.083765866841584179 STRK and
+must be refreshed before any mutation. Vesting deployment and its live canary are
+complete; private-exit deployment, hosted configuration and a tiny Ready-wallet
+canary remain separate work requiring immediate user approval.
