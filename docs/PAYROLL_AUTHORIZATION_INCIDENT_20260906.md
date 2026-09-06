@@ -43,6 +43,16 @@ The payroll reported in `ghyte.jpg` is run
   all five relay steps, funding deferral without retry exhaustion, completed-job
   replay, and public status projection passed using an isolated database.
 - Type checking, ESLint and `npm run verify:status` passed.
+- Full CI passed for code commit `76840d30655f614d8b60bb877c0d96c2d80396a3`:
+  https://github.com/Tutulii/private-payroll/actions/runs/34025729601
+  This includes the complete unit suite, PostgreSQL, rendered browser controls,
+  evidence validation, production dependency audit and production build.
+- Fly release 78 started at 09:52:48 UTC on machine `d897352c37ed98`, image
+  `private-payroll:deployment-01M1V1Z01BZRSD1CQGFDN9DYGN`. The health check passed.
+  The new readiness endpoint returned the expected 401 without a session.
+- At 10:04:15 UTC the existing job was still pending at `payroll1`, with
+  `PROOF_RELAYER_FUNDING_REQUIRED` and its retry count held at 74. Its run remained
+  `proven`. This verifies the new funding pause against the actual incident job.
 - Actual funded recovery and a new Ready payment remain unverified. No Mainnet
   funding transaction or payment was submitted during this investigation.
 
