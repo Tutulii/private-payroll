@@ -85,7 +85,7 @@ async function payrollFixture(input: {
   });
 }
 
-async function fixture() {
+async function fixture(input: { sameRecipientAddress?: boolean } = {}) {
   const payrolls = [
     await payrollFixture({
       cycleId: "tax-book-run-1",
@@ -98,7 +98,7 @@ async function fixture() {
     await payrollFixture({
       cycleId: "tax-book-run-2",
       agreementId: "worker-b-agreement-1",
-      recipientAddress: "0x987",
+      recipientAddress: input.sameRecipientAddress ? "0x789" : "0x987",
       seed: "2",
       grossAtomic: "250",
       validityStart: PERIOD_START + 200n,
@@ -252,6 +252,26 @@ describe("viewing-identity worker income statements", () => {
     })).resolves.toMatchObject({
       payload: { reportType: "worker_income_statement", recipientReference: "worker-a" },
       verification: { verified: true, lineCount: 1 },
+    });
+  });
+
+  it("normalizes historical contributor labels for one proof-bound recipient address", async () => {
+    const { report, trustedSnapshot } = await fixture({ sameRecipientAddress: true });
+    const statement = await createWorkerIncomeStatement({
+      reportId: WORKER_REPORT_ID,
+      completeReport: report,
+      trustedSnapshot,
+      recipientAddress: "0x789",
+      recipientReference: "current-worker-name",
+    });
+
+    expect(statement.lines).toHaveLength(2);
+    expect(statement.lines.map(({ line }) => line.recipientReference))
+      .toEqual(["current-worker-name", "current-worker-name"]);
+    await expect(verifyWorkerIncomeStatement({ statement, trustedSnapshot })).resolves.toMatchObject({
+      verified: true,
+      lineCount: 2,
+      netTotals: { STRK: "350", USDC: "0" },
     });
   });
 

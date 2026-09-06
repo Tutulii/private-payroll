@@ -605,9 +605,14 @@ export async function createWorkerIncomeStatement(input: {
     const payrollLeaves = entry.lines.map(({ payrollLeaf }) => payrollLeaf);
     for (const line of entry.lines) {
       if (!sameField(line.source.recipientAddress, input.recipientAddress)) continue;
-      if (line.recipientReference !== input.recipientReference) {
-        throw new Error("Recipient reference is inconsistent across the complete payroll book.");
-      }
+      // The recipient address is proof-bound; the display reference is mutable
+      // directory metadata. A worker can legitimately appear under an old alias
+      // or a duplicate contributor record across historical payroll entries.
+      // Normalize that label for the extracted statement while retaining the
+      // proved address, source data, and Merkle openings from every matching line.
+      const normalizedLine = line.recipientReference === input.recipientReference
+        ? line
+        : { ...line, recipientReference: input.recipientReference };
       const agreementOpening = committer.buildProofFixedMerkleMembership(agreementLeaves, line.index);
       const payrollOpening = committer.buildProofFixedMerkleMembership(payrollLeaves, line.index);
       selected.push({
@@ -616,7 +621,7 @@ export async function createWorkerIncomeStatement(input: {
         entryCommitment: entry.entryCommitment,
         policyCatalog: entry.policyCatalog,
         policyCatalogRoot: entry.policyCatalogRoot,
-        line,
+        line: normalizedLine,
         agreementOpening: {
           leaf: agreementOpening.leaf,
           siblings: agreementOpening.siblings,
