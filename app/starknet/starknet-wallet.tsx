@@ -264,7 +264,10 @@ type StarknetWalletContextValue = {
     acknowledgedPublicDisclosure: boolean;
   }) => Promise<string>;
   assertPrivateActionAvailable: () => void;
-  reconcilePayrollTransaction: (transactionHash: string) => Promise<void>;
+  reconcilePayrollTransaction: (
+    transactionHash: string,
+    options?: { refreshBalance?: boolean },
+  ) => Promise<void>;
   scheduleObligationRoot: (agreementRoot: string) => Promise<ObligationRootScheduleResult>;
   registerObligationSnapshot: (input: {
     snapshot: ObligationSnapshotV2;
@@ -1270,7 +1273,10 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     [prepareProofBoundException],
   );
 
-  const reconcilePayrollTransaction = useCallback(async (transactionHash: string) => {
+  const reconcilePayrollTransaction = useCallback(async (
+    transactionHash: string,
+    options: { refreshBalance?: boolean } = {},
+  ) => {
     if (!/^0x[0-9a-fA-F]{1,64}$/.test(transactionHash)) {
       throw new Error("PAYO recovered an invalid Starknet transaction hash.");
     }
@@ -1294,7 +1300,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
           balanceRefreshed: false,
           balanceRefreshError: undefined,
         }));
-    if (walletAccount) {
+    if (walletAccount && options.refreshBalance !== false) {
       void refreshBalanceForAccount(walletAccount).then(() => {
         setTransaction((current) => current?.kind === "payroll" && current.hash === transactionHash
           ? { ...current, balanceRefreshed: true, balanceRefreshError: undefined }

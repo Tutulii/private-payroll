@@ -104,6 +104,7 @@ export function WageClaimsVNextCard() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [remediationFeedbackId, setRemediationFeedbackId] = useState("");
+  const [statementFeedbackId, setStatementFeedbackId] = useState("");
 
   const organization = vault.organizations.find(({ id }) =>
     id === vault.session?.organizationId);
@@ -494,6 +495,7 @@ export function WageClaimsVNextCard() {
   ) => {
     const actionId = "statement:" + plan.id;
     setActiveId(actionId);
+    setStatementFeedbackId(actionId);
     setError("");
     setSuccess("");
     try {
@@ -508,6 +510,20 @@ export function WageClaimsVNextCard() {
           "The connected Ready wallet does not own this protected payday.",
         );
       }
+      const confirmedRun = employerRuns.find((run) => run.id === plan.runId);
+      if (!confirmedRun?.transactionHash) {
+        throw new Error(
+          "Employer evidence requires the canonical confirmed payroll transaction.",
+        );
+      }
+      // Ready can broadcast a STRK20 payment while leaving its Wallet API
+      // promise unresolved. The backend-confirmed run is canonical evidence
+      // that the old payroll request is finished, so release only that payroll
+      // lock before asking Ready for the public evidence-registration call.
+      await starknet.reconcilePayrollTransaction(
+        confirmedRun.transactionHash,
+        { refreshBalance: false },
+      );
       setStage("Validating confirmed payroll and encrypted worker evidence");
       const durable = await prepareDurableEmployerStatementForPayroll({
         client: vault.client,
@@ -663,6 +679,9 @@ export function WageClaimsVNextCard() {
                       ? "Resume Ready registration"
                       : "Register payroll evidence"}
                 </button>}
+          {statementFeedbackId === actionId && stage && <p className="private-exception-feedback private-exception-feedback--progress" role="status"><LoaderCircle className="spin" size={14} /> {stage}</p>}
+          {statementFeedbackId === actionId && error && <p className="private-exception-feedback private-exception-feedback--error" role="alert"><ShieldAlert size={14} /> {error}</p>}
+          {statementFeedbackId === actionId && success && <p className="private-exception-feedback private-exception-feedback--success" role="status"><CheckCircle2 size={14} /> {success}</p>}
         </article>;
       })}
     </div>}
