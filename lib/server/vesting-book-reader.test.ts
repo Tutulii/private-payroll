@@ -40,13 +40,56 @@ function splitCommitment(value: string): [string, string] {
   ];
 }
 
+function bookRecord(input: {
+  exists?: string;
+  entryCount?: string;
+  contributorCount?: string;
+  disclosedEntryCount?: string;
+  undisclosedEntryCount?: string;
+  ordinaryEntryCount?: string;
+  vestingEntryCount?: string;
+  agentEntryCount?: string;
+  claimEntryCount?: string;
+  remediationEntryCount?: string;
+  strkGross?: string;
+  strkDeductions?: string;
+  strkNet?: string;
+  usdcGross?: string;
+  usdcDeductions?: string;
+  usdcNet?: string;
+  accumulatorRoot?: string;
+  updatedAt?: string;
+} = {}): string[] {
+  const u256 = (value = "0") => splitCommitment(value);
+  return [
+    input.exists ?? "1",
+    input.entryCount ?? "2",
+    input.contributorCount ?? "2",
+    input.disclosedEntryCount ?? "2",
+    input.undisclosedEntryCount ?? "0",
+    input.ordinaryEntryCount ?? "2",
+    input.vestingEntryCount ?? "0",
+    input.agentEntryCount ?? "0",
+    input.claimEntryCount ?? "0",
+    input.remediationEntryCount ?? "0",
+    ...u256(input.strkGross ?? "10"),
+    ...u256(input.strkDeductions ?? "3"),
+    ...u256(input.strkNet ?? "7"),
+    ...u256(input.usdcGross ?? "20"),
+    ...u256(input.usdcDeductions ?? "5"),
+    ...u256(input.usdcNet ?? "15"),
+    input.accumulatorRoot ?? "0",
+    input.updatedAt ?? "700",
+  ];
+}
+
 describe("PAYO trusted payroll-book reader", () => {
   it("pins every read to one block and reconstructs the exact accumulator", async () => {
     const expected = checkpoint();
     const callContract = vi.fn().mockImplementation((call, pinnedBlock) => {
       expect(pinnedBlock).toBe(blockNumber);
       if (call.entrypoint === "get_payroll_book") {
-        return Promise.resolve(["1", String(entries.length), expected.accumulatorRoot, "700"]);
+        return Promise.resolve(bookRecord({ accumulatorRoot: expected.accumulatorRoot }));
       }
       const index = Number(BigInt(call.calldata[3]));
       return Promise.resolve(splitCommitment(entries[index]));
@@ -75,7 +118,7 @@ describe("PAYO trusted payroll-book reader", () => {
 
   it("represents an absent zero-entry book with its deterministic initial root", async () => {
     const snapshot = await readTrustedPayrollBookSnapshot({
-      rpc: { callContract: vi.fn().mockResolvedValue(["0", "0", "0", "0"]) },
+      rpc: { callContract: vi.fn().mockResolvedValue(Array.from({ length: 24 }, () => "0")) },
       chainId,
       sealAddress,
       ownerAddress,
@@ -88,10 +131,14 @@ describe("PAYO trusted payroll-book reader", () => {
   });
 
   it.each([
-    [["2", "0", "0", "0"], "Cairo boolean"],
-    [["0", "1", "0", "0"], "absent payroll book"],
-    [["1", "0", "0", "1"], "cannot contain zero"],
-    [["1"], "expected 4"],
+    [bookRecord({ exists: "2" }), "Cairo boolean"],
+    [bookRecord({ exists: "0" }), "absent payroll book"],
+    [bookRecord({ entryCount: "0", disclosedEntryCount: "0", ordinaryEntryCount: "0" }), "cannot contain zero"],
+    [["1"], "expected 24"],
+    [bookRecord({ disclosedEntryCount: "1" }), "disclosure counters"],
+    [bookRecord({ ordinaryEntryCount: "1" }), "kind counters"],
+    [bookRecord({ strkNet: "8" }), "STRK totals"],
+    [bookRecord({ usdcDeductions: "6" }), "USDC totals"],
   ])("rejects malformed or contradictory book state", async (response, message) => {
     await expect(readTrustedPayrollBookSnapshot({
       rpc: { callContract: vi.fn().mockResolvedValue(response) },
@@ -106,7 +153,13 @@ describe("PAYO trusted payroll-book reader", () => {
 
   it("rejects an entry list that does not reconstruct the on-chain root", async () => {
     const callContract = vi.fn().mockImplementation((call) => call.entrypoint === "get_payroll_book"
-      ? Promise.resolve(["1", "1", `0x03${"33".repeat(31)}`, "700"])
+      ? Promise.resolve(bookRecord({
+        entryCount: "1",
+        contributorCount: "1",
+        disclosedEntryCount: "1",
+        ordinaryEntryCount: "1",
+        accumulatorRoot: `0x03${"33".repeat(31)}`,
+      }))
       : Promise.resolve(splitCommitment(entries[0])));
     await expect(readTrustedPayrollBookSnapshot({
       rpc: { callContract },
@@ -117,5 +170,37 @@ describe("PAYO trusted payroll-book reader", () => {
       periodEnd,
       blockNumber,
     })).rejects.toThrow("does not reconstruct");
+  });
+
+  it("decodes the deployed Mainnet ABI and reconstructs a real registered payroll book", async () => {
+    const mainnetSeal = "0x5208cc07cb4153235ab5c6ecd1936ee77f9be7a2ea09f6cc69518a6362493f";
+    const mainnetOwner = "0x0309eca7155f96dc41d77063a9f9948bb3b99858259022f205df79a986aacff4";
+    const mainnetPeriodStart = 1_767_225_600n;
+    const mainnetPeriodEnd = 1_798_761_600n;
+    const mainnetEntry = "0xd887df1d0ff3be13dc315fc6c38f9b9e062848f47a9bc76f911b6a93a5f06a61";
+    const mainnetRpcRoot = "0x19d891983281ad379261363dc5769b0c3967227ebefe61964dfa93e7d327bf3";
+    const mainnetRoot = "0x019d891983281ad379261363dc5769b0c3967227ebefe61964dfa93e7d327bf3";
+    const callContract = vi.fn().mockImplementation((call) => call.entrypoint === "get_payroll_book"
+      ? Promise.resolve([
+        "0x1", "0x1", "0x1", "0x1", "0x0", "0x1", "0x0", "0x0", "0x0", "0x0",
+        "0x0", "0x0", "0x0", "0x0", "0x0", "0x0",
+        "0xc350", "0x0", "0x2af8", "0x0", "0x9858", "0x0",
+        mainnetRpcRoot, "0x6a9cca18",
+      ])
+      : Promise.resolve(splitCommitment(mainnetEntry)));
+
+    const snapshot = await readTrustedPayrollBookSnapshot({
+      rpc: { callContract },
+      chainId,
+      sealAddress: mainnetSeal,
+      ownerAddress: mainnetOwner,
+      periodStart: mainnetPeriodStart,
+      periodEnd: mainnetPeriodEnd,
+      blockNumber: 14_437_900,
+      observedAt: new Date("2026-09-06T00:00:00.000Z"),
+    });
+
+    expect(snapshot.checkpoint).toMatchObject({ entryCount: 1, accumulatorRoot: mainnetRoot });
+    expect(snapshot.entries).toEqual([{ index: 0, entryCommitment: mainnetEntry }]);
   });
 });
