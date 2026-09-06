@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { decryptVaultRecord, generateVaultPrincipal } from "@/lib/crypto/vault";
 import {
+  assertContributorWalletAvailable,
+  contributorWalletAddressCommitment,
   deactivateEncryptedPayee,
   loadEncryptedPayees,
   prepareEncryptedPayee,
@@ -28,7 +30,13 @@ describe("encrypted payee directory", () => {
     expect(record).toMatchObject({ displayName: "Scout", principalKind: "agent", jurisdictionCode: "US-CA" });
     const request = storeEncryptedRecords.mock.calls[0][0];
     expect(request.records.map(({ recordType }: { recordType: string }) => recordType)).toEqual(["principal", "payee"]);
+    expect(request.contributorWalletConstraint).toEqual({
+      action: "claim",
+      payeeRecordId: record.id,
+      addressCommitment: contributorWalletAddressCommitment({ organizationId, recipientAddress: "0x123" }),
+    });
     expect(JSON.stringify(request.records)).not.toContain("Scout");
+    expect(JSON.stringify(request)).not.toContain(record.recipientAddress);
   });
 
   it("stores encrypted inactive payee and revoked principal revisions when removing a contributor", async () => {
@@ -57,9 +65,42 @@ describe("encrypted payee directory", () => {
     expect(result.directoryPrincipal).toMatchObject({ revision: 2, status: "revoked", updatedAt: removedAt.toISOString() });
     const request = storeEncryptedRecords.mock.calls[0][0];
     expect(request.records.map(({ recordType }: { recordType: string }) => recordType)).toEqual(["payee", "principal"]);
+    expect(request.contributorWalletConstraint).toEqual({
+      action: "release",
+      payeeRecordId: prepared.record.id,
+      addressCommitment: contributorWalletAddressCommitment({ organizationId, recipientAddress: "0x456" }),
+    });
     expect(decryptVaultRecord(request.records[0].envelope, principal)).toMatchObject({ status: "inactive", revision: 2 });
     expect(decryptVaultRecord(request.records[1].envelope, principal)).toMatchObject({ status: "revoked", revision: 2 });
     expect(JSON.stringify(request.records)).not.toContain("Maya");
+  });
+
+  it("rejects a second active contributor that uses the same normalized wallet", async () => {
+    const principal = generateVaultPrincipal("admin:unique-wallet");
+    const existing = prepareEncryptedPayee({
+      organizationId,
+      displayName: "Safik",
+      principalKind: "human",
+      recipientAddress: "0x123",
+      tokenPreference: "USDC",
+      jurisdictionCode: "US",
+      principal,
+      now,
+    }).record;
+    expect(() => assertContributorWalletAvailable("0x0123", [existing]))
+      .toThrow(/already assigned to Safik/i);
+    await expect(storeEncryptedPayee({
+      client: { storeEncryptedRecords: vi.fn() } as never,
+      organizationId,
+      displayName: "Rakib",
+      principalKind: "human",
+      recipientAddress: "0x0123",
+      tokenPreference: "USDC",
+      jurisdictionCode: "US",
+      principal,
+      existingPayees: [existing],
+      now,
+    })).rejects.toThrow(/one wallet/i);
   });
 
   it("decrypts only authenticated payee envelopes and binds storage identity", async () => {

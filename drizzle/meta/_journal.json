@@ -302,6 +302,13 @@
       "when": 1788530489117,
       "tag": "0042_huge_bulldozer",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1788732954467,
+      "tag": "0043_sticky_ultragirl",
+      "breakpoints": true
     }
   ]
 }

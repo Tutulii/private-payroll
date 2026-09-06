@@ -9,6 +9,7 @@ import {
   rewrapVaultRecord,
 } from "@/lib/crypto/vault";
 import { hashCanonicalJson } from "@/lib/crypto/digest";
+import { createPayoPublicIdentity } from "@/lib/client/proof-package-files";
 import { signCapability, type AgentCapability, type PaymentIntent } from "@/lib/domain/capability";
 import { generateUuidV7 } from "@/lib/domain/records";
 import {
@@ -67,6 +68,7 @@ import { registerDirectPrivacySubmissionRepositoryIntegrationTests } from "./dir
 import { registerDirectPrivacyReconciliationRepositoryIntegrationTests } from "./direct-privacy-reconciliation-repository.integration-helper";
 import { registerDirectPrivacyPayrollAuthorizationRepositoryIntegrationTests } from "./direct-privacy-payroll-authorization-repository.integration-helper";
 import { registerVestingAuthorizationRepositoryIntegrationTests } from "./vesting-authorization-repository.integration-helper";
+import { findWorkerPublicIdentity, publishWorkerPublicIdentity } from "./public-identity-repository";
 import {
   reserveCapabilityPayment,
   transitionCapabilityReservation,
@@ -166,6 +168,7 @@ import {
   agentAccessTokens,
   auditEvents,
   confirmationJobs,
+  contributorWalletClaims,
   disclosureGrants,
   exceptionAuthorizationJobs,
   employerStatements,
@@ -186,6 +189,7 @@ import {
   vaultKeyGrants,
   wageRemediations,
   workerClaims,
+  workerPublicIdentities,
 } from "./schema";
 
 process.env.PAYO_CAPABILITY_ENCRYPTION_KEY ??= `0x${"42".repeat(32)}`;
@@ -219,6 +223,7 @@ async function resetDatabase() {
       chain_cursors,
       idempotency_requests,
       ready_recovery_link_challenges,
+      worker_public_identities,
       ready_auth_sessions,
       ready_principal_links,
       ready_auth_challenges,
@@ -238,6 +243,7 @@ async function resetDatabase() {
       obligation_snapshot_plans,
       obligation_schedules,
       vault_key_grants,
+      contributor_wallet_claims,
       vault_records,
       organization_members,
       organizations
@@ -593,13 +599,13 @@ databaseSuite("PostgreSQL durability integration", () => {
     const recordId = generateUuidV7();
     const envelope = encryptVaultRecord(
       { salaryAtomic: "1000000000000000000" },
-      { schemaVersion: 1, organizationId, recordType: "payee", recordId, revision: 1 },
+      { schemaVersion: 1, organizationId, recordType: "principal", recordId, revision: 1 },
       [vaultPrincipal],
     );
     const first = await storeEncryptedVaultRevision({
       organizationId,
       recordId,
-      recordType: "payee",
+      recordType: "principal",
       revision: 1,
       envelope,
       principal: admin,
@@ -608,20 +614,20 @@ databaseSuite("PostgreSQL durability integration", () => {
     await expect(storeEncryptedVaultRevision({
       organizationId,
       recordId,
-      recordType: "payee",
+      recordType: "principal",
       revision: 1,
       envelope,
       principal: admin,
     })).resolves.toMatchObject({ replayed: true });
     const revisionThree = encryptVaultRecord(
       { salaryAtomic: "3" },
-      { schemaVersion: 1, organizationId, recordType: "payee", recordId, revision: 3 },
+      { schemaVersion: 1, organizationId, recordType: "principal", recordId, revision: 3 },
       [vaultPrincipal],
     );
     await expect(storeEncryptedVaultRevision({
       organizationId,
       recordId,
-      recordType: "payee",
+      recordType: "principal",
       revision: 3,
       envelope: revisionThree,
       principal: admin,
@@ -629,7 +635,7 @@ databaseSuite("PostgreSQL durability integration", () => {
     await expect(storeEncryptedVaultRevision({
       organizationId: otherOrganizationId,
       recordId,
-      recordType: "payee",
+      recordType: "principal",
       revision: 1,
       envelope,
       principal: admin,
@@ -657,6 +663,11 @@ databaseSuite("PostgreSQL durability integration", () => {
         { recordId: principalId, recordType: "principal" as const, revision: 1, envelope: principalEnvelope },
         { recordId: payeeId, recordType: "payee" as const, revision: 1, envelope: payeeEnvelope },
       ],
+      contributorWalletConstraint: {
+        action: "claim" as const,
+        payeeRecordId: payeeId,
+        addressCommitment: `0x${"71".repeat(32)}`,
+      },
       principal: admin,
     };
     await expect(storeEncryptedVaultRevisions(batch)).resolves.toEqual([
@@ -688,6 +699,83 @@ databaseSuite("PostgreSQL durability integration", () => {
       principal: admin,
     })).rejects.toMatchObject({ code: "RECORD_REVISION_GAP" });
     expect((await getDatabase().select().from(vaultRecords)).some(({ id }) => id === rolledBackId)).toBe(false);
+  });
+
+  it("enforces one active contributor per committed wallet and releases it on removal", async () => {
+    const organizationId = await seedOrganization();
+    const principal = generateVaultPrincipal(admin.principalId);
+    const walletCommitment = `0x${"72".repeat(32)}`;
+    const firstId = generateUuidV7();
+    const secondId = generateUuidV7();
+    const firstEnvelope = encryptVaultRecord(
+      { displayName: "Encrypted first contributor" },
+      { schemaVersion: 1, organizationId, recordType: "payee", recordId: firstId, revision: 1 },
+      [principal],
+    );
+    const secondEnvelope = encryptVaultRecord(
+      { displayName: "Encrypted second contributor" },
+      { schemaVersion: 1, organizationId, recordType: "payee", recordId: secondId, revision: 1 },
+      [principal],
+    );
+    await storeEncryptedVaultRevisions({
+      organizationId,
+      records: [{ recordId: firstId, recordType: "payee", revision: 1, envelope: firstEnvelope }],
+      contributorWalletConstraint: { action: "claim", payeeRecordId: firstId, addressCommitment: walletCommitment },
+      principal: admin,
+    });
+    await expect(storeEncryptedVaultRevisions({
+      organizationId,
+      records: [{ recordId: secondId, recordType: "payee", revision: 1, envelope: secondEnvelope }],
+      contributorWalletConstraint: { action: "claim", payeeRecordId: secondId, addressCommitment: walletCommitment },
+      principal: admin,
+    })).rejects.toMatchObject({ code: "CONTRIBUTOR_WALLET_ALREADY_ASSIGNED" });
+    expect((await getDatabase().select().from(vaultRecords)).some(({ id }) => id === secondId)).toBe(false);
+
+    const inactiveEnvelope = encryptVaultRecord(
+      { status: "inactive" },
+      { schemaVersion: 1, organizationId, recordType: "payee", recordId: firstId, revision: 2 },
+      [principal],
+    );
+    await storeEncryptedVaultRevisions({
+      organizationId,
+      records: [{ recordId: firstId, recordType: "payee", revision: 2, envelope: inactiveEnvelope }],
+      contributorWalletConstraint: { action: "release", payeeRecordId: firstId, addressCommitment: walletCommitment },
+      principal: admin,
+    });
+    await expect(storeEncryptedVaultRevisions({
+      organizationId,
+      records: [{ recordId: secondId, recordType: "payee", revision: 1, envelope: secondEnvelope }],
+      contributorWalletConstraint: { action: "claim", payeeRecordId: secondId, addressCommitment: walletCommitment },
+      principal: admin,
+    })).resolves.toEqual([expect.objectContaining({ id: secondId, replayed: false })]);
+    await expect(getDatabase().select().from(contributorWalletClaims)).resolves.toEqual([
+      expect.objectContaining({ payeeRecordId: secondId, addressCommitment: walletCommitment, active: true }),
+    ]);
+  });
+
+  it("publishes only the authenticated Ready wallet's public worker identity", async () => {
+    const worker = generateVaultPrincipal("worker:ready");
+    const principal: AuthenticatedPrincipal = {
+      principalId: worker.principalId,
+      sessionId: "session:worker",
+      authKind: "ready",
+      walletAddress: "0x123",
+      chainId: READY_AUTH_CHAIN_ID,
+    };
+    const identity = createPayoPublicIdentity(worker, new Date("2026-09-07T10:00:00.000Z"));
+    const published = await publishWorkerPublicIdentity({ identity, principal });
+    expect(published).toMatchObject({
+      walletAddress: expect.stringMatching(/^0x/),
+      principalId: worker.principalId,
+      fingerprint: identity.fingerprint,
+      identity,
+    });
+    await expect(findWorkerPublicIdentity({ walletAddress: "0x0123", principal }))
+      .resolves.toMatchObject({ identity, principalId: worker.principalId });
+    const other = createPayoPublicIdentity(generateVaultPrincipal("worker:other"));
+    await expect(publishWorkerPublicIdentity({ identity: other, principal }))
+      .rejects.toMatchObject({ code: "PUBLIC_IDENTITY_PRINCIPAL_MISMATCH" });
+    expect(await getDatabase().select().from(workerPublicIdentities)).toHaveLength(1);
   });
 
   it("stores an encrypted payroll run and all encrypted lines in one transaction", async () => {

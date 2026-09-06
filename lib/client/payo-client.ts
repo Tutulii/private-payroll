@@ -51,6 +51,7 @@ import type {
 } from "@/lib/proof/protocol";
 import type { SerializedPayrollIntegrityBuildRequest } from "@/lib/proof/input-builder";
 import type { ReadySessionPayload } from "@/lib/auth/ready-session";
+import type { PayoPublicIdentity } from "@/lib/client/proof-package-files";
 import type { Call, TypedData } from "starknet";
 
 type AccessTokenProvider = () => Promise<string | null>;
@@ -479,6 +480,38 @@ export class PayoClient {
       );
     }
     return body as T;
+  }
+
+  async publishWorkerPublicIdentity(identity: PayoPublicIdentity) {
+    return this.request<{
+      identity: {
+        chainId: string;
+        walletAddress: string;
+        principalId: string;
+        fingerprint: string;
+        identity: PayoPublicIdentity;
+        firstPublishedAt: string;
+        updatedAt: string;
+      };
+    }>("/api/v1/public-identities", {
+      method: "POST",
+      body: JSON.stringify({ identity }),
+    });
+  }
+
+  async findWorkerPublicIdentity(walletAddress: string) {
+    const search = new URLSearchParams({ walletAddress });
+    return this.request<{
+      identity: {
+        chainId: string;
+        walletAddress: string;
+        principalId: string;
+        fingerprint: string;
+        identity: PayoPublicIdentity;
+        firstPublishedAt: string;
+        updatedAt: string;
+      } | null;
+    }>(`/api/v1/public-identities?${search}`);
   }
 
   async createReadyAuthenticationChallenge(input: { walletAddress: string; chainId: string }) {
@@ -1163,6 +1196,11 @@ export class PayoClient {
       revision: number;
       envelope: EncryptedVaultRecord;
     }>;
+    contributorWalletConstraint?: {
+      action: "claim" | "release";
+      payeeRecordId: string;
+      addressCommitment: `0x${string}`;
+    };
   }) {
     return this.request<{ records: Array<Record<string, unknown>> }>("/api/v1/vault-records", {
       method: "POST",

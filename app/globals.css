@@ -4275,3 +4275,40 @@ body {
 .runner-step {
   align-content: start;
 }
+
+
+/* Automatic worker identity discovery in the encrypted contributor form. */
+.team-identity-detection {
+  grid-column: 1 / -1;
+  min-width: 0;
+  padding: 11px 12px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  color: #5b6470;
+  background: rgba(255,255,255,.7);
+  border: 1px solid #c9b96f;
+  border-radius: 11px;
+}
+.team-identity-detection--found { color: #456a4a; background: rgba(237,248,238,.9); border-color: #8abb91; }
+.team-identity-detection--duplicate,
+.team-identity-detection--error { color: #91483b; background: rgba(253,235,231,.92); border-color: #df9d90; }
+.team-identity-detection--checking { color: #526d83; background: rgba(234,244,251,.9); border-color: #9ebed5; }
+.team-identity-detection__icon { width: 34px; height: 34px; display: grid; place-items: center; color: currentColor; background: var(--white); border: 1px solid currentColor; border-radius: 9px; }
+.team-identity-detection small,
+.team-identity-detection strong { display: block; }
+.team-identity-detection small { font-size: 10px; font-weight: 900; letter-spacing: .08em; }
+.team-identity-detection strong { margin-top: 2px; color: var(--ink); font-size: 12px; }
+.team-identity-detection p { margin: 3px 0 0; color: currentColor; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.team-identity-detection > .button { grid-column: auto; min-height: 34px; padding-inline: 10px; font-size: 11px; }
+.team-add-form > .team-form-note { grid-column: 1 / -2; margin: 0; color: #776b42; font-size: 11px; line-height: 1.45; }
+.team-add-form > .team-add-form__submit { grid-column: -2 / -1; }
+
+@media (max-width: 720px) {
+  .team-identity-detection { grid-template-columns: auto minmax(0, 1fr); align-items: start; }
+  .team-identity-detection > .button { grid-column: 2; width: fit-content; }
+  .team-add-form > .team-form-note,
+  .team-add-form > .team-add-form__submit { grid-column: 1 / -1; }
+  .team-add-form > .team-add-form__submit { width: 100%; }
+}

@@ -21,9 +21,15 @@ const encryptedRecordItemSchema = z.object({
 const createEncryptedRecordSchema = encryptedRecordItemSchema.extend({
   organizationId: uuidV7Schema,
 }).strict();
+const contributorWalletConstraintSchema = z.object({
+  action: z.enum(["claim", "release"]),
+  payeeRecordId: uuidV7Schema,
+  addressCommitment: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+}).strict();
 const createEncryptedRecordBatchSchema = z.object({
   organizationId: uuidV7Schema,
   records: z.array(encryptedRecordItemSchema).min(1).max(100),
+  contributorWalletConstraint: contributorWalletConstraintSchema.optional(),
 }).strict();
 
 export async function GET(request: Request) {

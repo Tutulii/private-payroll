@@ -24,13 +24,12 @@ import { usePayoVault } from "../vault/payo-vault";
 import {
   deactivateEncryptedPayee,
   loadEncryptedPayees,
+  normalizeContributorWalletAddress,
   storeEncryptedPayee,
   type PayeeClaimIdentity,
   type PayeeDirectoryRecord,
 } from "@/lib/client/payee-directory";
 import {
-  createPayoPublicIdentity,
-  parsePayoJsonText,
   parsePayoPublicIdentity,
   type PayoPublicIdentity,
 } from "@/lib/client/proof-package-files";
@@ -79,12 +78,12 @@ const memberTones = ["coral", "blue", "green", "yellow"] as const;
 type ClassificationFactKey = (typeof CLASSIFICATION_FACTS)[number]["key"];
 type ClassificationAnswerDraft = Record<ClassificationFactKey, "" | "yes" | "no">;
 const NET_INVOICE_POLICY_ID = "payo-net-invoice-no-withholding-v1";
-const MAX_PUBLIC_IDENTITY_FILE_BYTES = 16 * 1024;
 const ACTIVATION_REVIEW_MAX_AGE_MS = 2 * 60_000;
 type DirectPrivacyActivationReview = {
   estimate: DirectPrivacyActivationEstimate;
   reviewedAt: number;
 };
+type WorkerIdentityLookupState = "idle" | "checking" | "found" | "missing" | "duplicate" | "error";
 
 function classificationAnswerDraft(principalKind: "human" | "agent"): ClassificationAnswerDraft {
   return Object.fromEntries(CLASSIFICATION_FACTS.map(({ key }) => [key, principalKind === "agent" ? "no" : ""])) as ClassificationAnswerDraft;
@@ -145,6 +144,9 @@ export default function TeamPage() {
   const [tokenPreference, setTokenPreference] = useState<PayrollTokenSymbol>("STRK");
   const [jurisdictionCode, setJurisdictionCode] = useState("US");
   const [claimIdentity, setClaimIdentity] = useState<PayoPublicIdentity | null>(null);
+  const [identityLookupState, setIdentityLookupState] = useState<WorkerIdentityLookupState>("idle");
+  const [identityLookupMessage, setIdentityLookupMessage] = useState("Enter a wallet address to detect its published PAYO identity.");
+  const [identityLookupNonce, setIdentityLookupNonce] = useState(0);
   const [showAddAgreement, setShowAddAgreement] = useState(false);
   const [agreementPayeeId, setAgreementPayeeId] = useState("");
   const [agreementAmount, setAgreementAmount] = useState("");
@@ -178,7 +180,7 @@ export default function TeamPage() {
   const [nextVestingReleaseAt, setNextVestingReleaseAt] = useState("");
   const [directoryLoadedAt] = useState(() => Date.now());
   const directoryRefreshGeneration = useRef(0);
-  const claimIdentityInput = useRef<HTMLInputElement>(null);
+  const identityLookupGeneration = useRef(0);
 
   const classificationAnswers = useMemo<ClassificationFactsAnswers | null>(() => {
     if (Object.values(classificationAnswerDrafts).some((answer) => answer === "")) return null;
@@ -271,6 +273,71 @@ export default function TeamPage() {
     return () => window.clearTimeout(timer);
   }, [refreshPayees]);
 
+  useEffect(() => {
+    const generation = identityLookupGeneration.current + 1;
+    identityLookupGeneration.current = generation;
+    let normalizedAddress = "";
+    let duplicate: PayeeDirectoryRecord | undefined;
+    if (showAddPayee && vault.client && vault.session && recipientAddress.trim()) {
+      try {
+        normalizedAddress = normalizeContributorWalletAddress(recipientAddress);
+        duplicate = payees.find((payee) =>
+          normalizeContributorWalletAddress(payee.recipientAddress) === normalizedAddress);
+      } catch {
+        normalizedAddress = "";
+      }
+    }
+    const timer = window.setTimeout(() => {
+      if (identityLookupGeneration.current !== generation) return;
+      setClaimIdentity(null);
+      if (!showAddPayee || !vault.client || !vault.session || !recipientAddress.trim()) {
+        setIdentityLookupState("idle");
+        setIdentityLookupMessage("Enter a wallet address to detect its published PAYO identity.");
+        return;
+      }
+      if (!normalizedAddress) {
+        setIdentityLookupState("idle");
+        setIdentityLookupMessage("Enter a complete Starknet wallet address.");
+        return;
+      }
+      if (duplicate) {
+        setIdentityLookupState("duplicate");
+        setIdentityLookupMessage(`Already assigned to ${duplicate.displayName}. One wallet can belong to only one active contributor.`);
+        return;
+      }
+      setIdentityLookupState("checking");
+      setIdentityLookupMessage("Looking up the public identity linked to this Ready wallet…");
+      void vault.client.findWorkerPublicIdentity(normalizedAddress)
+        .then(({ identity: published }) => {
+          if (identityLookupGeneration.current !== generation) return;
+          if (!published) {
+            setIdentityLookupState("missing");
+            setIdentityLookupMessage("No public identity is published for this wallet yet. Ask its owner to sign in and unlock a PAYO vault once, then retry.");
+            return;
+          }
+          const identity = parsePayoPublicIdentity(published.identity);
+          if (
+            identity.format !== "payo-public-identity-v2"
+            || published.walletAddress !== normalizedAddress
+            || published.principalId !== identity.principalId
+          ) {
+            throw new Error("The detected worker identity has an invalid wallet binding.");
+          }
+          setClaimIdentity(identity);
+          setIdentityLookupState("found");
+          setIdentityLookupMessage(`Public identity detected automatically · ${identity.principalId.slice(0, 16)}… · fingerprint ${identity.fingerprint.slice(0, 12)}…`);
+        })
+        .catch((lookupError) => {
+          if (identityLookupGeneration.current !== generation) return;
+          setIdentityLookupState("error");
+          setIdentityLookupMessage(lookupError instanceof Error
+            ? lookupError.message
+            : "The worker identity lookup failed. Retry without changing the contributor details.");
+        });
+    }, normalizedAddress && !duplicate ? 450 : 0);
+    return () => window.clearTimeout(timer);
+  }, [identityLookupNonce, payees, recipientAddress, showAddPayee, vault.client, vault.session]);
+
   const members = useMemo(() => payees.map((payee, index) => {
     const agreement = agreements
       .filter((candidate) => candidate.payeeId === payee.id && !candidate.effectiveUntil)
@@ -349,7 +416,7 @@ export default function TeamPage() {
     setDirectoryError("");
     try {
       if (!claimIdentity || claimIdentity.format !== "payo-public-identity-v2") {
-        throw new Error("Import the contributor's PAYO v2 identity before creating a claim-enabled contributor.");
+        throw new Error("Wait for PAYO to detect the public identity linked to this contributor wallet.");
       }
       await storeEncryptedPayee({
         client: vault.client,
@@ -365,6 +432,7 @@ export default function TeamPage() {
           claimCapabilityCommitment: claimIdentity.claimCapabilityCommitment as `0x${string}`,
         } satisfies PayeeClaimIdentity,
         principal: vault.session.principal,
+        existingPayees: payees,
       });
       setDisplayName("");
       setRecipientAddress("");
@@ -409,37 +477,6 @@ export default function TeamPage() {
       setDirectoryError(error instanceof Error ? error.message : "The contributor could not be removed.");
     } finally {
       setRemovalActionId(null);
-    }
-  };
-
-  const useCurrentClaimIdentity = () => {
-    if (!vault.session) return;
-    try {
-      setClaimIdentity(createPayoPublicIdentity(vault.session.principal));
-      setDirectoryError("");
-    } catch (error) {
-      setDirectoryError(error instanceof Error ? error.message : "The current PAYO identity could not be prepared.");
-    }
-  };
-
-  const importClaimIdentity = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) return;
-    setDirectoryError("");
-    try {
-      if (file.size > MAX_PUBLIC_IDENTITY_FILE_BYTES) {
-        throw new Error("The PAYO public identity file is too large.");
-      }
-      const identity = parsePayoPublicIdentity(
-        parsePayoJsonText(await file.text(), "The contributor PAYO identity file"),
-      );
-      if (identity.format !== "payo-public-identity-v2") {
-        throw new Error("This legacy identity can receive disclosures but cannot authorize vNext wage claims. Ask the contributor to export a new PAYO identity.");
-      }
-      setClaimIdentity(identity);
-    } catch (error) {
-      setDirectoryError(error instanceof Error ? error.message : "The contributor identity could not be imported.");
     }
   };
 
@@ -913,17 +950,16 @@ export default function TeamPage() {
             <div className="team-add-form__heading"><span><small>CLIENT-ENCRYPTED RECORD</small><strong>Add a private contributor</strong></span><button type="button" onClick={() => setShowAddPayee(false)} aria-label="Close contributor form">×</button></div>
             <label><span>Display name</span><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Maya or Scout" required maxLength={160} /></label>
             <label><span>Kind</span><select value={principalKind} onChange={(event) => setPrincipalKind(event.target.value as "human" | "agent")}><option value="human">Human</option><option value="agent">AI agent</option></select></label>
-            <label className="team-add-form__address"><span>Registered Starknet address</span><input value={recipientAddress} onChange={(event) => setRecipientAddress(event.target.value)} placeholder="0x…" required /></label>
+            <label className="team-add-form__address"><span>Registered Starknet address</span><input value={recipientAddress} onChange={(event) => { setRecipientAddress(event.target.value); setClaimIdentity(null); setIdentityLookupState(event.target.value.trim() ? "checking" : "idle"); setIdentityLookupMessage(event.target.value.trim() ? "Checking this wallet…" : "Enter a wallet address to detect its published PAYO identity."); }} placeholder="0x…" aria-describedby="worker-identity-status" required /></label>
             <label><span>Private token</span><select value={tokenPreference} onChange={(event) => setTokenPreference(event.target.value as PayrollTokenSymbol)}><option value="STRK">STRK</option><option value="USDC">USDC</option></select></label>
             <label><span>Jurisdiction</span><input value={jurisdictionCode} onChange={(event) => setJurisdictionCode(event.target.value)} placeholder="US-CA or GB" required maxLength={6} /></label>
-            <div className="proof-identity-actions team-add-form__address">
-              <button type="button" className="button button--soft" onClick={() => claimIdentityInput.current?.click()}><UserPlus size={16} /> Import worker identity</button>
-              <button type="button" className="button button--soft" onClick={useCurrentClaimIdentity}><KeyRound size={16} /> Use this vault</button>
+            <div className={`team-identity-detection team-identity-detection--${identityLookupState}`} id="worker-identity-status" role="status" aria-live="polite">
+              <span className="team-identity-detection__icon">{identityLookupState === "checking" ? <LoaderCircle className="spin" size={17} /> : identityLookupState === "found" ? <ShieldCheck size={17} /> : identityLookupState === "duplicate" || identityLookupState === "error" ? <X size={17} /> : <KeyRound size={17} />}</span>
+              <span><small>AUTOMATIC WORKER IDENTITY</small><strong>{identityLookupState === "found" ? "Identity linked and ready" : identityLookupState === "duplicate" ? "Wallet already in use" : identityLookupState === "checking" ? "Detecting identity" : identityLookupState === "missing" ? "Worker action needed" : identityLookupState === "error" ? "Lookup interrupted" : "Waiting for wallet"}</strong><p>{identityLookupMessage}</p></span>
+              {(identityLookupState === "missing" || identityLookupState === "error") && <button type="button" className="button button--soft" onClick={() => { setIdentityLookupState("checking"); setIdentityLookupMessage("Retrying the public identity lookup…"); setIdentityLookupNonce((value) => value + 1); }}>Retry lookup</button>}
             </div>
-            <input ref={claimIdentityInput} className="proof-package-file-input" type="file" accept="application/json,.json" onChange={(event) => void importClaimIdentity(event)} tabIndex={-1} aria-hidden="true" />
-            <p className="team-form-note">The worker shares only an X25519 public key and claim-capability commitment. PAYO never imports their vault secret. “Use this vault” is suitable when this vault is also the claimant.</p>
-            {claimIdentity && <p className="proof-identity-fingerprint"><ShieldCheck size={13} /> Claim identity verified · {claimIdentity.principalId.slice(0, 12)}… · {claimIdentity.format === "payo-public-identity-v2" ? "vNext claims enabled" : "legacy disclosure only"}</p>}
-            <button className="button button--ink" type="submit" disabled={directoryLoading || claimIdentity?.format !== "payo-public-identity-v2"}>{directoryLoading ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />} Encrypt contributor</button>
+            <p className="team-form-note">PAYO reads only the public X25519 identity published by the wallet after its owner unlocks a vault. No worker vault secret or salary is shared.</p>
+            <button className="button button--ink team-add-form__submit" type="submit" disabled={directoryLoading || identityLookupState !== "found" || claimIdentity?.format !== "payo-public-identity-v2"}>{directoryLoading ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />} Encrypt contributor</button>
           </form>
         )}
         {showAddAgreement && (

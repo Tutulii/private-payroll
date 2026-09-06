@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { PayoApiError, PayoClient } from "@/lib/client/payo-client";
+import { createPayoPublicIdentity } from "@/lib/client/proof-package-files";
 import { hashCanonicalJson } from "@/lib/crypto/digest";
 import {
   createVaultWorkspace,
@@ -343,6 +344,39 @@ export function PayoVaultProvider({ children }: { children: ReactNode }) {
     }, 0);
     return () => window.clearTimeout(synchronizationTimer);
   }, [authenticated, clearReadySession, ready, refreshOrganizations]);
+
+  useEffect(() => {
+    if (!authenticated || !session) return;
+    let active = true;
+    const timers = new Set<number>();
+    const wait = (milliseconds: number) => new Promise<void>((resolve) => {
+      const timer = window.setTimeout(() => {
+        timers.delete(timer);
+        resolve();
+      }, milliseconds);
+      timers.add(timer);
+    });
+    void (async () => {
+      const identity = createPayoPublicIdentity(session.principal);
+      for (const delay of [0, 1_000, 3_000]) {
+        if (!active) return;
+        if (delay) await wait(delay);
+        if (!active) return;
+        try {
+          await client.publishWorkerPublicIdentity(identity);
+          return;
+        } catch (publishError) {
+          if (delay === 3_000) {
+            console.warn("PAYO could not publish the wallet's public worker identity.", publishError);
+          }
+        }
+      }
+    })();
+    return () => {
+      active = false;
+      for (const timer of timers) window.clearTimeout(timer);
+    };
+  }, [authenticated, client, session]);
 
   const selectOrganization = useCallback((organizationId: string) => {
     setSelectedOrganizationId(organizationId);

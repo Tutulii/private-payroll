@@ -19,6 +19,8 @@ import { hashCanonicalJson } from "@/lib/crypto/digest";
 import { hashCapability, type SignedCapability } from "@/lib/domain/capability";
 import type { AgentExecutionReceipt } from "@/lib/domain/agent-execution";
 import type { DirectPrivacyAccountClientSummary } from "@/lib/client/payo-client";
+import type { PayoPublicIdentity } from "@/lib/client/proof-package-files";
+import { validateAndParseAddress } from "starknet";
 
 const ORGANIZATION_ID = "018f1000-0000-7000-8000-000000000030";
 const ORGANIZATION_SECRET = `0x${"30".repeat(32)}`;
@@ -47,6 +49,12 @@ type StoredRecord = {
 
 type BrowserEvidenceState = {
   records: StoredRecord[];
+  publicIdentities: Array<{
+    walletAddress: string;
+    identity: PayoPublicIdentity;
+    firstPublishedAt: string;
+    updatedAt: string;
+  }>;
   runs: Array<Record<string, unknown>>;
   agentExecutions: AgentExecutionReceipt[];
   directPrivacyAccounts: DirectPrivacyAccountClientSummary[];
@@ -70,6 +78,7 @@ type BrowserEvidenceState = {
 export type BrowserEvidenceExport = {
   organizationId: string;
   records: Array<StoredRecord & { plaintext: unknown; envelopeHash: string }>;
+  publicIdentities: BrowserEvidenceState["publicIdentities"];
   runs: Array<Record<string, unknown>>;
   agentExecutions: BrowserEvidenceState["agentExecutions"];
   directPrivacyAccounts: BrowserEvidenceState["directPrivacyAccounts"];
@@ -86,6 +95,7 @@ declare global {
       setAgentExecutions: (executions: AgentExecutionReceipt[]) => void;
       setDirectPrivacyAccounts: (accounts: DirectPrivacyAccountClientSummary[]) => void;
       setAuditEvents: (events: BrowserEvidenceState["auditEvents"]) => void;
+      registerPublicIdentity: (walletAddress: string, identity: PayoPublicIdentity) => void;
     };
   }
 }
@@ -93,6 +103,7 @@ declare global {
 function emptyState(): BrowserEvidenceState {
   return {
     records: [],
+    publicIdentities: [],
     runs: [],
     agentExecutions: [],
     directPrivacyAccounts: [],
@@ -109,6 +120,7 @@ function readState(): BrowserEvidenceState {
     const parsed = JSON.parse(serialized) as Partial<BrowserEvidenceState>;
     return {
       records: Array.isArray(parsed.records) ? parsed.records : [],
+      publicIdentities: Array.isArray(parsed.publicIdentities) ? parsed.publicIdentities : [],
       runs: Array.isArray(parsed.runs) ? parsed.runs : [],
       agentExecutions: Array.isArray(parsed.agentExecutions) ? parsed.agentExecutions : [],
       directPrivacyAccounts: Array.isArray(parsed.directPrivacyAccounts)
@@ -241,6 +253,22 @@ export function PayoBrowserEvidenceProvider({ children }: { children: ReactNode 
         .filter((record) => !recordType || record.recordType === recordType)
         .map(metadata);
       return { records };
+    },
+    async findWorkerPublicIdentity(walletAddress: string) {
+      const normalizedAddress = validateAndParseAddress(walletAddress);
+      const published = readState().publicIdentities.find((candidate) =>
+        candidate.walletAddress === normalizedAddress);
+      return {
+        identity: published ? {
+          chainId: "0x534e5f4d41494e",
+          walletAddress: published.walletAddress,
+          principalId: published.identity.principalId,
+          fingerprint: published.identity.fingerprint,
+          identity: published.identity,
+          firstPublishedAt: published.firstPublishedAt,
+          updatedAt: published.updatedAt,
+        } : null,
+      };
     },
 
     async listObligationClaimAccessGrants() {
@@ -478,6 +506,7 @@ export function PayoBrowserEvidenceProvider({ children }: { children: ReactNode 
             plaintext: decryptVaultRecord(record.envelope, SYNTHETIC_PRINCIPAL),
             envelopeHash: hashCanonicalJson(record.envelope),
           })),
+          publicIdentities: state.publicIdentities,
           runs: state.runs,
           agentExecutions: state.agentExecutions,
           directPrivacyAccounts: state.directPrivacyAccounts,
@@ -496,6 +525,27 @@ export function PayoBrowserEvidenceProvider({ children }: { children: ReactNode 
       },
       setAuditEvents(auditEvents) {
         mutate((state) => ({ ...state, auditEvents }));
+      },
+      registerPublicIdentity(walletAddress, identity) {
+        const normalizedAddress = validateAndParseAddress(walletAddress);
+        const now = new Date().toISOString();
+        mutate((state) => {
+          const current = state.publicIdentities.find((candidate) =>
+            candidate.walletAddress === normalizedAddress);
+          return {
+            ...state,
+            publicIdentities: [
+              ...state.publicIdentities.filter((candidate) =>
+                candidate.walletAddress !== normalizedAddress),
+              {
+                walletAddress: normalizedAddress,
+                identity,
+                firstPublishedAt: current?.firstPublishedAt ?? now,
+                updatedAt: now,
+              },
+            ],
+          };
+        });
       },
     };
     return () => {

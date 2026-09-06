@@ -10,6 +10,7 @@ import {
   principalRecordSchema,
 } from "@/lib/domain/records";
 import type { PayrollTokenSymbol } from "@/lib/starknet/tokens";
+import { hashCanonicalJson } from "@/lib/crypto/digest";
 import type { PayoClient } from "./payo-client";
 import { validateAndParseAddress } from "starknet";
 
@@ -20,6 +21,39 @@ export type PayeeClaimIdentity = {
   publicKey: string;
   claimCapabilityCommitment: `0x${string}`;
 };
+
+export function normalizeContributorWalletAddress(value: string): string {
+  try {
+    return validateAndParseAddress(value.trim());
+  } catch {
+    throw new Error("Enter a valid Starknet payout address.");
+  }
+}
+
+export function contributorWalletAddressCommitment(input: {
+  organizationId: string;
+  recipientAddress: string;
+}): `0x${string}` {
+  return hashCanonicalJson({
+    domain: "PAYO_CONTRIBUTOR_WALLET_V1",
+    organizationId: input.organizationId,
+    recipientAddress: normalizeContributorWalletAddress(input.recipientAddress),
+  });
+}
+
+export function assertContributorWalletAvailable(
+  recipientAddress: string,
+  payees: readonly PayeeDirectoryRecord[],
+): string {
+  const normalized = normalizeContributorWalletAddress(recipientAddress);
+  const duplicate = payees.find((payee) =>
+    payee.status === "active"
+    && normalizeContributorWalletAddress(payee.recipientAddress) === normalized);
+  if (duplicate) {
+    throw new Error(`This wallet is already assigned to ${duplicate.displayName}. One wallet can belong to only one active contributor.`);
+  }
+  return normalized;
+}
 
 export function prepareEncryptedPayee(input: {
   organizationId: string;
@@ -36,12 +70,7 @@ export function prepareEncryptedPayee(input: {
   const timestamp = now.toISOString();
   const payeeId = generateUuidV7(now.getTime());
   const principalId = generateUuidV7(now.getTime() + 1);
-  let recipientAddress: string;
-  try {
-    recipientAddress = validateAndParseAddress(input.recipientAddress.trim());
-  } catch {
-    throw new Error("Enter a valid Starknet payout address.");
-  }
+  const recipientAddress = normalizeContributorWalletAddress(input.recipientAddress);
   const record = payeeRecordSchema.parse({
     schemaVersion: 1,
     id: payeeId,
@@ -109,9 +138,11 @@ export async function storeEncryptedPayee(input: {
   jurisdictionCode: string;
   claimIdentity?: PayeeClaimIdentity;
   principal: VaultPrincipalKeyPair;
+  existingPayees?: readonly PayeeDirectoryRecord[];
   now?: Date;
 }): Promise<PayeeDirectoryRecord> {
-  const { client, ...recordInput } = input;
+  const { client, existingPayees = [], ...recordInput } = input;
+  assertContributorWalletAvailable(input.recipientAddress, existingPayees);
   const prepared = prepareEncryptedPayee(recordInput);
   await client.storeEncryptedRecords({
     organizationId: prepared.record.organizationId,
@@ -126,6 +157,14 @@ export async function storeEncryptedPayee(input: {
       revision: prepared.record.revision,
       envelope: prepared.envelope,
     }],
+    contributorWalletConstraint: {
+      action: "claim",
+      payeeRecordId: prepared.record.id,
+      addressCommitment: contributorWalletAddressCommitment({
+        organizationId: prepared.record.organizationId,
+        recipientAddress: prepared.record.recipientAddress,
+      }),
+    },
   });
   return prepared.record;
 }
@@ -197,6 +236,14 @@ export async function deactivateEncryptedPayee(input: {
   await input.client.storeEncryptedRecords({
     organizationId: record.organizationId,
     records,
+    contributorWalletConstraint: {
+      action: "release",
+      payeeRecordId: record.id,
+      addressCommitment: contributorWalletAddressCommitment({
+        organizationId: record.organizationId,
+        recipientAddress: record.recipientAddress,
+      }),
+    },
   });
   return { record, directoryPrincipal };
 }

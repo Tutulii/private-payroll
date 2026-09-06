@@ -153,6 +153,23 @@ export const readyPrincipalLinks = pgTable(
   ],
 );
 
+export const workerPublicIdentities = pgTable(
+  "worker_public_identities",
+  {
+    chainId: text("chain_id").notNull(),
+    walletAddress: text("wallet_address").notNull(),
+    principalId: text("principal_id").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    identity: jsonb("identity").notNull(),
+    firstPublishedAt: timestamp("first_published_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.chainId, table.walletAddress] }),
+    index("worker_public_identities_principal_idx").on(table.chainId, table.principalId),
+  ],
+);
+
 export const readyAuthSessions = pgTable(
   "ready_auth_sessions",
   {
@@ -215,6 +232,25 @@ export const vaultRecords = pgTable(
     primaryKey({ columns: [table.organizationId, table.id, table.revision] }),
     index("vault_records_org_type_idx").on(table.organizationId, table.recordType),
     uniqueIndex("vault_records_org_envelope_hash_idx").on(table.organizationId, table.envelopeHash),
+  ],
+);
+
+export const contributorWalletClaims = pgTable(
+  "contributor_wallet_claims",
+  {
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    addressCommitment: text("address_commitment").notNull(),
+    payeeRecordId: text("payee_record_id").notNull(),
+    active: boolean("active").default(true).notNull(),
+    releasedAt: timestamp("released_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.organizationId, table.addressCommitment] }),
+    uniqueIndex("contributor_wallet_claims_payee_idx").on(table.organizationId, table.payeeRecordId),
   ],
 );
 

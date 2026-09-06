@@ -78,6 +78,11 @@ import {
   type PayeeDirectoryRecord,
 } from "@/lib/client/payee-directory";
 import {
+  decryptedRunAgreementIds,
+  loadVestingReleaseEvidence,
+  vestingReleaseEvidenceFilename,
+} from "@/lib/client/vesting-release-evidence";
+import {
   activityAgreementOptionLabel,
   activityRunOptionLabel,
 } from "@/lib/client/activity-option-labels";
@@ -139,6 +144,7 @@ type SettlementSummary = {
   submittedAt: string | null;
   confirmedAt: string | null;
   finalizedAt: string | null;
+  blockNumber: string | null;
   confirmationDepth: number;
   lastErrorCode: string | null;
   proofValidityExpiry: string | null;
@@ -308,6 +314,8 @@ type ActivityEvent = {
   icon: LucideIcon;
   tone: string;
   hash?: string;
+  settlementId?: string;
+  runId?: string;
   timestamp: number;
 };
 
@@ -349,20 +357,22 @@ function exceptionProofDeliveryState(
   return "recoverable";
 }
 
-function settlementEvent(settlement: SettlementSummary): ActivityEvent {
+function settlementEvent(settlement: SettlementSummary, vestingRelease = false): ActivityEvent {
   const date = dateParts(settlement.updatedAt);
   const confirmed = settlement.state === "confirmed" || settlement.state === "finalized" || settlement.state === "reconciled";
   const delayed = settlement.lastErrorCode === "CONFIRMATION_DELAYED";
   return {
     id: `settlement:${settlement.id}`,
     ...date,
-    title: delayed ? "Settlement confirmation delayed" : `Private payroll ${settlement.state.replaceAll("_", " ")}`,
-    detail: `Run ${shortId(settlement.runId)} · ${settlement.confirmationDepth} confirmation depth`,
+    title: delayed ? "Settlement confirmation delayed" : vestingRelease ? `Private vesting release ${settlement.state.replaceAll("_", " ")}` : `Private payroll ${settlement.state.replaceAll("_", " ")}`,
+    detail: `${vestingRelease ? "Vesting run" : "Run"} ${shortId(settlement.runId)} · ${settlement.confirmationDepth} confirmation depth`,
     amount: "Totals encrypted",
     kind: "Payroll",
     icon: confirmed ? CheckCircle2 : LockKeyhole,
     tone: delayed ? "yellow" : confirmed ? "green" : settlement.state === "failed" || settlement.state === "reorged" ? "coral" : "blue",
     hash: settlement.transactionHash ?? undefined,
+    settlementId: settlement.id,
+    runId: settlement.runId,
   };
 }
 
@@ -408,6 +418,8 @@ export default function ActivityPage() {
   const [disclosureGrants, setDisclosureGrants] = useState<DisclosureGrantSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [creatingReceipt, setCreatingReceipt] = useState(false);
+  const [vestingRunIds, setVestingRunIds] = useState<Set<string>>(() => new Set());
+  const [downloadingVestingEvidenceId, setDownloadingVestingEvidenceId] = useState("");
   const [showDisclosure, setShowDisclosure] = useState(false);
   const [disclosureSettlementId, setDisclosureSettlementId] = useState("");
   const [disclosureScope, setDisclosureScope] = useState<"worker" | "employer" | "auditor" | "tax">("auditor");
@@ -649,10 +661,40 @@ export default function ActivityPage() {
     return () => { active = false; };
   }, [claimRunId, pathname, starknet.chainId, vault.client, vault.session]);
 
+  const vestingAgreementIds = useMemo(() => new Set(agreements.flatMap((record) =>
+    record.agreement.agreementVersion === "payo-agreement-v2"
+    && record.agreement.paymentPlan.kind === "private_vesting"
+      ? [record.agreement.id]
+      : [])), [agreements]);
+
+  useEffect(() => {
+    if (!vault.client || !vault.session || vestingAgreementIds.size === 0) {
+      const timer = window.setTimeout(() => setVestingRunIds(new Set()), 0);
+      return () => window.clearTimeout(timer);
+    }
+    let active = true;
+    const candidates = [...new Set(settlements.flatMap((settlement) =>
+      settlement.workflowType === "payroll"
+      && Boolean(settlement.transactionHash)
+      && ["confirmed", "finalized", "reconciled"].includes(settlement.state)
+        ? [settlement.runId]
+        : []))];
+    void Promise.allSettled(candidates.map(async (runId) => {
+      const { run } = await vault.client!.getPayrollRun(runId);
+      const agreementIds = decryptedRunAgreementIds(run.envelope, vault.session!.principal);
+      return agreementIds.some((agreementId) => vestingAgreementIds.has(agreementId)) ? runId : null;
+    })).then((results) => {
+      if (!active) return;
+      setVestingRunIds(new Set(results.flatMap((result) =>
+        result.status === "fulfilled" && result.value ? [result.value] : [])));
+    });
+    return () => { active = false; };
+  }, [settlements, vault.client, vault.session, vestingAgreementIds]);
+
   const events = useMemo(() => [
-    ...settlements.map(settlementEvent),
+    ...settlements.map((settlement) => settlementEvent(settlement, vestingRunIds.has(settlement.runId))),
     ...auditEvents.map(auditEvent),
-  ].sort((left, right) => right.timestamp - left.timestamp), [auditEvents, settlements]);
+  ].sort((left, right) => right.timestamp - left.timestamp), [auditEvents, settlements, vestingRunIds]);
 
   const agreementOptions = useMemo(() => {
     const payeeNames = new Map(payees.map(({ id, displayName }) => [id, displayName]));
@@ -699,6 +741,38 @@ export default function ActivityPage() {
     setCopiedHash(hash);
     notify("Transaction hash copied");
     window.setTimeout(() => setCopiedHash(""), 1600);
+  };
+
+  const downloadVestingEvidence = async (settlementId: string) => {
+    if (!vault.client || !vault.session) {
+      setActivityError("Unlock the encrypted workspace before creating vesting evidence.");
+      return;
+    }
+    const settlement = settlements.find(({ id }) => id === settlementId);
+    if (!settlement) {
+      setActivityError("The selected vesting settlement is no longer available.");
+      return;
+    }
+    setDownloadingVestingEvidenceId(settlementId);
+    setActivityError("");
+    try {
+      const evidence = await loadVestingReleaseEvidence({
+        client: vault.client,
+        organizationId: vault.session.organizationId,
+        settlement,
+        agreements,
+        payees,
+        principal: vault.session.principal,
+      });
+      downloadJson(evidence, vestingReleaseEvidenceFilename(evidence));
+      notify(`Vesting release #${evidence.release.releaseNumber} evidence downloaded`);
+    } catch (downloadError) {
+      setActivityError(downloadError instanceof Error
+        ? downloadError.message
+        : "The vesting release evidence could not be created.");
+    } finally {
+      setDownloadingVestingEvidenceId("");
+    }
   };
 
   const exportOperationalRecord = () => {
@@ -1815,7 +1889,11 @@ export default function ActivityPage() {
                     <span className={`timeline-icon timeline-icon--${event.tone}`}><Icon size={17} /></span>
                     <div className="timeline-event__main"><strong>{event.title}</strong><span>{event.detail}</span><small>{event.time}</small></div>
                     <div className="timeline-event__value"><strong>{event.amount}</strong><span className={`event-kind event-kind--${event.kind.toLowerCase()}`}>{event.kind}</span></div>
-                    {event.hash ? <span className="timeline-hash-actions"><button type="button" className="hash-button" onClick={() => copyHash(event.hash!)}>{copiedHash === event.hash ? <Check size={13} /> : <Copy size={13} />} {shortId(event.hash)}</button><a className="hash-button" href={`${STARKNET_MAINNET_EXPLORER}/tx/${event.hash}`} target="_blank" rel="noreferrer">Explorer</a></span> : <span className="hash-button hash-button--muted"><LockKeyhole size={12} /> Offchain record</span>}
+                    {event.hash ? <span className="timeline-hash-actions">
+                      <button type="button" className="hash-button" onClick={() => copyHash(event.hash!)}>{copiedHash === event.hash ? <Check size={13} /> : <Copy size={13} />} {shortId(event.hash)}</button>
+                      <a className="hash-button" href={`${STARKNET_MAINNET_EXPLORER}/tx/${event.hash}`} target="_blank" rel="noreferrer">Explorer</a>
+                      {event.settlementId && event.runId && vestingRunIds.has(event.runId) && <button type="button" className="hash-button hash-button--evidence" onClick={() => void downloadVestingEvidence(event.settlementId!)} disabled={Boolean(downloadingVestingEvidenceId)}>{downloadingVestingEvidenceId === event.settlementId ? <LoaderCircle className="spin" size={12} /> : <Download size={12} />} Vesting evidence</button>}
+                    </span> : <span className="hash-button hash-button--muted"><LockKeyhole size={12} /> Offchain record</span>}
                   </article>;
                 })}
               </div>

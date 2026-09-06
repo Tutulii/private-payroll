@@ -237,22 +237,18 @@ async function addContributor(
   const form = page.locator("form.team-add-form");
   await form.getByLabel("Display name").fill(workflow.name);
   await form.getByLabel("Kind").selectOption(kind);
-  await form
-    .getByLabel("Registered Starknet address")
-    .fill(`0x${(0x500 + index).toString(16)}`);
-  await form.getByLabel("Private token").selectOption(workflow.token);
-  await form.getByLabel("Jurisdiction").fill("US");
+  const walletAddress = `0x${(0x500 + index).toString(16)}`;
   const identity = createPayoPublicIdentity(
     generateVaultPrincipal(`browser-worker:${index}`),
   );
-  await form.locator("input.proof-package-file-input").setInputFiles({
-    name: `payo-worker-${index}.json`,
-    mimeType: "application/json",
-    buffer: Buffer.from(`${JSON.stringify(identity)}\n`),
-  });
-  await expect(form.getByText(/Claim identity verified/)).toContainText(
-    "vNext claims enabled",
-  );
+  await page.evaluate(({ walletAddress, identity }) => {
+    window.__PAYO_BROWSER_EVIDENCE__?.registerPublicIdentity(walletAddress, identity);
+  }, { walletAddress, identity });
+  await form.getByLabel("Registered Starknet address").fill(walletAddress);
+  await form.getByLabel("Private token").selectOption(workflow.token);
+  await form.getByLabel("Jurisdiction").fill("US");
+  await expect(form.getByText("Identity linked and ready")).toBeVisible();
+  await expect(form.getByText(/Public identity detected automatically/)).toBeVisible();
   const submit = form.getByRole("button", { name: "Encrypt contributor" });
   await expect(submit).toBeEnabled();
   await submit.click();

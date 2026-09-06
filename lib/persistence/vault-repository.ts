@@ -15,6 +15,7 @@ import { getDatabase } from "./db";
 import { requireOrganizationRole, requireOrganizationRoleWith } from "./repository";
 import {
   auditEvents,
+  contributorWalletClaims,
   organizationMembers,
   organizations,
   vaultKeyGrants,
@@ -87,6 +88,12 @@ export async function storeEncryptedVaultRevision(input: {
   return stored;
 }
 
+export type ContributorWalletConstraint = {
+  action: "claim" | "release";
+  payeeRecordId: string;
+  addressCommitment: string;
+};
+
 export async function storeEncryptedVaultRevisions(input: {
   organizationId: string;
   records: Array<{
@@ -95,6 +102,7 @@ export async function storeEncryptedVaultRevisions(input: {
     revision: number;
     envelope: EncryptedVaultRecord;
   }>;
+  contributorWalletConstraint?: ContributorWalletConstraint;
   principal: AuthenticatedPrincipal;
 }) {
   if (input.records.length < 1 || input.records.length > 100) {
@@ -108,11 +116,119 @@ export async function storeEncryptedVaultRevisions(input: {
     const envelope = encryptedVaultRecordSchema.parse(record.envelope);
     return { ...record, envelope, envelopeHash: hashCanonicalJson(envelope) };
   });
+  const initialPayees = records.filter(({ recordType, revision }) => recordType === "payee" && revision === 1);
+  const walletConstraint = input.contributorWalletConstraint
+    ? { ...input.contributorWalletConstraint, addressCommitment: input.contributorWalletConstraint.addressCommitment.toLowerCase() as `0x${string}` }
+    : undefined;
+  if (walletConstraint && !/^0x[0-9a-f]{64}$/.test(walletConstraint.addressCommitment)) {
+    throw new ApiError(400, "A canonical contributor wallet commitment is required.", "CONTRIBUTOR_WALLET_COMMITMENT_INVALID");
+  }
+  if (initialPayees.length > 0 && (
+    initialPayees.length !== 1
+    || walletConstraint?.action !== "claim"
+    || walletConstraint.payeeRecordId !== initialPayees[0].recordId
+  )) {
+    throw new ApiError(
+      400,
+      "A new encrypted contributor requires its atomic wallet uniqueness claim.",
+      "CONTRIBUTOR_WALLET_CLAIM_REQUIRED",
+    );
+  }
+  if (walletConstraint) {
+    const boundPayees = records.filter(({ recordId, recordType }) =>
+      recordId === walletConstraint.payeeRecordId && recordType === "payee");
+    if (boundPayees.length !== 1 || (
+      walletConstraint.action === "claim"
+        ? boundPayees[0].revision !== 1
+        : boundPayees[0].revision < 2
+    )) {
+      throw new ApiError(
+        400,
+        "The wallet uniqueness action does not match its encrypted contributor revision.",
+        "CONTRIBUTOR_WALLET_BINDING_INVALID",
+      );
+    }
+  }
   const database = getDatabase();
   return database.transaction(async (transaction) => {
     await requireOrganizationRoleWith(transaction, input.organizationId, input.principal, ["admin", "operator"]);
     for (const record of records) {
       assertEnvelopeIdentity({ ...record, organizationId: input.organizationId });
+    }
+    if (walletConstraint?.action === "claim") {
+      await transaction
+        .insert(contributorWalletClaims)
+        .values({
+          organizationId: input.organizationId,
+          addressCommitment: walletConstraint.addressCommitment,
+          payeeRecordId: walletConstraint.payeeRecordId,
+        })
+        .onConflictDoNothing();
+      const [payeeBinding] = await transaction
+        .select({
+          addressCommitment: contributorWalletClaims.addressCommitment,
+          active: contributorWalletClaims.active,
+        })
+        .from(contributorWalletClaims)
+        .where(and(
+          eq(contributorWalletClaims.organizationId, input.organizationId),
+          eq(contributorWalletClaims.payeeRecordId, walletConstraint.payeeRecordId),
+        ))
+        .limit(1)
+        .for("update");
+      if (payeeBinding && payeeBinding.addressCommitment !== walletConstraint.addressCommitment) {
+        throw new ApiError(
+          409,
+          "This contributor record is already bound to another wallet.",
+          "CONTRIBUTOR_WALLET_BINDING_CONFLICT",
+        );
+      }
+      const [addressBinding] = await transaction
+        .select({
+          payeeRecordId: contributorWalletClaims.payeeRecordId,
+          active: contributorWalletClaims.active,
+        })
+        .from(contributorWalletClaims)
+        .where(and(
+          eq(contributorWalletClaims.organizationId, input.organizationId),
+          eq(contributorWalletClaims.addressCommitment, walletConstraint.addressCommitment),
+        ))
+        .limit(1)
+        .for("update");
+      if (!addressBinding) {
+        throw new ApiError(500, "The contributor wallet claim could not be persisted.", "CONTRIBUTOR_WALLET_CLAIM_MISSING");
+      }
+      if (addressBinding.active && addressBinding.payeeRecordId !== walletConstraint.payeeRecordId) {
+        throw new ApiError(
+          409,
+          "This wallet is already assigned to another active contributor.",
+          "CONTRIBUTOR_WALLET_ALREADY_ASSIGNED",
+        );
+      }
+      if (!addressBinding.active) {
+        await transaction
+          .update(contributorWalletClaims)
+          .set({
+            payeeRecordId: walletConstraint.payeeRecordId,
+            active: true,
+            releasedAt: null,
+            updatedAt: new Date(),
+          })
+          .where(and(
+            eq(contributorWalletClaims.organizationId, input.organizationId),
+            eq(contributorWalletClaims.addressCommitment, walletConstraint.addressCommitment),
+          ));
+      }
+    } else if (walletConstraint?.action === "release") {
+      await transaction
+        .update(contributorWalletClaims)
+        .set({ active: false, releasedAt: new Date(), updatedAt: new Date() })
+        .where(and(
+          eq(contributorWalletClaims.organizationId, input.organizationId),
+          eq(contributorWalletClaims.addressCommitment, walletConstraint.addressCommitment),
+          eq(contributorWalletClaims.payeeRecordId, walletConstraint.payeeRecordId),
+          eq(contributorWalletClaims.active, true),
+        ));
     }
     const results = [];
     for (const record of records) {

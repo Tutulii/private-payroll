@@ -20,15 +20,15 @@ async function addDueAdvancedAgreement(page: Page) {
   const payeeForm = page.locator("form.team-add-form");
   await payeeForm.getByLabel("Display name").fill("Attested engineer");
   await payeeForm.getByLabel("Kind").selectOption("human");
-  await payeeForm.getByLabel("Registered Starknet address").fill("0x744");
+  const walletAddress = "0x744";
+  const identity = createPayoPublicIdentity(generateVaultPrincipal("block4-browser-worker"));
+  await page.evaluate(({ walletAddress, identity }) => {
+    window.__PAYO_BROWSER_EVIDENCE__?.registerPublicIdentity(walletAddress, identity);
+  }, { walletAddress, identity });
+  await payeeForm.getByLabel("Registered Starknet address").fill(walletAddress);
   await payeeForm.getByLabel("Private token").selectOption("STRK");
   await payeeForm.getByLabel("Jurisdiction").fill("US");
-  const identity = createPayoPublicIdentity(generateVaultPrincipal("block4-browser-worker"));
-  await payeeForm.locator("input.proof-package-file-input").setInputFiles({
-    name: "payo-attested-engineer.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(`${JSON.stringify(identity)}\n`),
-  });
+  await expect(payeeForm.getByText("Identity linked and ready")).toBeVisible();
   await payeeForm.getByRole("button", { name: "Encrypt contributor" }).click();
 
   const card = page.locator(".member-card").filter({ hasText: "Attested engineer" });

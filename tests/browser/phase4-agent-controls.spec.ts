@@ -22,16 +22,15 @@ async function addAgent(page: Page): Promise<void> {
   const form = page.locator("form.team-add-form");
   await form.getByLabel("Display name").fill("Payroll Scout");
   await form.getByLabel("Kind").selectOption("agent");
-  await form.getByLabel("Registered Starknet address").fill("0x599");
+  const walletAddress = "0x599";
+  const identity = createPayoPublicIdentity(generateVaultPrincipal("phase4-browser-agent"));
+  await page.evaluate(({ walletAddress, identity }) => {
+    window.__PAYO_BROWSER_EVIDENCE__?.registerPublicIdentity(walletAddress, identity);
+  }, { walletAddress, identity });
+  await form.getByLabel("Registered Starknet address").fill(walletAddress);
   await form.getByLabel("Private token").selectOption("STRK");
   await form.getByLabel("Jurisdiction").fill("US");
-  const identity = createPayoPublicIdentity(generateVaultPrincipal("phase4-browser-agent"));
-  await form.locator("input.proof-package-file-input").setInputFiles({
-    name: "payo-agent-identity.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(`${JSON.stringify(identity)}\n`),
-  });
-  await expect(form.getByText(/Claim identity verified/)).toBeVisible();
+  await expect(form.getByText("Identity linked and ready")).toBeVisible();
   await form.getByRole("button", { name: "Encrypt contributor" }).click();
 
   const card = page.locator(".member-card").filter({ hasText: "Payroll Scout" });
