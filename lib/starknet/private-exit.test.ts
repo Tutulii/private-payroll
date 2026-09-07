@@ -68,11 +68,11 @@ describe("private STRK20 exit boundary", () => {
       contract: EXECUTOR,
       calldata: [
         EKUBO_MAINNET_ROUTER_ADDRESS,
-        PAYROLL_TOKENS.STRK.address,
+        "0x4718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
         "0xde0b6b3a7640000",
         "0x0",
-        PAYO_PRIVATE_STRK_USDC_POOL.token0,
-        PAYO_PRIVATE_STRK_USDC_POOL.token1,
+        "0x33068f6539f8e6e6b131e6b2b814e6c34a5224bc66947c47dab9dfee93b35fb",
+        "0x4718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
         "0x20c49ba5e353f80000000000000000",
         "0x3e8",
         "0x0",
@@ -82,6 +82,21 @@ describe("private STRK20 exit boundary", () => {
         "${openNoteIds[0]}",
       ],
     });
+  });
+
+  it("emits every literal invoke calldata item in Ready's canonical FELT form", () => {
+    const result = buildPrivateSwapActions({
+      quote: quote(),
+      privateRecipient: "0x777",
+      now: NOW + 1_000,
+    });
+    const invoke = result.actions.find((action) => action.type === "invoke");
+    expect(invoke).toBeDefined();
+    const canonicalFelt = /^0x(0|[a-fA-F1-9][a-fA-F0-9]{0,62})$/;
+    for (const item of invoke?.calldata ?? []) {
+      if (item.startsWith("${")) continue;
+      expect(item).toMatch(canonicalFelt);
+    }
   });
 
   it("rejects expired, mutated, foreign-router and foreign-pool quotes", () => {

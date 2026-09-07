@@ -8,6 +8,8 @@ import {
   generateUuidV7,
   payeeRecordSchema,
   principalRecordSchema,
+  recipientReferenceResolutionSchema,
+  type RecipientReferenceResolution,
 } from "@/lib/domain/records";
 import type { PayrollTokenSymbol } from "@/lib/starknet/tokens";
 import { hashCanonicalJson } from "@/lib/crypto/digest";
@@ -246,6 +248,111 @@ export async function deactivateEncryptedPayee(input: {
     },
   });
   return { record, directoryPrincipal };
+}
+
+export async function reconcileEncryptedPayeeReferences(input: {
+  client: Pick<PayoClient, "storeEncryptedRecords">;
+  organizationId: string;
+  records: readonly PayeeDirectoryRecord[];
+  directoryPrincipals?: readonly ReturnType<typeof principalRecordSchema.parse>[];
+  recipientAddress: string;
+  canonicalReference: string;
+  principal: VaultPrincipalKeyPair;
+  now?: Date;
+}): Promise<{
+  records: PayeeDirectoryRecord[];
+  directoryPrincipals: ReturnType<typeof principalRecordSchema.parse>[];
+  resolution: RecipientReferenceResolution;
+}> {
+  const recipientAddress = normalizeContributorWalletAddress(input.recipientAddress);
+  const canonicalReference = input.canonicalReference.trim();
+  const matching = input.records.filter((record) =>
+    record.organizationId === input.organizationId
+    && normalizeContributorWalletAddress(record.recipientAddress) === recipientAddress);
+  if (matching.length < 2) {
+    throw new Error("Historical reference reconciliation requires at least two contributor records for this wallet.");
+  }
+  const historicalReferences = [...new Set(matching.flatMap((record) => [
+    record.displayName,
+    ...(record.recipientReferenceResolution?.historicalReferences ?? []),
+  ]))].sort((left, right) => left.localeCompare(right));
+  if (historicalReferences.length < 2) {
+    throw new Error("This contributor wallet has no conflicting historical references to reconcile.");
+  }
+  if (!historicalReferences.includes(canonicalReference)) {
+    throw new Error("Choose one of the preserved historical contributor references as the canonical name.");
+  }
+  const now = input.now ?? new Date();
+  const resolution = recipientReferenceResolutionSchema.parse({
+    resolutionVersion: "payo-recipient-reference-resolution-v1",
+    resolutionId: generateUuidV7(now.getTime()),
+    recipientAddress,
+    canonicalReference,
+    historicalReferences,
+    resolvedAt: now.toISOString(),
+  });
+  const revisedPayees = matching.map((record) => payeeRecordSchema.parse({
+    ...record,
+    revision: record.revision + 1,
+    updatedAt: now.toISOString(),
+    displayName: canonicalReference,
+    recipientReferenceResolution: resolution,
+  }));
+  const matchingPrincipalIds = new Set(matching.map(({ principalId }) => principalId));
+  const directoryPrincipals = [...(input.directoryPrincipals ?? [])];
+  const revisedPrincipals = directoryPrincipals
+    .filter(({ id, organizationId, displayName }) =>
+      organizationId === input.organizationId
+      && matchingPrincipalIds.has(id)
+      && displayName !== canonicalReference)
+    .map((record) => principalRecordSchema.parse({
+      ...record,
+      revision: record.revision + 1,
+      updatedAt: now.toISOString(),
+      displayName: canonicalReference,
+    }));
+  const encryptedRecords = [
+    ...revisedPayees.map((record) => ({
+      recordId: record.id,
+      recordType: "payee" as const,
+      revision: record.revision,
+      envelope: encryptVaultRecord(record, {
+        schemaVersion: 1,
+        organizationId: record.organizationId,
+        recordType: "payee",
+        recordId: record.id,
+        revision: record.revision,
+      }, [input.principal]),
+    })),
+    ...revisedPrincipals.map((record) => ({
+      recordId: record.id,
+      recordType: "principal" as const,
+      revision: record.revision,
+      envelope: encryptVaultRecord(record, {
+        schemaVersion: 1,
+        organizationId: record.organizationId,
+        recordType: "principal",
+        recordId: record.id,
+        revision: record.revision,
+      }, [input.principal]),
+    })),
+  ];
+  if (encryptedRecords.length > 100) {
+    throw new Error("Too many encrypted directory records share this wallet for one atomic reconciliation.");
+  }
+  await input.client.storeEncryptedRecords({
+    organizationId: input.organizationId,
+    records: encryptedRecords,
+  });
+  const revisedPayeesById = new Map(revisedPayees.map((record) => [record.id, record]));
+  const revisedPrincipalsById = new Map(revisedPrincipals.map((record) => [record.id, record]));
+  return {
+    records: input.records
+      .map((record) => revisedPayeesById.get(record.id) ?? record)
+      .sort((left, right) => left.displayName.localeCompare(right.displayName)),
+    directoryPrincipals: directoryPrincipals.map((record) => revisedPrincipalsById.get(record.id) ?? record),
+    resolution,
+  };
 }
 
 type EncryptedRecordMetadata = {

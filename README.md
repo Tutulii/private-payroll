@@ -30,7 +30,7 @@ PAYO labels capabilities according to evidence, not intention.
 | Mainnet private STRK batch payroll, up to 50 recipients | Working | Ready + STRK20 |
 | Confirmation tracking and shielded-balance refresh | Working | Starknet receipt |
 | Native USDC private payroll | Working | Live proof-bound Mainnet payroll, durable finality, recipient Ready observation, and both verifier shards recorded; SettlementMatch remains later work |
-| Private STRK/USDC exit boundary | Built, browser-tested, and upstream-composition proven; Mainnet activation remains release-gate work | Canonical single-hop Ekubo quote/class/pool binding, Ready open-note action, explicit public-exit warning, and unsupported-destination blocking in [Block 5 evidence](./evidence/block5-private-exit-upstream.json) |
+| Private STRK/USDC exit boundary | Working; Mainnet anonymizer, live quotes and a signed Ready-wallet canary passed | Canonical single-hop Ekubo quote/class/pool binding, canonical Starknet invoke calldata, Ready open-note action, explicit public-exit warning, unsupported-destination blocking, and [Mainnet deployment evidence](./evidence/private-exit-mainnet.json) |
 | Encrypted persistent payroll vault | Built and tested locally | XChaCha20-Poly1305/X25519 envelopes, authenticated API, PostgreSQL migration |
 | PayrollIntegrity ZK proof core | Phase 1 complete; verifier deployed | [Green Phase 1 evidence](./docs/phase1-evidence.md): 45 Noir tests, two linked native and browser ZK proofs, reproducible Garaga verifier, and real Cairo verifier → bundle → seal checks; the proof-bound generated verifier is deployed on Mainnet |
 | PAYO payroll-seal contract | Deployed and live-proven for STRK, USDC, and mixed batches | The five-contract Mainnet topology is binding-verified. Ready STRK-only, native-USDC-only, and mixed STRK/USDC payrolls reached durable `confirmed`, seal `proven`, and two-shard `onchain_verified` states in [Phase 2 evidence](./docs/phase2-evidence.md) |
@@ -129,8 +129,10 @@ deployment and canary result are recorded in `evidence/vesting-tax-mainnet.json`
 the compact canary identifiers in
 `evidence/vesting-tax-mainnet-canary-2026-09-06.json`. The deployed web and prover
 releases are bound to this exact seal, and automatic post-wallet confirmation recovery
-is deployed for the v3 authorization path. Private-exit and autonomous-agent Mainnet
-canaries remain separate Phase 5 work.
+is deployed for the v3 authorization path. The private-exit anonymizer is deployed and
+class-verified. On 2026-09-07, a signed Ready-wallet canary confirmed a private swap of
+0.2 USDC into a 6.481607 STRK private note after the invoke calldata was normalized to
+canonical Starknet felts. The autonomous-agent Mainnet canary remains separate Phase 5 work.
 
 ### Phase 4 — Human and AI-agent payroll
 

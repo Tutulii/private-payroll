@@ -57,6 +57,7 @@ describe("Ready session authentication", () => {
       sessionId: "0198-session",
       walletAddress: "0x0123",
       chainId: "0x534e5f4d41494e",
+      authKind: "ready",
     });
   });
 

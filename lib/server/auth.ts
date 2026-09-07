@@ -68,7 +68,7 @@ export async function requireReadyPrincipal(request: Request): Promise<Authentic
       "AUTH_INVALID",
     );
   }
-  return session;
+  return { ...session, authKind: "ready" };
 }
 type AgentRouteScope = {
   actions: AgentAction[];

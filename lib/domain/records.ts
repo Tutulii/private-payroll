@@ -89,6 +89,31 @@ export const principalRecordSchema = recordHeaderSchema.extend({
   }
 });
 
+export const recipientReferenceResolutionSchema = z.object({
+  resolutionVersion: z.literal("payo-recipient-reference-resolution-v1"),
+  resolutionId: uuidV7Schema,
+  recipientAddress: starknetAddressSchema,
+  canonicalReference: z.string().min(1).max(160),
+  historicalReferences: z.array(z.string().min(1).max(160)).min(2).max(32),
+  resolvedAt: z.string().datetime(),
+}).strict().superRefine((resolution, context) => {
+  if (new Set(resolution.historicalReferences).size !== resolution.historicalReferences.length) {
+    context.addIssue({
+      code: "custom",
+      path: ["historicalReferences"],
+      message: "Historical contributor references must be unique.",
+    });
+  }
+  if (!resolution.historicalReferences.includes(resolution.canonicalReference)) {
+    context.addIssue({
+      code: "custom",
+      path: ["canonicalReference"],
+      message: "The canonical contributor reference must be one of the preserved historical references.",
+    });
+  }
+});
+export type RecipientReferenceResolution = z.infer<typeof recipientReferenceResolutionSchema>;
+
 export const payeeRecordSchema = recordHeaderSchema.extend({
   principalId: uuidV7Schema,
   principalKind: z.enum(["human", "agent"]),
@@ -100,6 +125,7 @@ export const payeeRecordSchema = recordHeaderSchema.extend({
   claimIdentityPrincipalId: vaultPrincipalIdSchema.optional(),
   claimIdentityPublicKey: z.string().min(16).max(160).optional(),
   claimCapabilityCommitment: commitmentSchema.optional(),
+  recipientReferenceResolution: recipientReferenceResolutionSchema.optional(),
   status: z.enum(["active", "offboarding", "inactive"]),
 }).strict().superRefine((record, context) => {
   const fields = [
@@ -114,6 +140,31 @@ export const payeeRecordSchema = recordHeaderSchema.extend({
       path: ["claimCapabilityCommitment"],
       message: "A claim identity requires its principal, public key and capability commitment together.",
     });
+  }
+  const resolution = record.recipientReferenceResolution;
+  if (resolution && resolution.canonicalReference !== record.displayName) {
+    context.addIssue({
+      code: "custom",
+      path: ["recipientReferenceResolution", "canonicalReference"],
+      message: "The resolved contributor reference must match the contributor display name.",
+    });
+  }
+  if (resolution) {
+    try {
+      if (BigInt(resolution.recipientAddress) !== BigInt(record.recipientAddress)) {
+        context.addIssue({
+          code: "custom",
+          path: ["recipientReferenceResolution", "recipientAddress"],
+          message: "The reference resolution belongs to another contributor wallet.",
+        });
+      }
+    } catch {
+      context.addIssue({
+        code: "custom",
+        path: ["recipientReferenceResolution", "recipientAddress"],
+        message: "The reference resolution has an invalid contributor wallet.",
+      });
+    }
   }
 });
 

@@ -1,6 +1,6 @@
 {
   "schemaVersion": "payo.block5.private-exit.upstream.v1",
-  "generatedAt": "2026-09-05T02:44:50.501Z",
+  "generatedAt": "2026-09-07T05:48:28.691Z",
   "upstream": {
     "repository": "https://github.com/starkware-libs/starknet-privacy",
     "commit": "bc75e4bac71ad0ce10c6e63effc33b5b25131a4f",

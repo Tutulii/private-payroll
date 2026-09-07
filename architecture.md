@@ -197,9 +197,14 @@ but it does not conceal the anonymous swap amount or
 Ekubo pool route from the external protocol. A direct STRK20 withdrawal is a
 separate, explicitly acknowledged public exit: destination, token, amount, timing
 and transaction become linkable. Bridges, centralized exchanges and arbitrary
-contract calls are blocked rather than described as private. Until an on-chain
-Mainnet instance reproduces the reviewed anonymizer class hash, the route remains
-disabled; its declaration, deployment and live canary are release-gate work.
+contract calls are blocked rather than described as private. The immutable Mainnet
+instance at `0x6737a6cdde0e0c4f39d88ec7301e1db8d7c46ffed35ade0ee9a56ed87ab784` was deployed in
+`0x1245b90664a6d2144b04d9aedeb8e1d6822b6a6ea88e5d45b0024400e32c698` and independently read back with the exact reviewed class hash. A
+runtime remains disabled when that address is absent or its class differs. Invoke
+addresses are normalized to canonical Starknet felt strings before the Wallet API
+request; this prevents Ready from rejecting padded-address calldata before signing.
+The signed live canary confirmed 0.2 USDC into a 6.481607 STRK private note, with a
+6.41679 STRK minimum and the anonymizer verified at block 14,504,583.
 
 ## 7. Commitments and nullifiers
 

@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "network": "starknet-mainnet",
   "chainId": "0x534e5f4d41494e",
-  "updatedAt": "2026-09-01",
+  "updatedAt": "2026-09-07",
   "lastRpcVerification": {
-    "verifiedAt": "2026-09-01T07:55:43Z",
-    "blockNumber": 14189695,
+    "verifiedAt": "2026-09-07T05:56:09Z",
+    "blockNumber": 14491196,
     "passed": true
   },
   "contracts": [
@@ -92,6 +92,13 @@
       "address": "0x656928a6f3aeb62c2e62ff7457d351a41ed987ceed07c514539165662ecb7e0",
       "classHash": "0x282ed1d7682b465e1189877a1286776e0134030a84cef22101be038812bae8a",
       "payoOwned": true
+    },
+    {
+      "name": "STRK20 Ekubo anonymizer",
+      "role": "reviewed immutable single-hop STRK/USDC private-exit adapter",
+      "address": "0x6737a6cdde0e0c4f39d88ec7301e1db8d7c46ffed35ade0ee9a56ed87ab784",
+      "classHash": "0x2a4ac595283d4d64b9952f5ef5c0da1775bfdb7c9d92237524a21dd8d19ebd7",
+      "payoOwned": false
     }
   ]
 }

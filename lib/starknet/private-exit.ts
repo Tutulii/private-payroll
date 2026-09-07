@@ -101,6 +101,23 @@ export function buildPrivateSwapActions(input: {
   const amount = BigInt(quote.amountInAtomic);
   const minimum = BigInt(quote.minimumOutAtomic);
   const lowMask = (1n << 128n) - 1n;
+  // Ready validates invoke calldata as canonical FELTs. Token constants are
+  // deliberately stored as padded Starknet addresses (for display and RPC
+  // use), so passing them through unchanged makes the wallet reject the
+  // action with INVALID_REQUEST_PAYLOAD (114) before opening its approval UI.
+  const routerCalldata = canonicalAddress(
+    EKUBO_MAINNET_ROUTER_ADDRESS,
+    "Ekubo router calldata",
+  );
+  const inputTokenCalldata = canonicalAddress(from.address, "Input token calldata");
+  const poolToken0Calldata = canonicalAddress(
+    PAYO_PRIVATE_STRK_USDC_POOL.token0,
+    "Pool token0 calldata",
+  );
+  const poolToken1Calldata = canonicalAddress(
+    PAYO_PRIVATE_STRK_USDC_POOL.token1,
+    "Pool token1 calldata",
+  );
 
   const actions: STRK20_ACTION[] = [
     {
@@ -119,12 +136,12 @@ export function buildPrivateSwapActions(input: {
       type: "invoke",
       contract: canonicalAddress(quote.executorAddress, "Private swap executor"),
       calldata: [
-        EKUBO_MAINNET_ROUTER_ADDRESS,
-        from.address,
+        routerCalldata,
+        inputTokenCalldata,
         num.toHex(amount),
         "0x0",
-        PAYO_PRIVATE_STRK_USDC_POOL.token0,
-        PAYO_PRIVATE_STRK_USDC_POOL.token1,
+        poolToken0Calldata,
+        poolToken1Calldata,
         num.toHex(BigInt(PAYO_PRIVATE_STRK_USDC_POOL.fee)),
         num.toHex(BigInt(PAYO_PRIVATE_STRK_USDC_POOL.tickSpacing)),
         PAYO_PRIVATE_STRK_USDC_POOL.extension,

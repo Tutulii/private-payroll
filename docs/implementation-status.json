@@ -817,10 +817,11 @@
         "evidence/phase5-cutover-mainnet.json",
         "docs/MAINNET_CONTRACTS.md",
         "docs/MAINNET_BENCHMARKS.md",
-        "docs/phase5-evidence.md"
+        "docs/phase5-evidence.md",
+        "evidence/private-exit-mainnet.json"
       ],
       "tests": [
-        "npm run verify:mainnet-contracts matched 12/12 deployed class hashes at Mainnet block 14195790",
+        "npm run verify:mainnet-contracts matched 13/13 deployed class hashes at Mainnet block 14491196",
         "proof/calldata timings and accepted Phase 5 cutover gas recorded",
         "hosted demo URL and baseline transaction identifiers recorded; three-minute video and autonomous-canary row remain missing"
       ]
@@ -881,7 +882,11 @@
         "lib/starknet/private-exit.ts",
         "lib/server/private-exit-quote.ts",
         "evidence/block5-private-exit-browser.json",
-        "evidence/block5-private-exit-upstream.json"
+        "evidence/block5-private-exit-upstream.json",
+        "evidence/private-exit-mainnet.json"
+      ],
+      "tests": [
+        "Mainnet anonymizer deployment, Fly version 89 rollout, exact class-hash readback, and a signed Ready-wallet private-swap canary passed"
       ]
     },
     {
@@ -927,7 +932,8 @@
         "lib/starknet/private-exit.ts",
         "lib/server/private-exit-quote.ts",
         "evidence/block5-private-exit-browser.json",
-        "evidence/block5-private-exit-upstream.json"
+        "evidence/block5-private-exit-upstream.json",
+        "evidence/private-exit-mainnet.json"
       ]
     },
     {
@@ -1199,7 +1205,8 @@
         "scripts/verify-pre-hackathon-release.mjs",
         "evidence/block5-private-exit-browser.json",
         "evidence/block5-private-exit-upstream.json",
-        "evidence/vesting-tax-mainnet-canary-2026-09-06.json"
+        "evidence/vesting-tax-mainnet-canary-2026-09-06.json",
+        "evidence/private-exit-mainnet.json"
       ],
       "tests": [
         "npm run vesting:mainnet:verify-canary independently rereads state, nullifier, ordered entries and accumulator",

@@ -20,6 +20,7 @@ import { hashCapability, type SignedCapability } from "@/lib/domain/capability";
 import type { AgentExecutionReceipt } from "@/lib/domain/agent-execution";
 import type { DirectPrivacyAccountClientSummary } from "@/lib/client/payo-client";
 import type { PayoPublicIdentity } from "@/lib/client/proof-package-files";
+import type { TrustedPayrollBookSnapshot } from "@/lib/disclosure/payroll-book-report";
 import { validateAndParseAddress } from "starknet";
 
 const ORGANIZATION_ID = "018f1000-0000-7000-8000-000000000030";
@@ -56,6 +57,7 @@ type BrowserEvidenceState = {
     updatedAt: string;
   }>;
   runs: Array<Record<string, unknown>>;
+  payrollBookSnapshot: TrustedPayrollBookSnapshot | null;
   agentExecutions: AgentExecutionReceipt[];
   directPrivacyAccounts: DirectPrivacyAccountClientSummary[];
   auditEvents: Array<{
@@ -92,6 +94,7 @@ declare global {
       reset: () => void;
       exportState: () => BrowserEvidenceExport;
       setRuns: (runs: Array<Record<string, unknown>>) => void;
+      setPayrollBookSnapshot: (snapshot: TrustedPayrollBookSnapshot) => void;
       setAgentExecutions: (executions: AgentExecutionReceipt[]) => void;
       setDirectPrivacyAccounts: (accounts: DirectPrivacyAccountClientSummary[]) => void;
       setAuditEvents: (events: BrowserEvidenceState["auditEvents"]) => void;
@@ -105,6 +108,7 @@ function emptyState(): BrowserEvidenceState {
     records: [],
     publicIdentities: [],
     runs: [],
+    payrollBookSnapshot: null,
     agentExecutions: [],
     directPrivacyAccounts: [],
     auditEvents: [],
@@ -122,6 +126,7 @@ function readState(): BrowserEvidenceState {
       records: Array.isArray(parsed.records) ? parsed.records : [],
       publicIdentities: Array.isArray(parsed.publicIdentities) ? parsed.publicIdentities : [],
       runs: Array.isArray(parsed.runs) ? parsed.runs : [],
+      payrollBookSnapshot: parsed.payrollBookSnapshot ?? null,
       agentExecutions: Array.isArray(parsed.agentExecutions) ? parsed.agentExecutions : [],
       directPrivacyAccounts: Array.isArray(parsed.directPrivacyAccounts)
         ? parsed.directPrivacyAccounts
@@ -269,6 +274,23 @@ export function PayoBrowserEvidenceProvider({ children }: { children: ReactNode 
           updatedAt: published.updatedAt,
         } : null,
       };
+    },
+
+    async getPayrollBookSnapshot(input: {
+      organizationId: string;
+      ownerAddress: string;
+      periodStart: string;
+      periodEnd: string;
+    }) {
+      const snapshot = readState().payrollBookSnapshot;
+      if (!snapshot) throw new Error("Synthetic payroll-book snapshot not registered.");
+      if (
+        input.organizationId !== ORGANIZATION_ID
+        || BigInt(input.ownerAddress) !== BigInt(snapshot.checkpoint.ownerAddress)
+        || input.periodStart !== snapshot.checkpoint.periodStart
+        || input.periodEnd !== snapshot.checkpoint.periodEnd
+      ) throw new Error("Synthetic payroll-book snapshot query mismatch.");
+      return { snapshot };
     },
 
     async listObligationClaimAccessGrants() {
@@ -508,6 +530,7 @@ export function PayoBrowserEvidenceProvider({ children }: { children: ReactNode 
           })),
           publicIdentities: state.publicIdentities,
           runs: state.runs,
+          payrollBookSnapshot: state.payrollBookSnapshot,
           agentExecutions: state.agentExecutions,
           directPrivacyAccounts: state.directPrivacyAccounts,
           auditEvents: state.auditEvents,
@@ -516,6 +539,9 @@ export function PayoBrowserEvidenceProvider({ children }: { children: ReactNode 
       },
       setRuns(runs) {
         mutate((state) => ({ ...state, runs }));
+      },
+      setPayrollBookSnapshot(payrollBookSnapshot) {
+        mutate((state) => ({ ...state, payrollBookSnapshot }));
       },
       setAgentExecutions(agentExecutions) {
         mutate((state) => ({ ...state, agentExecutions }));

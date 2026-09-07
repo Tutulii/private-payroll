@@ -58,19 +58,24 @@ nullifier, book entry index 2 of 3 and accumulator root
 The full result is in `evidence/vesting-tax-mainnet.json`; the compact public input is
 in `evidence/vesting-tax-mainnet-canary-2026-09-06.json`.
 
-## Planned private-exit instance
+## Active private-exit instance
 
-The reviewed upstream `EkuboSwapAnonymizer` class is already declared on Mainnet.
-PAYO therefore needs one deterministic empty-constructor instance, not another class
-declaration.
+The reviewed upstream `EkuboSwapAnonymizer` class and its deterministic
+empty-constructor instance are deployed on Mainnet.
 
-| Candidate component | Deterministic address | Class hash | Current state |
+| Component | Deterministic address | Class hash | Current state |
 | --- | --- | --- | --- |
-| STRK20 Ekubo anonymizer | `0x6737a6cdde0e0c4f39d88ec7301e1db8d7c46ffed35ade0ee9a56ed87ab784` | `0x2a4ac595283d4d64b9952f5ef5c0da1775bfdb7c9d92237524a21dd8d19ebd7` | Class declared; instance undeployed |
+| STRK20 Ekubo anonymizer | `0x6737a6cdde0e0c4f39d88ec7301e1db8d7c46ffed35ade0ee9a56ed87ab784` | `0x2a4ac595283d4d64b9952f5ef5c0da1775bfdb7c9d92237524a21dd8d19ebd7` | Deployed at block `14490975`; exact class hash read back |
 
-`evidence/private-exit-mainnet-plan.json` binds the upstream revision, source and
-artifact hashes, deterministic salt, empty constructor, exact ABI readback and
-read-only fee simulation. Its 2026-09-05 estimate was 0.083765866841584179 STRK and
-must be refreshed before any mutation. Vesting deployment and its live canary are
-complete; private-exit deployment, hosted configuration and a tiny Ready-wallet
-canary remain separate work requiring immediate user approval.
+The explicitly approved deployment transaction was
+`0x1245b90664a6d2144b04d9aedeb8e1d6822b6a6ea88e5d45b0024400e32c698`. Its simulated fee was `0.076818696771111613 STRK`; the accepted actual fee
+was `0.031005492616446962 STRK`. Independent verification passed at block
+`14490987` and is recorded in `evidence/private-exit-mainnet.json`. The regenerated
+plan in `evidence/private-exit-mainnet-plan.json` binds the upstream revision, source
+and artifact hashes, deterministic salt, empty constructor and exact ABI.
+
+Local runtime configuration and a live Ekubo quote pass. Fly version 89 serves the
+canonical-calldata fix. A signed Ready-wallet canary reached `Private swap confirmed`
+for 0.2 USDC into a 6.481607 STRK private note, with a 6.41679 STRK minimum and the
+anonymizer verified at block 14,504,583. The canary is recorded without a transaction
+hash because the supplied completion evidence did not expose one.

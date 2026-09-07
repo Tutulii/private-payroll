@@ -1,7 +1,13 @@
 import { z } from "zod";
 import { hashCanonicalJson } from "@/lib/crypto/digest";
 import { atomicAmountSchema, payrollTokenSchema } from "@/lib/domain/payroll";
-import { commitmentSchema, starknetAddressSchema, uuidV7Schema } from "@/lib/domain/records";
+import {
+  commitmentSchema,
+  recipientReferenceResolutionSchema,
+  starknetAddressSchema,
+  uuidV7Schema,
+  type RecipientReferenceResolution,
+} from "@/lib/domain/records";
 import { policyPackCommitment, type PolicyPack } from "@/lib/policy/engine";
 import {
   payrollReportPayloadSchema,
@@ -32,6 +38,7 @@ export const verifiedIncomeLineSchema = z.object({
   bookIndex: u32Schema,
   lineIndex: z.number().int().min(0).max(49),
   recipientReference: z.string().min(1).max(240),
+  recipientReferenceResolution: recipientReferenceResolutionSchema.optional(),
   recipientAddress: starknetAddressSchema,
   workerType: workerTypeSchema,
   token: payrollTokenSchema,
@@ -44,6 +51,17 @@ export const verifiedIncomeLineSchema = z.object({
 }).strict().superRefine((line, context) => {
   if (BigInt(line.grossAtomic) - BigInt(line.deductionsAtomic) !== BigInt(line.netAtomic)) {
     context.addIssue({ code: "custom", path: ["netAtomic"], message: "Verified income arithmetic does not balance." });
+  }
+  const resolution = line.recipientReferenceResolution;
+  if (resolution && (
+    resolution.canonicalReference !== line.recipientReference
+    || BigInt(resolution.recipientAddress) !== BigInt(line.recipientAddress)
+  )) {
+    context.addIssue({
+      code: "custom",
+      path: ["recipientReferenceResolution"],
+      message: "The income line has an invalid contributor reference resolution.",
+    });
   }
 });
 export type VerifiedIncomeLine = z.infer<typeof verifiedIncomeLineSchema>;
@@ -123,6 +141,7 @@ function canonicalLine(input: {
   bookIndex: number;
   lineIndex: number;
   recipientReference: string;
+  recipientReferenceResolution?: RecipientReferenceResolution;
   recipientAddress: string;
   workerType: VerifiedIncomeLine["workerType"];
   token: VerifiedIncomeLine["token"];
@@ -140,6 +159,9 @@ function canonicalLine(input: {
     bookIndex: input.bookIndex,
     lineIndex: input.lineIndex,
     recipientReference: input.recipientReference,
+    ...(input.recipientReferenceResolution
+      ? { recipientReferenceResolution: input.recipientReferenceResolution }
+      : {}),
     recipientAddress: input.recipientAddress,
     workerType: input.workerType,
     token: input.token,
@@ -182,6 +204,7 @@ export async function createVerifiedIncomeEvidence(input: {
           bookIndex: entry.index,
           lineIndex: line.index,
           recipientReference: line.recipientReference,
+          recipientReferenceResolution: line.recipientReferenceResolution,
           recipientAddress: line.source.recipientAddress,
           workerType: line.workerType,
           token: line.source.token,
@@ -202,6 +225,7 @@ export async function createVerifiedIncomeEvidence(input: {
         bookIndex: disclosed.bookIndex,
         lineIndex: line.index,
         recipientReference: line.recipientReference,
+        recipientReferenceResolution: line.recipientReferenceResolution,
         recipientAddress: line.source.recipientAddress,
         workerType: line.workerType,
         token: line.source.token,

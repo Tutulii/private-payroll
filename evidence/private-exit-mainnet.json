@@ -1,0 +1,99 @@
+{
+  "schemaVersion": "payo-private-exit-mainnet-evidence-v1",
+  "plan": {
+    "schemaVersion": "payo-private-exit-mainnet-plan-v1",
+    "generatedAt": "2026-09-07T05:48:56.543Z",
+    "network": "starknet-mainnet",
+    "chainId": "0x534e5f4d41494e",
+    "deployerAddress": "0x126a7a572cf8935d069af937e9f7b27a24949e271e1fbccfe4de0c0d8dc8ea9",
+    "upstream": {
+      "repository": "https://github.com/starkware-libs/starknet-privacy",
+      "commit": "bc75e4bac71ad0ce10c6e63effc33b5b25131a4f",
+      "contract": "EkuboSwapAnonymizer"
+    },
+    "deployment": {
+      "address": "0x6737a6cdde0e0c4f39d88ec7301e1db8d7c46ffed35ade0ee9a56ed87ab784",
+      "classHash": "0x2a4ac595283d4d64b9952f5ef5c0da1775bfdb7c9d92237524a21dd8d19ebd7",
+      "salt": "0x7061796f2d707269766174652d657869742d656b75626f2d7631",
+      "constructorCalldata": [],
+      "unique": false
+    },
+    "evidence": {
+      "path": "evidence/block5-private-exit-upstream.json",
+      "upstreamLockSha256": "3c7980bc3eb3eaedd5469dd6b0ea6234f3df842ca7ad4dc681811208c7de2396",
+      "anonymizerSourceSha256": "74bea293185e6daae620159717547104549bc477aee22557e4da14a22dda55c4",
+      "integrationSourceSha256": "642e7f67ea6f196e9fce8b9b77c0722ddabe065548fea72618fa13467f234d39",
+      "releaseArtifactSha256": "2e92b97500f201b3478dedaa945a01351744dd5ab55bc11d848dab04467f3648"
+    },
+    "releaseRequirements": {
+      "classDeclared": true,
+      "emptyConstructor": true,
+      "exactPrivacyInvokeAbi": true,
+      "deployedClassHashReadback": true,
+      "configureOnlyAfterReadback": true,
+      "tinyReadyWalletCanaryRequired": true
+    }
+  },
+  "deployment": {
+    "transactionHash": "0x1245b90664a6d2144b04d9aedeb8e1d6822b6a6ea88e5d45b0024400e32c698",
+    "contractAddress": "0x6737a6cdde0e0c4f39d88ec7301e1db8d7c46ffed35ade0ee9a56ed87ab784",
+    "classHash": "0x2a4ac595283d4d64b9952f5ef5c0da1775bfdb7c9d92237524a21dd8d19ebd7",
+    "nonce": "0x94",
+    "tip": "1",
+    "simulatedFeeFri": "76818696771111613",
+    "actualFeeFri": "31005492616446962",
+    "blockNumber": 14490975,
+    "recoveredFromWaitError": false,
+    "readback": {
+      "reviewedClass": {
+        "classHash": "0x2a4ac595283d4d64b9952f5ef5c0da1775bfdb7c9d92237524a21dd8d19ebd7",
+        "contractClassVersion": "0.1.0",
+        "emptyConstructor": true,
+        "exactPrivacyInvokeAbi": true
+      },
+      "deployment": {
+        "address": "0x6737a6cdde0e0c4f39d88ec7301e1db8d7c46ffed35ade0ee9a56ed87ab784",
+        "expectedClassHash": "0x2a4ac595283d4d64b9952f5ef5c0da1775bfdb7c9d92237524a21dd8d19ebd7",
+        "actualClassHash": "0x2a4ac595283d4d64b9952f5ef5c0da1775bfdb7c9d92237524a21dd8d19ebd7",
+        "deployed": true,
+        "classHashMatches": true
+      }
+    }
+  },
+  "verification": {
+    "passed": true,
+    "observedAt": "2026-09-07T05:50:11.922Z",
+    "blockNumber": 14490987,
+    "chainId": "0x534e5f4d41494e",
+    "reviewedClass": {
+      "classHash": "0x2a4ac595283d4d64b9952f5ef5c0da1775bfdb7c9d92237524a21dd8d19ebd7",
+      "contractClassVersion": "0.1.0",
+      "emptyConstructor": true,
+      "exactPrivacyInvokeAbi": true
+    },
+    "deployment": {
+      "address": "0x6737a6cdde0e0c4f39d88ec7301e1db8d7c46ffed35ade0ee9a56ed87ab784",
+      "expectedClassHash": "0x2a4ac595283d4d64b9952f5ef5c0da1775bfdb7c9d92237524a21dd8d19ebd7",
+      "actualClassHash": "0x2a4ac595283d4d64b9952f5ef5c0da1775bfdb7c9d92237524a21dd8d19ebd7",
+      "deployed": true,
+      "classHashMatches": true
+    },
+    "canaryRequired": true,
+    "canaryPassed": true
+  },
+  "liveCanary": {
+    "passed": true,
+    "recordedAt": "2026-09-07T12:24:15Z",
+    "source": "user-supplied Ready wallet completion screenshot",
+    "walletState": "private_swap_confirmed",
+    "inputToken": "USDC",
+    "inputAtomic": "200000",
+    "inputDisplay": "0.2 USDC",
+    "outputToken": "STRK",
+    "outputDisplay": "6.481607 STRK",
+    "minimumOutputDisplay": "6.41679 STRK",
+    "anonymizerVerifiedBlockNumber": 14504583,
+    "flyVersion": 89,
+    "transactionHashRecorded": false
+  }
+}

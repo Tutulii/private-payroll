@@ -32,11 +32,14 @@ import {
   type EncryptedWorkerStatementSource,
 } from "@/lib/disclosure/worker-statement-source";
 import type { PayoReportingIdentity } from "@/lib/crypto/reporting-identity";
+import { createAuthorityReadinessEvidence } from "@/lib/disclosure/authority-readiness";
+import { createPublicAccountabilitySummary } from "@/lib/disclosure/public-accountability";
 import { generateUuidV7 } from "@/lib/domain/records";
 import { buildPayrollIntegrityInputsFromSerialized } from "@/lib/proof/input-builder";
 import type { PayoClient } from "./payo-client";
 import type { PayAgreementDirectoryRecord } from "./agreement-directory";
 import type { PayeeDirectoryRecord } from "./payee-directory";
+import { parsePayoPublicIdentity, type PayoPublicIdentity } from "./proof-package-files";
 
 const commitmentSchema = z.string().regex(/^0x[0-9a-fA-F]{64}$/);
 const encryptedRunPayloadSchema = z.object({
@@ -94,6 +97,9 @@ function metadataForPayroll(input: {
     }
     return [agreementId, {
       recipientReference: payee.displayName,
+      ...(payee.recipientReferenceResolution
+        ? { recipientReferenceResolution: payee.recipientReferenceResolution }
+        : {}),
       workerType,
     }];
   }));
@@ -124,6 +130,7 @@ export async function createEncryptedPayrollReportFromBook(input: {
   periodEnd: string;
   principal: VaultPrincipalKeyPair;
   recipient: VaultPrincipal;
+  recipientIdentities?: readonly PayoPublicIdentity[];
   kind: PayrollReportKind;
   agreements: readonly PayAgreementDirectoryRecord[];
   payees: readonly PayeeDirectoryRecord[];
@@ -203,12 +210,47 @@ export async function createEncryptedPayrollReportFromBook(input: {
   }
 
   const now = input.now ?? new Date();
+  let encryptedRecipients: VaultPrincipal[] = [input.recipient];
+  let recipientIdentities: Array<{ principalId: string; identityFingerprint: string }> | undefined;
+  if (input.kind === "tax_book") {
+    if (!input.recipientIdentities?.length) {
+      throw new Error("An authorized-reviewer report requires at least one verified public identity.");
+    }
+    if (input.recipientIdentities.length > 8) {
+      throw new Error("An authorized-reviewer report supports at most eight verified recipients.");
+    }
+    const identities = input.recipientIdentities.map((identity) => {
+      const parsed = parsePayoPublicIdentity(identity);
+      if (parsed.format !== "payo-public-identity-v2") {
+        throw new Error("Authorized-reviewer reports require version 2 wallet-bound PAYO identities.");
+      }
+      return parsed;
+    });
+    if (new Set(identities.map(({ principalId }) => principalId)).size !== identities.length
+      || new Set(identities.map(({ publicKey }) => publicKey)).size !== identities.length
+      || new Set(identities.map(({ fingerprint }) => fingerprint.toLowerCase())).size !== identities.length) {
+      throw new Error("Authorized-reviewer recipients must use unique principals, encryption keys and fingerprints.");
+    }
+    const primary = identities[0]!;
+    if (primary.principalId !== input.recipient.principalId
+      || primary.publicKey !== input.recipient.publicKey) {
+      throw new Error("The primary reviewer identity does not match the encrypted report recipient.");
+    }
+    encryptedRecipients = identities.map(({ principalId, publicKey }) => ({ principalId, publicKey }));
+    recipientIdentities = identities.map(({ principalId, fingerprint }) => ({
+      principalId,
+      identityFingerprint: fingerprint,
+    }));
+  } else if (input.recipientIdentities?.length) {
+    throw new Error("Additional reviewer identities are valid only for an authorized-reviewer report.");
+  }
   const completeReport = completePayrollBookReportSchema.parse({
     reportVersion: "payo-private-payroll-report-v1",
     reportType: "complete_payroll_book",
     reportId: generateUuidV7(now.getTime()),
     organizationId: input.organizationId,
     scope: input.kind === "tax_book" ? "tax_authority" : "employer",
+    ...(recipientIdentities ? { recipientIdentities } : {}),
     checkpoint: snapshot.checkpoint,
     entries: reportEntries,
     generatedAt: now.toISOString(),
@@ -219,13 +261,32 @@ export async function createEncryptedPayrollReportFromBook(input: {
   });
 
   if (input.kind !== "worker_statement") {
-    const encryptedReport = encryptPayrollReport({ payload: completeReport, recipients: [input.recipient] });
+    const encryptedReport = encryptPayrollReport({ payload: completeReport, recipients: encryptedRecipients });
+    const familiarArtifacts = await createFamiliarTaxArtifacts(completeReport, snapshot);
+    const authorityReadinessEvidence = input.kind === "tax_book"
+      && familiarArtifacts.familiarTaxIssues.length === 0
+      ? await createAuthorityReadinessEvidence({
+          report: completeReport,
+          trustedSnapshot: snapshot,
+          reportCommitment: encryptedReport.packageCommitment,
+          recipients: recipientIdentities!,
+          generatedAt: now,
+        })
+      : undefined;
+    const publicAccountabilitySummary = await createPublicAccountabilitySummary({
+      report: completeReport,
+      trustedSnapshot: snapshot,
+      reportCommitment: encryptedReport.packageCommitment,
+      generatedAt: now,
+    });
     return {
       encryptedReport,
       payload: completeReport,
       verification: completeVerification,
       snapshot,
-      ...await createFamiliarTaxArtifacts(completeReport, snapshot),
+      ...familiarArtifacts,
+      authorityReadinessEvidence,
+      publicAccountabilitySummary,
     };
   }
   const worker = input.payees.find(({ id }) => id === input.workerPayeeId);
@@ -245,6 +306,7 @@ export async function createEncryptedPayrollReportFromBook(input: {
     verification: await verifyWorkerIncomeStatement({ statement, trustedSnapshot: snapshot }),
     snapshot,
     ...await createFamiliarTaxArtifacts(statement, snapshot),
+    publicAccountabilitySummary: undefined,
   };
 }
 
@@ -267,10 +329,31 @@ export async function inspectPayrollReportAgainstLiveBook(input: {
     recipient: input.recipient,
     trustedSnapshot: snapshot,
   });
+  const familiarArtifacts = await createFamiliarTaxArtifacts(inspection.payload, snapshot);
+  const authorityReadinessEvidence = inspection.payload.reportType === "complete_payroll_book"
+    && inspection.payload.scope === "tax_authority"
+    && inspection.payload.recipientIdentities
+    && familiarArtifacts.familiarTaxIssues.length === 0
+    ? await createAuthorityReadinessEvidence({
+        report: inspection.payload,
+        trustedSnapshot: snapshot,
+        reportCommitment: encryptedReport.packageCommitment,
+        recipients: inspection.payload.recipientIdentities,
+      })
+    : undefined;
+  const publicAccountabilitySummary = inspection.payload.reportType === "complete_payroll_book"
+    ? await createPublicAccountabilitySummary({
+        report: inspection.payload,
+        trustedSnapshot: snapshot,
+        reportCommitment: encryptedReport.packageCommitment,
+      })
+    : undefined;
   return {
     ...inspection,
     snapshot,
-    ...await createFamiliarTaxArtifacts(inspection.payload, snapshot),
+    ...familiarArtifacts,
+    authorityReadinessEvidence,
+    publicAccountabilitySummary,
   };
 }
 

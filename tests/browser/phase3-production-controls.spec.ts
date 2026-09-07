@@ -12,6 +12,7 @@ import {
   STARKNET_MAINNET_CHAIN_ID,
   STRK20_MAINNET_POOL_ADDRESS,
 } from "@/lib/starknet/deployment";
+import { workerEvidenceBrowserFixture } from "@/tests/support/worker-evidence-browser-fixture";
 import {
   createRecipientEncryptedProofPackage,
   proofPackagePublicInputsHash,
@@ -654,10 +655,10 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
     complianceBook.getByRole("heading", { name: /Complete to the chain/ }),
   ).toBeVisible();
   await expect(
-    complianceBook.getByLabel("Report").locator("option"),
+    complianceBook.getByLabel("Report", { exact: true }).locator("option"),
   ).toHaveText([
     "Employer · complete payroll book",
-    "Tax authority · fully disclosed book",
+    "Authorized tax reviewer · complete encrypted book",
     "Worker · encrypted self-service source",
   ]);
   await expect(
@@ -676,7 +677,82 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
   await expect(complianceBook).toContainText(
     "One canonical verified-income schema",
   );
-  await complianceBook.locator("form.receipt-disclosure-form select").first().selectOption("worker_statement");
+  await complianceBook.getByLabel("Report", { exact: true }).selectOption("tax_book");
+  await complianceBook.getByLabel("Reviewer Ready wallet").fill("0x986");
+  await expect(complianceBook.getByText("Reviewer action needed")).toBeVisible();
+  await expect(complianceBook).toContainText(
+    "Ask the reviewer to sign in and unlock their PAYO vault once",
+  );
+  const reviewerIdentity = createPayoPublicIdentity(
+    generateVaultPrincipal("browser-tax-reviewer"),
+  );
+  await page.evaluate(({ reviewerIdentity }) => {
+    window.__PAYO_BROWSER_EVIDENCE__?.registerPublicIdentity(
+      "0x987",
+      reviewerIdentity,
+    );
+  }, { reviewerIdentity });
+  await complianceBook.getByLabel("Reviewer Ready wallet").fill("0x987");
+  await expect(complianceBook.getByText("Wallet identity verified")).toBeVisible();
+  await expect(complianceBook).toContainText(
+    reviewerIdentity.fingerprint,
+  );
+  await expect(complianceBook).toContainText(
+    "official filing remains on the relevant government channel",
+  );
+  await expect(
+    complianceBook.getByText("Offline identity-file fallback"),
+  ).toBeVisible();
+  await expect(complianceBook).toContainText("Contractor networks");
+  await expect(complianceBook).toContainText("Grant networks");
+  await expect(complianceBook).toContainText("Onchain companies");
+  await expect(complianceBook).toContainText("1–50 contributors per proved run");
+  const committeeIdentity = createPayoPublicIdentity(
+    generateVaultPrincipal("browser-tax-committee"),
+  );
+  await page.evaluate(({ committeeIdentity }) => {
+    window.__PAYO_BROWSER_EVIDENCE__?.registerPublicIdentity(
+      "0x988",
+      committeeIdentity,
+    );
+  }, { committeeIdentity });
+  await complianceBook.getByText("Governance committee access").click();
+  await complianceBook.getByLabel("Committee member Ready wallet").fill("0x988");
+  await complianceBook.getByRole("button", { name: "Add verified member" }).click();
+  await expect(complianceBook).toContainText("1 of 7 additional members");
+  await expect(complianceBook).toContainText(committeeIdentity.fingerprint);
+  await expect(complianceBook).toContainText("Each selected member can decrypt independently");
+  await expect(complianceBook).toContainText("cannot be remotely revoked");
+  await expect(
+    complianceBook.getByRole("button", { name: "Share my Ready fallback" }),
+  ).toHaveCount(0);
+  for (const viewport of [
+    { width: 320, height: 720 },
+    { width: 375, height: 812 },
+    { width: 768, height: 900 },
+    { width: 1280, height: 900 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const overflow = await page.evaluate(() => ({
+      viewport: window.innerWidth,
+      document: document.documentElement.scrollWidth,
+      body: document.body.scrollWidth,
+    }));
+    expect(Math.max(overflow.document, overflow.body)).toBeLessThanOrEqual(
+      overflow.viewport + 1,
+    );
+    await expect(complianceBook.getByText("Wallet identity verified")).toBeVisible();
+    if (viewport.width === 320 || viewport.width === 1280) {
+      const screenshot = await page.screenshot({ fullPage: true });
+      await mkdir(resolve("test-results"), { recursive: true });
+      await writeFile(resolve("test-results", `reviewer-flow-${viewport.width}px.png`), screenshot);
+      await testInfo.attach(`reviewer-flow-${viewport.width}px`, {
+        body: screenshot,
+        contentType: "image/png",
+      });
+    }
+  }
+  await complianceBook.getByLabel("Report", { exact: true }).selectOption("worker_statement");
   await complianceBook.locator("form.receipt-disclosure-form select").nth(1).selectOption({ index: 1 });
   const reportingIdentity = deriveDirectStrk20ReportingIdentity({
     viewingKey: "0x123456",
@@ -852,6 +928,144 @@ test("all Phase 3 production controls create encrypted, proof-bound browser evid
   }
 });
 
+test("My Pay opens only the intended worker source and verifies the live book", async ({ page }, testInfo) => {
+  const fixture = await workerEvidenceBrowserFixture();
+  await page.goto("/payo-browser-evidence/my-pay");
+  await expect(page.getByRole("heading", { name: "My Pay", exact: true })).toBeVisible();
+  await page.evaluate(() => window.__PAYO_BROWSER_EVIDENCE__?.reset());
+  await page.evaluate(({ snapshot }) => {
+    window.__PAYO_BROWSER_EVIDENCE__?.setPayrollBookSnapshot(snapshot);
+  }, { snapshot: fixture.snapshot });
+
+  await expect(page.getByText("Matching PAYO vault ready")).toBeVisible();
+  await expect(page.getByText("No transaction or fee")).toBeVisible();
+  await expect(page.getByRole("button", { name: "New payroll" })).toHaveCount(0);
+  await expect(page.getByText("Choose contributor")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Import (worker|reviewer) identity/ })).toHaveCount(0);
+
+  const statementDownload = page.waitForEvent("download");
+  await page.locator('input[type="file"]').first().setInputFiles({
+    name: "payo-worker-source.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(`${JSON.stringify(fixture.encryptedSource)}
+`),
+  });
+  expect((await statementDownload).suggestedFilename()).toMatch(
+    /^payo-worker-income-statement-ada-worker-2026-/,
+  );
+
+  const sourceCard = page.locator('[data-report-result="worker-source"]');
+  await expect(sourceCard).toContainText(/Encrypted source accepted/i);
+  await expect(sourceCard).toContainText("Identity and source verified");
+  const statementCard = page.locator('[data-report-result="worker-statement"]');
+  await expect(statementCard).toContainText(fixture.expected.workerName);
+  await expect(statementCard.getByText("Gross pay", { exact: true }).locator(".."))
+    .toContainText(fixture.expected.net);
+  await expect(statementCard.getByText("Deductions", { exact: true }).locator(".."))
+    .toContainText("0");
+  await expect(statementCard.getByText("Net income", { exact: true }).locator(".."))
+    .toContainText(fixture.expected.net);
+  await expect(statementCard).toContainText(fixture.expected.blockNumber);
+  await expect(statementCard).toContainText(fixture.expected.integrityTransactionHash);
+  await expect(statementCard).toContainText(fixture.expected.settlementTransactionHash);
+  await expect(statementCard).toContainText("CHAIN-COMPLETE REPORT VERIFIED");
+  await statementCard.getByRole("button", { name: "Check again" }).click();
+  await expect(statementCard).toContainText("Verified against payroll book");
+
+  for (const viewport of [
+    { width: 320, height: 720 },
+    { width: 375, height: 812 },
+    { width: 768, height: 900 },
+    { width: 1280, height: 900 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const overflow = await page.evaluate(() => ({
+      viewport: window.innerWidth,
+      document: document.documentElement.scrollWidth,
+      body: document.body.scrollWidth,
+    }));
+    expect(Math.max(overflow.document, overflow.body)).toBeLessThanOrEqual(
+      overflow.viewport + 1,
+    );
+    await expect(page.getByRole("button", { name: "Check again" })).toBeVisible();
+    if (viewport.width === 320 || viewport.width === 1280) {
+      const screenshot = await page.screenshot({ fullPage: true });
+      await mkdir(resolve("test-results"), { recursive: true });
+      await writeFile(resolve("test-results", `my-pay-${viewport.width}px.png`), screenshot);
+      await testInfo.attach(`my-pay-${viewport.width}px`, {
+        body: screenshot,
+        contentType: "image/png",
+      });
+    }
+  }
+
+  await page.locator('input[type="file"]').first().setInputFiles({
+    name: "employer-book.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(`${JSON.stringify(fixture.employerBook)}
+`),
+  });
+  await expect(page.getByRole("alert").filter({ hasText: "Statement not opened" }))
+    .toContainText("My Pay opens worker evidence only");
+  await expect(page.locator('[data-report-result="employer-book"]')).toHaveCount(0);
+
+  await page.goto("/payo-browser-evidence/activity");
+  await page.evaluate(({ snapshot }) => {
+    window.__PAYO_BROWSER_EVIDENCE__?.setPayrollBookSnapshot(snapshot);
+  }, { snapshot: fixture.snapshot });
+  const complianceBook = page.locator(".payroll-report-card");
+  await complianceBook.locator("input.proof-package-file-input").last().setInputFiles({
+    name: "payo-authorized-reviewer-book.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(`${JSON.stringify(fixture.taxReviewerBook)}\n`),
+  });
+  const reviewerCard = page.locator('[data-report-result="tax-book"]');
+  await expect(reviewerCard).toContainText("What this evidence establishes");
+  await expect(reviewerCard).toContainText("OUTSIDE THIS PROOF");
+  await expect(reviewerCard).toContainText("Exported — not submitted");
+  await expect(reviewerCard).toContainText("2 independently authorized reviewers");
+  await expect(reviewerCard).toContainText("Each selected member can decrypt independently");
+  await expect(reviewerCard).toContainText("cannot be remotely revoked");
+  await expect(reviewerCard).toContainText("1 entry · 1 payroll line");
+  await expect(reviewerCard).toContainText(fixture.expected.blockNumber);
+  await expect(reviewerCard).toContainText("DAO public accountability");
+  await expect(reviewerCard).toContainText("2026-Q1");
+  await expect(reviewerCard).toContainText("Complete public aggregate");
+  await expect(reviewerCard).toContainText("1 private contributor payment");
+  await expect(reviewerCard).toContainText("1.25");
+  await expect(reviewerCard).toContainText("fewer than five contributor payments");
+  await expect(reviewerCard).toContainText("not unique people");
+  const accountabilityDownload = page.waitForEvent("download");
+  await reviewerCard.getByRole("button", { name: "Download public accountability evidence" }).click();
+  expect((await accountabilityDownload).suggestedFilename()).toMatch(
+    /^payo-public-accountability-2026-/,
+  );
+  const readinessDownload = page.waitForEvent("download");
+  await reviewerCard.getByRole("button", { name: "Download readiness evidence" }).click();
+  expect((await readinessDownload).suggestedFilename()).toMatch(
+    /^payo-authority-readiness-2026-/,
+  );
+  for (const viewport of [
+    { width: 320, height: 720 },
+    { width: 1280, height: 900 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expect(reviewerCard).toBeVisible();
+    const cardOverflow = await reviewerCard.evaluate((element) => ({
+      client: element.clientWidth,
+      scroll: element.scrollWidth,
+    }));
+    expect(cardOverflow.scroll).toBeLessThanOrEqual(cardOverflow.client + 1);
+    const screenshot = await reviewerCard.screenshot();
+    await mkdir(resolve("test-results"), { recursive: true });
+    await writeFile(resolve("test-results", `reviewer-accountability-${viewport.width}px.png`), screenshot);
+    await testInfo.attach(`reviewer-accountability-${viewport.width}px`, {
+      body: screenshot,
+      contentType: "image/png",
+    });
+  }
+});
+
 test("activity history opens recent records in bounded batches", async ({ page }) => {
   await page.goto("/payo-browser-evidence/team");
   await page.waitForFunction(() => Boolean(window.__PAYO_BROWSER_EVIDENCE__));
@@ -879,4 +1093,41 @@ test("activity history opens recent records in bounded batches", async ({ page }
 
   await page.getByRole("button", { name: "Show recent only" }).click();
   await expect(page.locator(".timeline-event")).toHaveCount(8);
+});
+
+test("employer resolves historical contributor names before regenerating reviewer evidence", async ({ page }) => {
+  await page.goto("/payo-browser-evidence/reference-reconciliation");
+
+  const reviewerCard = page.locator('[data-report-result="tax-book"]');
+  await expect(reviewerCard).toContainText("Readiness file withheld");
+  await expect(reviewerCard).toContainText("Simson / Vesting canary");
+
+  const canonicalName = reviewerCard.getByLabel("Canonical contributor name");
+  await expect(canonicalName).toHaveValue("Simson");
+  await expect(canonicalName.locator("option")).toHaveText([
+    "Simson",
+    "Vesting canary",
+  ]);
+
+  for (const viewport of [
+    { width: 320, height: 720 },
+    { width: 768, height: 900 },
+    { width: 1280, height: 900 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const overflow = await reviewerCard.evaluate((element) => ({
+      client: element.clientWidth,
+      scroll: element.scrollWidth,
+    }));
+    expect(overflow.scroll).toBeLessThanOrEqual(overflow.client + 1);
+  }
+
+  await reviewerCard.getByRole("button", {
+    name: "Reconcile names & regenerate report",
+  }).click();
+  await expect(page.getByText("Regenerated with Simson")).toBeVisible();
+  await expect(reviewerCard).toContainText(
+    "Historical contributor aliases were reconciled through encrypted, revisioned employer records",
+  );
+  await expect(reviewerCard.getByText("Readiness file withheld")).toHaveCount(0);
 });

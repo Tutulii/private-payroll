@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArrowRight,
   Bot,
   Check,
   CheckCircle2,
@@ -18,12 +19,14 @@ import {
   ShieldCheck,
   Sparkles,
   UserPlus,
+  Users,
   WalletCards,
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { validateAndParseAddress } from "starknet";
 import { useAppShell } from "../ui/app-shell";
 import { usePayoVault } from "../vault/payo-vault";
 import {
@@ -55,8 +58,11 @@ import {
   proofPackageExportFilename,
   publicIdentityFilename,
   serializePayoJson,
+  type PayoPublicIdentity,
   type ProofPackageOpenFailure,
 } from "@/lib/client/proof-package-files";
+import { verifyWalletBoundPublicIdentity } from "@/lib/client/wallet-bound-identity";
+import { createPayrollReportView } from "@/lib/client/payroll-report-view";
 import {
   verifyLiveProofTransaction,
 } from "@/lib/client/starknet-proof-evidence";
@@ -75,8 +81,10 @@ import {
 } from "@/lib/client/agreement-directory";
 import {
   loadEncryptedPayees,
+  reconcileEncryptedPayeeReferences,
   type PayeeDirectoryRecord,
 } from "@/lib/client/payee-directory";
+import { loadEncryptedPrincipals } from "@/lib/client/principal-directory";
 import {
   decryptedRunAgreementIds,
   loadVestingReleaseEvidence,
@@ -108,20 +116,13 @@ import {
   payrollReportFilename,
   type PayrollReportKind,
 } from "@/lib/client/payroll-report-workflow";
-import {
-  encryptedPayrollReportSchema,
-  type EncryptedPayrollReport,
-  type PayrollReportPayload,
-} from "@/lib/disclosure/payroll-book-report";
+import { encryptedPayrollReportSchema } from "@/lib/disclosure/payroll-book-report";
+import { PAYROLL_EVIDENCE_COPY } from "@/lib/disclosure/compliance-claims";
+import type { FamiliarTaxRenderIssue } from "@/lib/disclosure/tax-evidence";
 import {
   encryptedWorkerStatementSourceSchema,
   workerStatementSourceFilename,
 } from "@/lib/disclosure/worker-statement-source";
-import {
-  type FamiliarTaxDocument,
-  type FamiliarTaxRenderIssue,
-} from "@/lib/disclosure/tax-evidence";
-import { formatTokenAmount, type PayrollTokenSymbol } from "@/lib/starknet/tokens";
 import {
   disclosureFormDefaults,
   resolveDisclosureSelection,
@@ -133,6 +134,8 @@ import {
 } from "./report-results";
 
 type ActivityKind = "Payroll" | "Agent" | "Vault";
+type ReviewerIdentityLookupState = "idle" | "checking" | "found" | "missing" | "file" | "error";
+type TaxCommitteeMember = { walletAddress: string; identity: PayoPublicIdentity };
 
 type SettlementSummary = {
   id: string;
@@ -220,71 +223,6 @@ function sameFelt(left: string, right: string): boolean {
   } catch {
     return false;
   }
-}
-
-function payrollReportView(input: {
-  file: EncryptedPayrollReport;
-  filename: string;
-  recipientPrincipalId: string;
-  payload: PayrollReportPayload;
-  verification: unknown;
-  blockNumber: string;
-  familiarTaxDocuments: FamiliarTaxDocument[];
-  familiarTaxIssues: FamiliarTaxRenderIssue[];
-}): PayrollReportView {
-  const start = new Date(Number(BigInt(input.payload.checkpoint.periodStart)) * 1_000);
-  const end = new Date(Number(BigInt(input.payload.checkpoint.periodEnd)) * 1_000 - 1);
-  const periodLabel = `${start.getUTCFullYear()} · ${start.toLocaleDateString()} – ${end.toLocaleDateString()}`;
-  if (input.payload.reportType === "complete_payroll_book") {
-    const verified = input.verification as {
-      entryCount: number;
-      totals: Record<PayrollTokenSymbol, { grossAtomic: string; deductionsAtomic: string; netAtomic: string }>;
-    };
-    const totals = (["STRK", "USDC"] as const).flatMap((token) => {
-      const value = verified.totals[token];
-      return BigInt(value.grossAtomic) === 0n ? [] : [
-        { token, gross: formatTokenAmount(BigInt(value.grossAtomic), token), deductions: formatTokenAmount(BigInt(value.deductionsAtomic), token), net: formatTokenAmount(BigInt(value.netAtomic), token) },
-      ];
-    });
-    return {
-      file: input.file,
-      filename: input.filename,
-      recipientPrincipalId: input.recipientPrincipalId,
-      title: input.payload.scope === "tax_authority" ? "Payroll book for tax review" : "Complete employer payroll book",
-      scope: input.payload.scope,
-      countLabel: `${verified.entryCount} payroll ${verified.entryCount === 1 ? "entry" : "entries"} · complete book`,
-      totals,
-      periodLabel,
-      checkpointRoot: input.payload.checkpoint.accumulatorRoot,
-      blockNumber: input.blockNumber,
-      packageCommitment: input.file.packageCommitment,
-      familiarTaxDocuments: input.familiarTaxDocuments,
-      familiarTaxIssues: input.familiarTaxIssues,
-    };
-  }
-  const verified = input.verification as {
-    lineCount: number;
-    netTotals: Record<PayrollTokenSymbol, string>;
-  };
-  const totals = (["STRK", "USDC"] as const).flatMap((token) => BigInt(verified.netTotals[token]) === 0n
-    ? []
-    : [{ token, net: formatTokenAmount(BigInt(verified.netTotals[token]), token) }]);
-  return {
-    file: input.file,
-    filename: input.filename,
-    recipientPrincipalId: input.recipientPrincipalId,
-    title: "Your private income statement",
-    workerName: input.payload.recipientReference,
-    scope: "worker",
-    countLabel: `${verified.lineCount} of your payroll ${verified.lineCount === 1 ? "line" : "lines"} verified`,
-    totals,
-    periodLabel,
-    checkpointRoot: input.payload.checkpoint.accumulatorRoot,
-    blockNumber: input.blockNumber,
-    packageCommitment: input.file.packageCommitment,
-    familiarTaxDocuments: input.familiarTaxDocuments,
-    familiarTaxIssues: input.familiarTaxIssues,
-  };
 }
 
 const exceptionStageLabel: Record<PayrollExecutionStage, string> = {
@@ -440,8 +378,18 @@ export default function ActivityPage() {
   const [payrollReportKind, setPayrollReportKind] = useState<PayrollReportKind>("employer_book");
   const [payrollReportYear, setPayrollReportYear] = useState(String(new Date().getUTCFullYear()));
   const [payrollReportWorkerId, setPayrollReportWorkerId] = useState("");
+  const [taxReviewerAddress, setTaxReviewerAddress] = useState("");
+  const [taxReviewerIdentity, setTaxReviewerIdentity] = useState<PayoPublicIdentity | null>(null);
+  const [taxReviewerIdentityState, setTaxReviewerIdentityState] = useState<ReviewerIdentityLookupState>("idle");
+  const [taxReviewerIdentityMessage, setTaxReviewerIdentityMessage] = useState("Enter the reviewer wallet that will receive this encrypted book.");
+  const [taxReviewerLookupNonce, setTaxReviewerLookupNonce] = useState(0);
+  const [taxCommitteeMembers, setTaxCommitteeMembers] = useState<TaxCommitteeMember[]>([]);
+  const [taxCommitteeAddress, setTaxCommitteeAddress] = useState("");
+  const [taxCommitteeBusy, setTaxCommitteeBusy] = useState(false);
+  const [taxCommitteeMessage, setTaxCommitteeMessage] = useState("Optional: add up to seven more wallet-bound reviewers.");
   const [payrollReportBusy, setPayrollReportBusy] = useState(false);
   const [payrollReportViewState, setPayrollReportViewState] = useState<PayrollReportView | null>(null);
+  const [payrollReportCreatedLocally, setPayrollReportCreatedLocally] = useState(false);
   const [workerSourceViewState, setWorkerSourceViewState] = useState<WorkerSourceView | null>(null);
   const [payrollRecipientIdentity, setPayrollRecipientIdentity] = useState<PayoReportingIdentity | null>(null);
   const [localReportingKey, setLocalReportingKey] = useState<PayoReportingIdentityKeyPair | null>(null);
@@ -472,6 +420,7 @@ export default function ActivityPage() {
   const publicIdentityInput = useRef<HTMLInputElement>(null);
   const payrollReportInput = useRef<HTMLInputElement>(null);
   const payrollReportIdentityInput = useRef<HTMLInputElement>(null);
+  const taxReviewerIdentityLookupGeneration = useRef(0);
 
   const persistPendingException = useCallback((submission: PendingExceptionSubmission | null) => {
     const organizationId = vault.session?.organizationId;
@@ -576,6 +525,76 @@ export default function ActivityPage() {
     const timer = window.setTimeout(() => void refreshActivity(), 0);
     return () => window.clearTimeout(timer);
   }, [refreshActivity]);
+
+  useEffect(() => {
+    const generation = taxReviewerIdentityLookupGeneration.current + 1;
+    taxReviewerIdentityLookupGeneration.current = generation;
+    if (payrollReportKind !== "tax_book") return;
+    const client = vault.client;
+    const session = vault.session;
+    const timer = window.setTimeout(() => {
+      if (taxReviewerIdentityLookupGeneration.current !== generation) return;
+      if (!client || !session || !taxReviewerAddress.trim()) {
+        setTaxReviewerIdentity(null);
+        setTaxReviewerIdentityState("idle");
+        setTaxReviewerIdentityMessage("Enter the reviewer wallet that will receive this encrypted book.");
+        return;
+      }
+
+      let reviewerAddress: string;
+      try {
+        reviewerAddress = validateAndParseAddress(taxReviewerAddress.trim());
+      } catch {
+        setTaxReviewerIdentity(null);
+        setTaxReviewerIdentityState("idle");
+        setTaxReviewerIdentityMessage("Enter a complete Starknet Mainnet reviewer wallet address.");
+        return;
+      }
+      if (starknet.address && sameFelt(reviewerAddress, starknet.address)) {
+        setTaxReviewerIdentity(null);
+        setTaxReviewerIdentityState("error");
+        setTaxReviewerIdentityMessage("Use the external reviewer's Ready wallet, not the connected employer wallet.");
+        return;
+      }
+
+      setTaxReviewerIdentity(null);
+      setTaxReviewerIdentityState("checking");
+      setTaxReviewerIdentityMessage("Looking up the encryption identity authenticated by this Ready wallet…");
+      void client.findWorkerPublicIdentity(reviewerAddress)
+        .then(({ identity: published }) => {
+          if (taxReviewerIdentityLookupGeneration.current !== generation) return;
+          if (!published) {
+            setTaxReviewerIdentityState("missing");
+            setTaxReviewerIdentityMessage("No wallet-bound PAYO identity is published yet. Ask the reviewer to sign in and unlock their PAYO vault once, then retry.");
+            return;
+          }
+          const verified = verifyWalletBoundPublicIdentity({
+            expectedChainId: READY_AUTH_CHAIN_ID,
+            expectedWalletAddress: reviewerAddress,
+            record: published,
+          });
+          setTaxReviewerIdentity(verified.identity);
+          setTaxReviewerIdentityState("found");
+          setTaxReviewerIdentityMessage("Wallet-bound identity ready · fingerprint " + shortId(verified.identity.fingerprint));
+        })
+        .catch((lookupError) => {
+          if (taxReviewerIdentityLookupGeneration.current !== generation) return;
+          setTaxReviewerIdentity(null);
+          setTaxReviewerIdentityState("error");
+          setTaxReviewerIdentityMessage(lookupError instanceof Error
+            ? lookupError.message
+            : "The reviewer identity lookup failed. Retry without changing the report.");
+        });
+    }, taxReviewerAddress.trim() ? 450 : 0);
+    return () => window.clearTimeout(timer);
+  }, [
+    payrollReportKind,
+    starknet.address,
+    taxReviewerAddress,
+    taxReviewerLookupNonce,
+    vault.client,
+    vault.session,
+  ]);
 
   const proofVerificationRunning = settlements.some(({ proofVerificationState }) =>
     proofVerificationState === "pending" || proofVerificationState === "leased");
@@ -910,6 +929,88 @@ export default function ActivityPage() {
     }
   };
 
+  const importTaxReviewerPublicIdentity = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setActivityError("");
+    try {
+      if (file.size > MAX_PUBLIC_IDENTITY_FILE_BYTES) throw new Error("The PAYO public identity file is too large.");
+      const identity = parsePayoPublicIdentity(parsePayoJsonText(await file.text(), "The PAYO public identity file"));
+      if (identity.format !== "payo-public-identity-v2") {
+        throw new Error("The reviewer must share a version 2 PAYO identity.");
+      }
+      if (taxCommitteeMembers.some(({ identity: member }) =>
+        member.principalId === identity.principalId
+        || member.publicKey === identity.publicKey
+        || member.fingerprint.toLowerCase() === identity.fingerprint.toLowerCase())) {
+        throw new Error("This identity is already assigned to a committee member.");
+      }
+      taxReviewerIdentityLookupGeneration.current += 1;
+      setTaxReviewerIdentity(identity);
+      setTaxReviewerIdentityState("file");
+      setTaxReviewerIdentityMessage("Offline identity validated · confirm fingerprint " + shortId(identity.fingerprint) + " with the reviewer through a trusted channel.");
+      notify("Reviewer PAYO identity validated · offline fallback active");
+    } catch (error) {
+      setTaxReviewerIdentity(null);
+      setTaxReviewerIdentityState("error");
+      setTaxReviewerIdentityMessage(error instanceof Error ? error.message : "The reviewer identity file could not be imported.");
+      setActivityError(error instanceof Error ? error.message : "The reviewer identity file could not be imported.");
+    }
+  };
+
+  const addTaxCommitteeMember = async () => {
+    setActivityError("");
+    setTaxCommitteeBusy(true);
+    try {
+      if (!vault.client || !vault.session) throw new Error("Unlock the PAYO vault before adding a committee member.");
+      if (!taxReviewerIdentity) throw new Error("Verify the primary reviewer wallet first.");
+      if (taxCommitteeMembers.length >= 7) throw new Error("A complete-book export supports eight recipients in total.");
+      let walletAddress: string;
+      try {
+        walletAddress = validateAndParseAddress(taxCommitteeAddress.trim());
+      } catch {
+        throw new Error("Enter a complete Starknet Mainnet committee wallet address.");
+      }
+      if (starknet.address && sameFelt(walletAddress, starknet.address)) {
+        throw new Error("The connected payer wallet cannot be a reviewer recipient.");
+      }
+      if (taxReviewerAddress.trim() && sameFelt(walletAddress, taxReviewerAddress.trim())) {
+        throw new Error("This wallet is already the primary reviewer.");
+      }
+      if (taxCommitteeMembers.some((member) => sameFelt(member.walletAddress, walletAddress))) {
+        throw new Error("This committee wallet is already selected.");
+      }
+      const { identity: published } = await vault.client.findWorkerPublicIdentity(walletAddress);
+      if (!published) {
+        throw new Error("No wallet-bound PAYO identity is published for this committee wallet. Ask the member to unlock PAYO once, then retry.");
+      }
+      const verified = verifyWalletBoundPublicIdentity({
+        expectedChainId: READY_AUTH_CHAIN_ID,
+        expectedWalletAddress: walletAddress,
+        record: published,
+      });
+      const duplicateIdentity = [taxReviewerIdentity, ...taxCommitteeMembers.map(({ identity }) => identity)]
+        .some((identity) => identity.principalId === verified.identity.principalId
+          || identity.publicKey === verified.identity.publicKey
+          || identity.fingerprint.toLowerCase() === verified.identity.fingerprint.toLowerCase());
+      if (duplicateIdentity) throw new Error("This PAYO identity is already selected under another wallet.");
+      setTaxCommitteeMembers((members) => [...members, {
+        walletAddress: verified.walletAddress,
+        identity: verified.identity,
+      }]);
+      setTaxCommitteeAddress("");
+      setTaxCommitteeMessage("Committee member verified and added by wallet-bound identity.");
+      notify("Verified committee recipient added");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The committee identity could not be verified.";
+      setTaxCommitteeMessage(message);
+      setActivityError(message);
+    } finally {
+      setTaxCommitteeBusy(false);
+    }
+  };
+
   const importPayrollRecipientIdentity = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -1005,6 +1106,7 @@ export default function ActivityPage() {
           year,
         });
         setPayrollReportViewState(null);
+        setPayrollReportCreatedLocally(false);
         setWorkerSourceViewState({
           file: source.encryptedSource,
           filename,
@@ -1020,13 +1122,22 @@ export default function ActivityPage() {
         return;
       }
       let recipient = vault.session.principal;
-      if (payrollReportKind !== "employer_book") {
-        if (!granteeIdentityFingerprint || !granteePrincipalId || !granteePublicKey) {
-          throw new Error("Import the tax authority's public PAYO identity first.");
+      const taxRecipientIdentities = payrollReportKind === "tax_book" && taxReviewerIdentity
+        ? [taxReviewerIdentity, ...taxCommitteeMembers.map(({ identity }) => identity)]
+        : undefined;
+      if (payrollReportKind === "tax_book") {
+        if (!taxReviewerIdentity || !taxRecipientIdentities) {
+          throw new Error("Enter the reviewer's Ready wallet or import their public PAYO identity first.");
+        }
+        if (starknet.address && taxCommitteeMembers.some(({ walletAddress }) => sameFelt(walletAddress, starknet.address))) {
+          throw new Error("Remove the connected payer wallet from the reviewer committee.");
+        }
+        if (taxReviewerAddress.trim() && taxCommitteeMembers.some(({ walletAddress }) => sameFelt(walletAddress, taxReviewerAddress.trim()))) {
+          throw new Error("The primary reviewer wallet is duplicated in the committee.");
         }
         recipient = {
-          principalId: granteePrincipalId,
-          publicKey: granteePublicKey,
+          principalId: taxReviewerIdentity.principalId,
+          publicKey: taxReviewerIdentity.publicKey,
         } as typeof vault.session.principal;
       }
       const result = await createEncryptedPayrollReportFromBook({
@@ -1036,6 +1147,7 @@ export default function ActivityPage() {
         ...period,
         principal: vault.session.principal,
         recipient,
+        recipientIdentities: taxRecipientIdentities,
         kind: payrollReportKind,
         agreements,
         payees,
@@ -1043,7 +1155,7 @@ export default function ActivityPage() {
       const filename = payrollReportFilename(result.encryptedReport, {
         year,
       });
-      const view = payrollReportView({
+      const view = createPayrollReportView({
         file: result.encryptedReport,
         filename,
         recipientPrincipalId: recipient.principalId,
@@ -1052,14 +1164,120 @@ export default function ActivityPage() {
         blockNumber: result.snapshot.blockNumber,
         familiarTaxDocuments: result.familiarTaxDocuments,
         familiarTaxIssues: result.familiarTaxIssues,
+        authorityReadinessEvidence: "authorityReadinessEvidence" in result
+          ? result.authorityReadinessEvidence
+          : undefined,
+        publicAccountabilitySummary: "publicAccountabilitySummary" in result
+          ? result.publicAccountabilitySummary
+          : undefined,
       });
       setPayrollReportViewState(view);
+      setPayrollReportCreatedLocally(payrollReportKind === "tax_book");
       setWorkerSourceViewState(null);
       setPayrollReportVaultKey(`${vault.session.organizationId}:${vault.session.principal.principalId}`);
       downloadJson(result.encryptedReport, filename);
-      notify("Verified complete payroll book downloaded");
+      notify(payrollReportKind === "tax_book" && result.familiarTaxIssues.length > 0
+        ? "Encrypted reviewer book downloaded · readiness evidence withheld pending identity reconciliation"
+        : "Verified complete payroll book downloaded");
     } catch (error) {
       setActivityError(error instanceof Error ? error.message : "The private compliance report could not be created.");
+    } finally {
+      setPayrollReportBusy(false);
+    }
+  };
+
+  const reconcilePayrollRecipientReference = async (
+    issue: FamiliarTaxRenderIssue,
+    canonicalReference: string,
+  ) => {
+    const session = vault.session;
+    const client = vault.client;
+    const ownerAddress = starknet.address;
+    const currentView = payrollReportViewState;
+    if (!session || !client || !ownerAddress || !currentView) {
+      setActivityError("Unlock the employer workspace and connect its payer wallet before reconciling contributor names.");
+      return;
+    }
+    if (
+      !payrollReportCreatedLocally
+      || currentView.scope !== "tax_authority"
+      || currentView.organizationId !== session.organizationId
+    ) {
+      setActivityError("Only the employer that created this reviewer report can revise its encrypted contributor references.");
+      return;
+    }
+    if (!taxReviewerIdentity) {
+      setActivityError("The verified reviewer identity is no longer available. Enter the reviewer wallet again before regenerating the report.");
+      return;
+    }
+    setActivityError("");
+    setPayrollReportBusy(true);
+    let resolutionStored = false;
+    try {
+      const directoryPrincipals = await loadEncryptedPrincipals({
+        client,
+        organizationId: session.organizationId,
+        principal: session.principal,
+      });
+      const reconciled = await reconcileEncryptedPayeeReferences({
+        client,
+        organizationId: session.organizationId,
+        records: payees,
+        directoryPrincipals,
+        recipientAddress: issue.recipientAddress,
+        canonicalReference,
+        principal: session.principal,
+      });
+      resolutionStored = true;
+      setPayees(reconciled.records);
+      const recipientIdentities = [
+        taxReviewerIdentity,
+        ...taxCommitteeMembers.map(({ identity }) => identity),
+      ];
+      const regenerated = await createEncryptedPayrollReportFromBook({
+        client,
+        organizationId: session.organizationId,
+        ownerAddress,
+        ...reportingPeriod(Number(payrollReportYear)),
+        principal: session.principal,
+        recipient: {
+          principalId: taxReviewerIdentity.principalId,
+          publicKey: taxReviewerIdentity.publicKey,
+        },
+        recipientIdentities,
+        kind: "tax_book",
+        agreements,
+        payees: reconciled.records,
+      });
+      const filename = payrollReportFilename(regenerated.encryptedReport, {
+        year: Number(payrollReportYear),
+      });
+      setPayrollReportViewState(createPayrollReportView({
+        file: regenerated.encryptedReport,
+        filename,
+        recipientPrincipalId: taxReviewerIdentity.principalId,
+        payload: regenerated.payload,
+        verification: regenerated.verification,
+        blockNumber: regenerated.snapshot.blockNumber,
+        familiarTaxDocuments: regenerated.familiarTaxDocuments,
+        familiarTaxIssues: regenerated.familiarTaxIssues,
+        authorityReadinessEvidence: "authorityReadinessEvidence" in regenerated
+          ? regenerated.authorityReadinessEvidence
+          : undefined,
+        publicAccountabilitySummary: regenerated.publicAccountabilitySummary,
+      }));
+      setPayrollReportCreatedLocally(true);
+      setWorkerSourceViewState(null);
+      setPayrollReportVaultKey(`${session.organizationId}:${session.principal.principalId}`);
+      downloadJson(regenerated.encryptedReport, filename);
+      notify(regenerated.familiarTaxIssues.length === 0
+        ? `Historical names reconciled as ${canonicalReference} · corrected reviewer report downloaded`
+        : `Reference reconciled as ${canonicalReference} · resolve the remaining conflict before readiness export`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The contributor references could not be reconciled.";
+      setActivityError(resolutionStored
+        ? `The encrypted reconciliation was saved, but report regeneration stopped: ${message}. Run the reviewer export again; no payroll transaction is required.`
+        : message);
     } finally {
       setPayrollReportBusy(false);
     }
@@ -1070,6 +1288,7 @@ export default function ActivityPage() {
     event.target.value = "";
     if (!file) return;
     setActivityError("");
+    setPayrollReportCreatedLocally(false);
     setPayrollReportBusy(true);
     try {
       if (!vault.client || !vault.session) throw new Error("Unlock the PAYO vault before opening a payroll report.");
@@ -1101,7 +1320,7 @@ export default function ActivityPage() {
           identityFingerprint: generated.recipientIdentity.fingerprint,
           sourceCommitment: generated.sourceCommitment,
         });
-        setPayrollReportViewState(payrollReportView({
+        setPayrollReportViewState(createPayrollReportView({
           file: generated.encryptedReport,
           filename,
           recipientPrincipalId: recipient.principalId,
@@ -1126,7 +1345,7 @@ export default function ActivityPage() {
         encryptedReport,
         recipient,
       });
-      setPayrollReportViewState(payrollReportView({
+      setPayrollReportViewState(createPayrollReportView({
         file: encryptedReport,
         filename: file.name,
         recipientPrincipalId: recipient.principalId,
@@ -1135,6 +1354,8 @@ export default function ActivityPage() {
         blockNumber: opened.snapshot.blockNumber,
         familiarTaxDocuments: opened.familiarTaxDocuments,
         familiarTaxIssues: opened.familiarTaxIssues,
+        authorityReadinessEvidence: opened.authorityReadinessEvidence,
+        publicAccountabilitySummary: opened.publicAccountabilitySummary,
       }));
       setWorkerSourceViewState(null);
       setPayrollReportVaultKey(`${vault.session.organizationId}:${vault.session.principal.principalId}`);
@@ -1163,7 +1384,7 @@ export default function ActivityPage() {
         encryptedReport: payrollReportViewState.file,
         recipient,
       });
-      setPayrollReportViewState(payrollReportView({
+      setPayrollReportViewState(createPayrollReportView({
         file: payrollReportViewState.file,
         filename: payrollReportViewState.filename,
         recipientPrincipalId: recipient.principalId,
@@ -1172,6 +1393,8 @@ export default function ActivityPage() {
         blockNumber: opened.snapshot.blockNumber,
         familiarTaxDocuments: opened.familiarTaxDocuments,
         familiarTaxIssues: opened.familiarTaxIssues,
+        authorityReadinessEvidence: opened.authorityReadinessEvidence,
+        publicAccountabilitySummary: opened.publicAccountabilitySummary,
       }));
       notify("Payroll report reopened and checked against the live on-chain book");
     } catch (error) {
@@ -1944,7 +2167,7 @@ export default function ActivityPage() {
             <input ref={proofPackageInput} className="proof-package-file-input" type="file" accept="application/json,.json" onChange={(event) => void importProofPackage(event)} tabIndex={-1} aria-hidden="true" />
             {showDisclosure && <form className="receipt-disclosure-form" onSubmit={createDisclosure}>
               <label><span>Verified workflow</span><select value={disclosureSettlement?.id ?? ""} onChange={(event) => { setDisclosureSettlementId(event.target.value); setDisclosureAgreementId(""); }} required>{disclosureSettlements.map((settlement) => <option value={settlement.id} key={settlement.id}>{settlement.workflowType.replaceAll("_", " ")} · {shortId(settlement.transactionHash)}</option>)}</select></label>
-              <label><span>Recipient scope</span><select value={disclosureScope} onChange={(event) => setDisclosureScope(event.target.value as typeof disclosureScope)}><option value="worker">Worker · own line only</option><option value="employer">Employer · full books</option><option value="auditor">Auditor · no identities</option><option value="tax">Tax reviewer · no classification</option></select></label>
+              <label><span>Recipient scope</span><select value={disclosureScope} onChange={(event) => setDisclosureScope(event.target.value as typeof disclosureScope)}><option value="worker">Worker · own line only</option><option value="employer">Employer · full books</option><option value="auditor">Auditor · no identities</option><option value="tax">Authorized tax reviewer · no classification</option></select></label>
               {disclosureScope === "worker" && disclosureSettlement?.workflowType === "payroll" && <label><span>Worker payroll line</span><select value={disclosureAgreementId} onChange={(event) => setDisclosureAgreementId(event.target.value)} required><option value="">Choose a proved agreement</option>{agreementOptions.map(({ agreement, label }) => <option key={agreement.id} value={agreement.agreement.id}>{label} · {agreement.agreement.settlementToken}</option>)}</select></label>}
               {disclosureScope === "worker" && disclosureSettlement?.workflowType !== "payroll" && <p>PAYO derives the claimant or remediation recipient from the encrypted, proof-bound exception record; no other payroll line can be selected.</p>}
               <div className="proof-identity-actions">
@@ -1992,14 +2215,19 @@ export default function ActivityPage() {
               <span>W-2-style</span><span>P60-style</span><span>T4-style</span>
               <small>One canonical verified-income schema · never represented as an official filing</small>
             </div>
+            <div className="compliance-use-cases" aria-label="Private payment use cases">
+              <article><Users size={17} /><span><strong>Contractor networks</strong><p>Use the six-fact classification rubric, then settle 1–50 contributors per proved run. Larger networks use separate verified runs.</p><Link href="/team">Open classification controls <ArrowRight size={12} /></Link></span></article>
+              <article><ShieldCheck size={17} /><span><strong>Grant networks</strong><p>Use an approved milestone and its evidence commitment for a private grant-like disbursement. PAYO does not infer grant eligibility or tax treatment.</p><Link href="/team">Open milestone controls <ArrowRight size={12} /></Link></span></article>
+              <article><WalletCards size={17} /><span><strong>Onchain companies</strong><p>{PAYROLL_EVIDENCE_COPY.talentClaim} STRK20 protects recipient and amount privacy within its implemented threat model.</p><Link href="/payroll">Open private payroll <ArrowRight size={12} /></Link></span></article>
+            </div>
             <form className="receipt-disclosure-form" onSubmit={createPayrollReport}>
-              <label><span>Report</span><select value={payrollReportKind} onChange={(event) => setPayrollReportKind(event.target.value as PayrollReportKind)}>
+              <label><span>Report</span><select aria-label="Report" value={payrollReportKind} onChange={(event) => setPayrollReportKind(event.target.value as PayrollReportKind)}>
                 <option value="employer_book">Employer · complete payroll book</option>
-                <option value="tax_book">Tax authority · fully disclosed book</option>
+                <option value="tax_book">Authorized tax reviewer · complete encrypted book</option>
                 <option value="worker_statement">Worker · encrypted self-service source</option>
               </select></label>
-              <label><span>Reporting year</span><input type="number" min={2020} max={2100} step={1} value={payrollReportYear} onChange={(event) => setPayrollReportYear(event.target.value)} required /></label>
-              {payrollReportKind === "worker_statement" && <label><span>Worker</span><select value={payrollReportWorkerId} onChange={(event) => setPayrollReportWorkerId(event.target.value)} required><option value="">Choose contributor</option>{payees.filter(({ principalKind }) => principalKind === "human").map((payee) => <option value={payee.id} key={payee.id}>{payee.displayName} · {shortId(payee.recipientAddress)}</option>)}</select><small>Only this recipient&apos;s lines and Merkle openings are disclosed.</small></label>}
+              <label><span>Reporting year</span><input aria-label="Reporting year" type="number" min={2020} max={2100} step={1} value={payrollReportYear} onChange={(event) => setPayrollReportYear(event.target.value)} required /></label>
+              {payrollReportKind === "worker_statement" && <label><span>Worker</span><select aria-label="Worker" value={payrollReportWorkerId} onChange={(event) => setPayrollReportWorkerId(event.target.value)} required><option value="">Choose contributor</option>{payees.filter(({ principalKind }) => principalKind === "human").map((payee) => <option value={payee.id} key={payee.id}>{payee.displayName} · {shortId(payee.recipientAddress)}</option>)}</select><small>Only this recipient&apos;s lines and Merkle openings are disclosed.</small></label>}
               {payrollReportKind === "worker_statement" && <>
                 <div className="proof-identity-actions">
                   <button type="button" className="button button--soft" onClick={() => payrollReportIdentityInput.current?.click()}><UserPlus size={16} /> Import worker identity</button>
@@ -2017,15 +2245,35 @@ export default function ActivityPage() {
                 </details>
               </>}
               {payrollReportKind === "tax_book" && <>
-                <div className="proof-identity-actions">
-                  <button type="button" className="button button--soft" onClick={() => payrollReportIdentityInput.current?.click()}><UserPlus size={16} /> Import tax identity</button>
-                  <button type="button" className="button button--soft" onClick={exportCurrentPublicIdentity}><Download size={16} /> Share mine</button>
+                <label htmlFor="tax-reviewer-wallet"><span>Reviewer Ready wallet</span><input id="tax-reviewer-wallet" value={taxReviewerAddress} onChange={(event) => { setTaxReviewerAddress(event.target.value); setTaxReviewerIdentity(null); }} placeholder="0x… reviewer wallet" autoComplete="off" spellCheck={false} aria-describedby="tax-reviewer-identity-status" /></label>
+                <div id="tax-reviewer-identity-status" className={"reviewer-identity-status reviewer-identity-status--" + taxReviewerIdentityState} role="status" aria-live="polite">
+                  <span className="reviewer-identity-status__icon">{taxReviewerIdentityState === "checking" ? <LoaderCircle className="spin" size={17} /> : taxReviewerIdentityState === "found" ? <ShieldCheck size={17} /> : taxReviewerIdentityState === "missing" || taxReviewerIdentityState === "error" ? <KeyRound size={17} /> : taxReviewerIdentityState === "file" ? <FileText size={17} /> : <WalletCards size={17} />}</span>
+                  <span><small>REVIEWER ENCRYPTION IDENTITY</small><strong>{taxReviewerIdentityState === "found" ? "Wallet identity verified" : taxReviewerIdentityState === "checking" ? "Checking wallet directory" : taxReviewerIdentityState === "missing" ? "Reviewer action needed" : taxReviewerIdentityState === "file" ? "Offline identity imported" : taxReviewerIdentityState === "error" ? "Identity unavailable" : "Waiting for reviewer wallet"}</strong><p>{taxReviewerIdentityMessage}</p></span>
+                  {(taxReviewerIdentityState === "missing" || taxReviewerIdentityState === "error") && taxReviewerAddress.trim() && <button type="button" className="button button--soft" onClick={() => setTaxReviewerLookupNonce((value) => value + 1)}>Retry lookup</button>}
                 </div>
-                <input ref={payrollReportIdentityInput} className="proof-package-file-input" type="file" accept="application/json,.json" onChange={(event) => void importRecipientPublicIdentity(event)} tabIndex={-1} aria-hidden="true" />
-                <p>Import the tax authority&apos;s public PAYO identity. PAYO encrypts the full book only to that reviewer.</p>
-                {granteeIdentityFingerprint && <p className="proof-identity-fingerprint"><ShieldCheck size={13} /> Recipient identity verified · {shortId(granteeIdentityFingerprint)}</p>}
+                <p className="reviewer-evidence-notice"><ShieldCheck size={14} /> <span>{PAYROLL_EVIDENCE_COPY.filingLimit} PAYO verifies the wallet-bound encryption identity, not government authority.</span></p>
+                <details className="reporting-identity-tools">
+                  <summary>Offline identity-file fallback</summary>
+                  <p>Use this only if the reviewer cannot publish their wallet-bound identity. Confirm the imported fingerprint with them through a separate trusted channel.</p>
+                  <button type="button" className="button button--soft button--wide" onClick={() => payrollReportIdentityInput.current?.click()}><UserPlus size={16} /> Import reviewer identity file</button>
+                </details>
+                <input ref={payrollReportIdentityInput} className="proof-package-file-input" type="file" accept="application/json,.json" onChange={(event) => void importTaxReviewerPublicIdentity(event)} tabIndex={-1} aria-hidden="true" />
+                {taxReviewerIdentity && <p className="proof-identity-fingerprint"><ShieldCheck size={13} /> Reviewer encryption identity ready · {taxReviewerIdentity.fingerprint}</p>}
+                <details className="committee-access-tools">
+                  <summary><span><Users size={15} />Governance committee access</span><small>{taxCommitteeMembers.length} of 7 additional members</small></summary>
+                  <div className="committee-access-tools__body">
+                    <p>Add wallet-bound committee identities. Every selected member receives an independent encrypted key for this same complete book.</p>
+                    <div className="committee-member-add">
+                      <label htmlFor="tax-committee-wallet"><span>Committee member Ready wallet</span><input id="tax-committee-wallet" value={taxCommitteeAddress} onChange={(event) => setTaxCommitteeAddress(event.target.value)} placeholder="0x… committee wallet" autoComplete="off" spellCheck={false} /></label>
+                      <button type="button" className="button button--soft" onClick={() => void addTaxCommitteeMember()} disabled={taxCommitteeBusy || !taxReviewerIdentity || !taxCommitteeAddress.trim() || taxCommitteeMembers.length >= 7}>{taxCommitteeBusy ? <LoaderCircle className="spin" size={15} /> : <UserPlus size={15} />} {taxCommitteeBusy ? "Checking wallet…" : "Add verified member"}</button>
+                    </div>
+                    <p className="committee-member-status" role="status" aria-live="polite">{taxCommitteeMessage}</p>
+                    {taxCommitteeMembers.length > 0 && <div className="committee-member-list" aria-label="Verified committee recipients">{taxCommitteeMembers.map((member, index) => <div key={member.identity.principalId}><span><small>MEMBER {index + 2} · {shortId(member.walletAddress)}</small><strong>Fingerprint {member.identity.fingerprint}</strong></span><button type="button" onClick={() => { setTaxCommitteeMembers((members) => members.filter(({ identity }) => identity.principalId !== member.identity.principalId)); setTaxCommitteeMessage("Committee member removed before encryption."); }} aria-label={`Remove committee member ${member.walletAddress}`}>×</button></div>)}</div>}
+                    <p className="reviewer-evidence-notice"><ShieldCheck size={14} /><span>{PAYROLL_EVIDENCE_COPY.committeeAccessLimit} {PAYROLL_EVIDENCE_COPY.downloadedAccessLimit}</span></p>
+                  </div>
+                </details>
               </>}
-              <button type="submit" className="button button--ink button--wide" disabled={payrollReportBusy || !vault.session || !starknet.address || (payrollReportKind === "worker_statement" && !payrollReportWorkerId)}>{payrollReportBusy ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />} {payrollReportKind === "worker_statement" ? "Verify book & create worker source" : "Verify, encrypt and download"}</button>
+              <button type="submit" className="button button--ink button--wide" disabled={payrollReportBusy || !vault.session || !starknet.address || (payrollReportKind === "worker_statement" && !payrollReportWorkerId) || (payrollReportKind === "tax_book" && !taxReviewerIdentity)}>{payrollReportBusy ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />} {payrollReportKind === "worker_statement" ? "Verify book & create worker source" : "Verify, encrypt and download"}</button>
             </form>
             <button type="button" className="button button--soft button--wide" onClick={() => payrollReportInput.current?.click()} disabled={!vault.session || payrollReportBusy}><Eye size={16} /> Open report or worker source</button>
             <input ref={payrollReportInput} className="proof-package-file-input" type="file" accept="application/json,.json" onChange={(event) => void inspectPayrollReportFile(event)} tabIndex={-1} aria-hidden="true" />
@@ -2036,6 +2284,9 @@ export default function ActivityPage() {
               view={payrollReportViewState} busy={payrollReportBusy}
               canReverify={payrollReportViewState.recipientPrincipalId === vault.session?.principal.principalId || payrollReportViewState.recipientPrincipalId === localReportingKey?.principal.principalId}
               download={downloadJson} reverify={() => void openCreatedPayrollReport()} copy={(value) => void copyPackageCommitment(value)}
+              reconcileReference={payrollReportCreatedLocally && payrollReportViewState.organizationId === vault.session?.organizationId
+                ? (issue, canonicalReference) => void reconcilePayrollRecipientReference(issue, canonicalReference)
+                : undefined}
             />}
           </section>
 

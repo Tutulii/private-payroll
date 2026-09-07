@@ -29,10 +29,9 @@ import {
   type PayeeClaimIdentity,
   type PayeeDirectoryRecord,
 } from "@/lib/client/payee-directory";
-import {
-  parsePayoPublicIdentity,
-  type PayoPublicIdentity,
-} from "@/lib/client/proof-package-files";
+import type { PayoPublicIdentity } from "@/lib/client/proof-package-files";
+import { verifyWalletBoundPublicIdentity } from "@/lib/client/wallet-bound-identity";
+import { READY_AUTH_CHAIN_ID } from "@/lib/auth/ready-session";
 import {
   obligationScheduleForRecord,
   loadConfirmedPayrollScheduleRuns,
@@ -315,14 +314,12 @@ export default function TeamPage() {
             setIdentityLookupMessage("No public identity is published for this wallet yet. Ask its owner to sign in and unlock a PAYO vault once, then retry.");
             return;
           }
-          const identity = parsePayoPublicIdentity(published.identity);
-          if (
-            identity.format !== "payo-public-identity-v2"
-            || published.walletAddress !== normalizedAddress
-            || published.principalId !== identity.principalId
-          ) {
-            throw new Error("The detected worker identity has an invalid wallet binding.");
-          }
+          const verified = verifyWalletBoundPublicIdentity({
+            expectedChainId: READY_AUTH_CHAIN_ID,
+            expectedWalletAddress: normalizedAddress,
+            record: published,
+          });
+          const identity = verified.identity;
           setClaimIdentity(identity);
           setIdentityLookupState("found");
           setIdentityLookupMessage(`Public identity detected automatically · ${identity.principalId.slice(0, 16)}… · fingerprint ${identity.fingerprint.slice(0, 12)}…`);

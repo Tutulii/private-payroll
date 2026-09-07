@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  CircleDollarSign,
   Check,
   ChevronDown,
   Clock3,
@@ -26,6 +27,7 @@ import { recoverConfirmedPayrollFromBrowser } from "@/lib/client/confirmed-payro
 const navItems = [
   { label: "Overview", icon: LayoutDashboard, href: "/" },
   { label: "Payroll", icon: Send, href: "/payroll" },
+  { label: "My Pay", icon: CircleDollarSign, href: "/my-pay" },
   { label: "People & agents", icon: Users, href: "/team" },
   { label: "Activity", icon: Clock3, href: "/activity" },
   { label: "Connect wallet", icon: WalletCards, href: "/wallet" },
@@ -34,6 +36,7 @@ const navItems = [
 const pageTitles: Record<string, { eyebrow: string; title: string }> = {
   "/": { eyebrow: "Today", title: "Welcome to Payo" },
   "/payroll": { eyebrow: "Payroll workspace", title: "Payday, made private" },
+  "/my-pay": { eyebrow: "Employee self-service", title: "My Pay" },
   "/team": { eyebrow: "Your organization", title: "People & agents" },
   "/activity": { eyebrow: "Private records", title: "Activity & receipts" },
   "/wallet": { eyebrow: "Wallet & identity", title: "Connect your wallet" },
@@ -74,10 +77,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const proofRecoveryRunsRef = useRef(new Set<string>());
   const proofRecoveryOrganizationRef = useRef("");
 
-  const configuredTitle = pageTitles[pathname] ?? pageTitles["/"];
-  const title = pathname === "/"
+  const productPath = pathname.startsWith("/payo-browser-evidence/")
+    ? pathname.slice("/payo-browser-evidence".length)
+    : pathname;
+  const configuredTitle = pageTitles[productPath] ?? pageTitles["/"];
+  const title = productPath === "/"
     ? { ...configuredTitle, eyebrow: overviewDateLabel }
     : configuredTitle;
+  const employeeSelfService = productPath === "/my-pay";
   const openPayroll = useCallback(() => {
     if (pathname === "/payroll") {
       window.history.replaceState(null, "", "/payroll#private-payroll");
@@ -281,7 +288,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
           <nav className="nav-list" aria-label="Main navigation">
             {navItems.map(({ label, icon: Icon, href }) => {
-              const active = pathname === href;
+              const active = productPath === href;
               return (
                 <Link
                   className={`nav-item ${active ? "nav-item--active" : ""}`}
@@ -315,7 +322,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             </button>
             <div className="topbar-title">
               <p className="eyebrow">{title.eyebrow}</p>
-              <h1>{title.title} {pathname === "/" && <span className="wave">👋</span>}</h1>
+              <h1>{title.title} {productPath === "/" && <span className="wave">👋</span>}</h1>
             </div>
             <div className="topbar-actions">
               <Link className="network-pill" href="/wallet" title={starknet.isConnected ? `Connected to ${starknet.networkName}` : "Connect Ready wallet"}>
@@ -325,9 +332,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 <span className="notification-dot" />
                 <Clock3 size={19} />
               </button>
-              <button type="button" className="button button--ink button--compact" onClick={openPayroll}>
+              {!employeeSelfService && <button type="button" className="button button--ink button--compact" onClick={openPayroll}>
                 <Plus size={18} /> <span>New payroll</span>
-              </button>
+              </button>}
             </div>
           </header>
 

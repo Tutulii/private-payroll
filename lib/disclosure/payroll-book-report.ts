@@ -42,7 +42,13 @@ import type {
   PayrollIntegrityInputBuild,
   PayrollIntegrityLineInput,
 } from "@/lib/proof/input-builder";
-import { commitmentSchema, starknetAddressSchema, uuidV7Schema } from "@/lib/domain/records";
+import {
+  commitmentSchema,
+  recipientReferenceResolutionSchema,
+  starknetAddressSchema,
+  uuidV7Schema,
+  type RecipientReferenceResolution,
+} from "@/lib/domain/records";
 
 const unixSecondsSchema = z.string().regex(/^(0|[1-9]\d*)$/);
 const u32Schema = z.number().int().nonnegative().max(0xffff_ffff);
@@ -78,6 +84,7 @@ const disclosedPayrollSourceSchema = z.object({
 export const payrollBookReportLineSchema = z.object({
   index: z.number().int().min(0).max(49),
   recipientReference: z.string().min(1).max(240),
+  recipientReferenceResolution: recipientReferenceResolutionSchema.optional(),
   workerType: workerTypeSchema,
   source: disclosedPayrollSourceSchema,
   policy: policyPackSchema,
@@ -86,7 +93,24 @@ export const payrollBookReportLineSchema = z.object({
   referenceValueAtomic: atomicAmountSchema,
   agreementLeaf: commitmentSchema,
   payrollLeaf: commitmentSchema,
-}).strict();
+}).strict().superRefine((line, context) => {
+  const resolution = line.recipientReferenceResolution;
+  if (!resolution) return;
+  if (resolution.canonicalReference !== line.recipientReference) {
+    context.addIssue({
+      code: "custom",
+      path: ["recipientReferenceResolution", "canonicalReference"],
+      message: "The report line does not use its resolved canonical contributor reference.",
+    });
+  }
+  if (!sameField(resolution.recipientAddress, line.source.recipientAddress)) {
+    context.addIssue({
+      code: "custom",
+      path: ["recipientReferenceResolution", "recipientAddress"],
+      message: "The report line reference resolution belongs to another recipient wallet.",
+    });
+  }
+});
 export type PayrollBookReportLine = z.infer<typeof payrollBookReportLineSchema>;
 
 export const payrollBookReportEntrySchema = z.object({
@@ -140,10 +164,24 @@ export const completePayrollBookReportSchema = z.object({
   reportId: uuidV7Schema,
   organizationId: uuidV7Schema,
   scope: z.enum(["employer", "tax_authority"]),
+  recipientIdentities: z.array(z.object({
+    principalId: z.string().min(1).max(160),
+    identityFingerprint: commitmentSchema,
+  }).strict()).min(1).max(8).optional(),
   checkpoint: payrollBookCheckpointSchema,
   entries: z.array(payrollBookReportEntrySchema),
   generatedAt: z.string().datetime(),
-}).strict();
+}).strict().superRefine((report, context) => {
+  if (!report.recipientIdentities) return;
+  const principals = report.recipientIdentities.map(({ principalId }) => principalId);
+  const fingerprints = report.recipientIdentities.map(({ identityFingerprint }) => identityFingerprint);
+  if (new Set(principals).size !== principals.length) {
+    context.addIssue({ code: "custom", path: ["recipientIdentities"], message: "Report recipient principal IDs must be unique." });
+  }
+  if (new Set(fingerprints).size !== fingerprints.length) {
+    context.addIssue({ code: "custom", path: ["recipientIdentities"], message: "Report recipient identity fingerprints must be unique." });
+  }
+});
 export type CompletePayrollBookReport = z.infer<typeof completePayrollBookReportSchema>;
 
 const proofOpeningSchema = z.object({
@@ -456,6 +494,7 @@ export async function buildPayrollBookReportEntry(input: {
   policies: readonly PolicyPack[];
   lineMetadata: Readonly<Record<string, {
     recipientReference: string;
+    recipientReferenceResolution?: RecipientReferenceResolution;
     workerType: z.infer<typeof workerTypeSchema>;
   }>>;
   integrityVerificationTransactionHash: string;
@@ -543,11 +582,34 @@ export async function buildPayrollBookReportEntry(input: {
   return reportEntry;
 }
 
+function assertConsistentRecipientReferenceResolutions(report: CompletePayrollBookReport): void {
+  const linesByAddress = new Map<string, PayrollBookReportLine[]>();
+  for (const entry of report.entries) {
+    for (const line of entry.lines) {
+      const address = BigInt(line.source.recipientAddress).toString();
+      linesByAddress.set(address, [...(linesByAddress.get(address) ?? []), line]);
+    }
+  }
+  for (const lines of linesByAddress.values()) {
+    const resolved = lines.filter(({ recipientReferenceResolution }) => recipientReferenceResolution);
+    if (resolved.length === 0) continue;
+    if (resolved.length !== lines.length) {
+      throw new Error("A recipient reference resolution does not cover every matching payroll line.");
+    }
+    const encoded = new Set(resolved.map(({ recipientReferenceResolution }) =>
+      stableJson(recipientReferenceResolution)));
+    if (encoded.size !== 1) {
+      throw new Error("A recipient wallet has inconsistent reference resolutions across the complete payroll book.");
+    }
+  }
+}
+
 export async function verifyCompletePayrollBookReport(input: {
   report: CompletePayrollBookReport;
   trustedSnapshot: TrustedPayrollBookSnapshot;
 }) {
   const report = completePayrollBookReportSchema.parse(input.report);
+  assertConsistentRecipientReferenceResolutions(report);
   const trusted = verifyTrustedPayrollBookSnapshot(input.trustedSnapshot);
   assertSameCheckpoint(report.checkpoint, trusted.checkpoint);
   if (report.entries.length !== trusted.entries.length) {
@@ -612,7 +674,11 @@ export async function createWorkerIncomeStatement(input: {
       // proved address, source data, and Merkle openings from every matching line.
       const normalizedLine = line.recipientReference === input.recipientReference
         ? line
-        : { ...line, recipientReference: input.recipientReference };
+        : {
+            ...line,
+            recipientReference: input.recipientReference,
+            recipientReferenceResolution: undefined,
+          };
       const agreementOpening = committer.buildProofFixedMerkleMembership(agreementLeaves, line.index);
       const payrollOpening = committer.buildProofFixedMerkleMembership(payrollLeaves, line.index);
       selected.push({
@@ -703,8 +769,8 @@ export async function verifyWorkerIncomeStatement(input: {
   };
 }
 
-function reportCommitment(payload: PayrollReportPayload): `0x${string}` {
-  return toHex(sha256(new TextEncoder().encode(stableJson(payload))));
+export function payrollReportPayloadCommitment(payload: PayrollReportPayload): `0x${string}` {
+  return toHex(sha256(new TextEncoder().encode(stableJson(payrollReportPayloadSchema.parse(payload)))));
 }
 
 export function encryptPayrollReport(input: {
@@ -712,7 +778,7 @@ export function encryptPayrollReport(input: {
   recipients: readonly VaultPrincipal[];
 }): EncryptedPayrollReport {
   const payload = payrollReportPayloadSchema.parse(input.payload);
-  const packageCommitment = reportCommitment(payload);
+  const packageCommitment = payrollReportPayloadCommitment(payload);
   const record = payrollReportRecordSchema.parse({
     schemaVersion: 1,
     id: payload.reportId,
@@ -762,7 +828,7 @@ export function openEncryptedPayrollReport(input: {
     throw new Error("The encrypted payroll report is unauthorized, tampered, or unreadable.");
   }
   const payload = decrypted.payload;
-  const commitment = reportCommitment(payload);
+  const commitment = payrollReportPayloadCommitment(payload);
   if (commitment !== encrypted.packageCommitment
     || commitment !== decrypted.packageCommitment
     || decrypted.id !== encrypted.reportId

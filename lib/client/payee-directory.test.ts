@@ -6,6 +6,7 @@ import {
   deactivateEncryptedPayee,
   loadEncryptedPayees,
   prepareEncryptedPayee,
+  reconcileEncryptedPayeeReferences,
   storeEncryptedPayee,
 } from "./payee-directory";
 
@@ -101,6 +102,67 @@ describe("encrypted payee directory", () => {
       existingPayees: [existing],
       now,
     })).rejects.toThrow(/one wallet/i);
+  });
+
+  it("atomically reconciles historical names while preserving encrypted alias history", async () => {
+    const principal = generateVaultPrincipal("admin:reference-resolution");
+    const former = prepareEncryptedPayee({
+      organizationId,
+      displayName: "Simson",
+      principalKind: "human",
+      recipientAddress: "0x789",
+      tokenPreference: "USDC",
+      jurisdictionCode: "US",
+      principal,
+      now,
+    });
+    const current = prepareEncryptedPayee({
+      organizationId,
+      displayName: "Vesting canary",
+      principalKind: "human",
+      recipientAddress: "0x0789",
+      tokenPreference: "USDC",
+      jurisdictionCode: "US",
+      principal,
+      now: new Date(now.getTime() + 10),
+    });
+    const storeEncryptedRecords = vi.fn().mockResolvedValue({ records: [] });
+    const result = await reconcileEncryptedPayeeReferences({
+      client: { storeEncryptedRecords } as never,
+      organizationId,
+      records: [former.record, current.record],
+      directoryPrincipals: [former.principalRecord, current.principalRecord],
+      recipientAddress: former.record.recipientAddress,
+      canonicalReference: "Simson",
+      principal,
+      now: new Date("2026-08-26T09:00:00.000Z"),
+    });
+
+    expect(result.records).toHaveLength(2);
+    expect(result.records.every(({ displayName, revision }) => displayName === "Simson" && revision === 2)).toBe(true);
+    expect(result.resolution).toMatchObject({
+      resolutionVersion: "payo-recipient-reference-resolution-v1",
+      recipientAddress: former.record.recipientAddress,
+      canonicalReference: "Simson",
+      historicalReferences: ["Simson", "Vesting canary"],
+    });
+    expect(result.records.every(({ recipientReferenceResolution }) =>
+      recipientReferenceResolution?.resolutionId === result.resolution.resolutionId)).toBe(true);
+    expect(result.directoryPrincipals.every(({ displayName }) => displayName === "Simson")).toBe(true);
+    const request = storeEncryptedRecords.mock.calls[0][0];
+    expect(request.records).toHaveLength(3);
+    expect(request).not.toHaveProperty("contributorWalletConstraint");
+    expect(request.records.map(({ recordType }: { recordType: string }) => recordType))
+      .toEqual(["payee", "payee", "principal"]);
+    expect(decryptVaultRecord(request.records[0].envelope, principal)).toMatchObject({
+      displayName: "Simson",
+      revision: 2,
+      recipientReferenceResolution: {
+        historicalReferences: ["Simson", "Vesting canary"],
+      },
+    });
+    expect(JSON.stringify(request.records)).not.toContain("Vesting canary");
+    expect(current.record.displayName).toBe("Vesting canary");
   });
 
   it("decrypts only authenticated payee envelopes and binds storage identity", async () => {

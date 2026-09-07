@@ -3956,7 +3956,12 @@ databaseSuite("PostgreSQL durability integration", () => {
       headers: { authorization: `Bearer ${firstSession.accessToken}` },
     });
     const walletPrincipal = await requirePrincipal(authenticatedRequest);
-    expect(walletPrincipal.principalId).toMatch(/^starknet:/);
+    expect(walletPrincipal).toMatchObject({
+      principalId: expect.stringMatching(/^starknet:/),
+      authKind: "ready",
+      walletAddress,
+      chainId: READY_AUTH_CHAIN_ID,
+    });
     await expect(verifyReadyAuthenticationChallenge({
       challengeId: challenge.challengeId,
       signature: ["0x1", "0x2"],
@@ -3980,7 +3985,12 @@ databaseSuite("PostgreSQL durability integration", () => {
     await expect(requirePrincipal(authenticatedRequest)).rejects.toMatchObject({ code: "AUTH_INVALID" });
     await expect(requirePrincipal(new Request("https://payo.test/api", {
       headers: { authorization: `Bearer ${linkedSession.accessToken}` },
-    }))).resolves.toMatchObject({ principalId: admin.principalId, walletAddress });
+    }))).resolves.toMatchObject({
+      principalId: admin.principalId,
+      authKind: "ready",
+      walletAddress,
+      chainId: READY_AUTH_CHAIN_ID,
+    });
 
     const nextChallenge = await createReadyAuthenticationChallenge(request, {
       walletAddress,
