@@ -264,11 +264,13 @@ if (action === "verify") {
     ...status,
     canaryRequired: true,
   };
+  const existingEvidence = await readJsonIfExists(DEPLOYMENT_EVIDENCE_PATH, {});
   await saveJson(DEPLOYMENT_EVIDENCE_PATH, {
     schemaVersion: "payo-private-exit-mainnet-evidence-v1",
     plan,
-    deployment: (await readJsonIfExists(DEPLOYMENT_EVIDENCE_PATH, {})).deployment ?? null,
+    deployment: existingEvidence.deployment ?? null,
     verification,
+    ...(existingEvidence.canary ? { canary: existingEvidence.canary } : {}),
   });
   process.stdout.write(`${serializeJson(verification, null, 2)}\n`);
   process.exit(0);

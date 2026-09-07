@@ -81,7 +81,7 @@
     "canaryRequired": true,
     "canaryPassed": true
   },
-  "liveCanary": {
+  "canary": {
     "passed": true,
     "recordedAt": "2026-09-07T12:24:15Z",
     "source": "user-supplied Ready wallet completion screenshot",

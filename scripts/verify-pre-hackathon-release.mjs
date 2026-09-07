@@ -166,9 +166,15 @@ assert(Array.isArray(vestingEstimate.pendingDeployments),
 const exitPlan = exitPlanRecord.plan;
 assert(exitPlan?.network === "starknet-mainnet" && exitPlan.chainId === MAINNET_CHAIN_ID,
   "The private-exit plan is not bound to Starknet Mainnet.");
-assert(exitPlanRecord.mutationSubmitted === false
-  && exitPlanRecord.feeEstimate?.mutationSubmitted === false,
-"The reviewed private-exit plan unexpectedly records a mutation.");
+assert(exitPlanRecord.feeEstimate?.mutationSubmitted === false,
+  "The reviewed private-exit fee estimate unexpectedly records a mutation.");
+const exitDeploymentRecorded = exitDeployment?.deployment != null;
+assert(
+  exitPlanRecord.mutationSubmitted === exitDeploymentRecorded,
+  exitDeploymentRecorded
+    ? "The deployed private-exit plan does not record its authorized mutation."
+    : "The undeployed private-exit plan unexpectedly records a mutation.",
+);
 assert(exitPlan.deployment?.classHash === ANONYMIZER_CLASS_HASH
   && exitPlan.deployment?.address === ANONYMIZER_ADDRESS,
 "The private-exit deployment does not match the reviewed class and address.");
@@ -180,6 +186,37 @@ assert(exitPlanRecord.reviewedClass?.classHash === ANONYMIZER_CLASS_HASH
 "The Mainnet anonymizer class or privacy_invoke ABI was not read back exactly.");
 assert(BigInt(exitPlanRecord.feeEstimate?.feeFri) > 0n,
   "The private-exit Mainnet fee simulation is missing.");
+
+if (exitDeploymentRecorded) {
+  assert(exitDeployment.schemaVersion === "payo-private-exit-mainnet-evidence-v1",
+    "The private-exit deployment evidence schema is unsupported.");
+  assert(exitDeployment.plan?.network === "starknet-mainnet"
+    && exitDeployment.plan?.chainId === MAINNET_CHAIN_ID
+    && sameHex(exitDeployment.plan?.deployment?.address, exitPlan.deployment.address)
+    && sameHex(exitDeployment.plan?.deployment?.classHash, exitPlan.deployment.classHash),
+  "The private-exit deployment evidence differs from the reviewed Mainnet plan.");
+  assert(transactionHash(exitDeployment.deployment?.transactionHash)
+    && sameHex(exitDeployment.deployment?.contractAddress, exitPlan.deployment.address)
+    && sameHex(exitDeployment.deployment?.classHash, exitPlan.deployment.classHash),
+  "The private-exit deployment receipt is missing or mismatched.");
+  assert(exitDeployment.verification?.passed === true
+    && exitDeployment.verification?.chainId === MAINNET_CHAIN_ID
+    && exitDeployment.verification?.deployment?.deployed === true
+    && exitDeployment.verification?.deployment?.classHashMatches === true
+    && sameHex(
+      exitDeployment.verification?.deployment?.actualClassHash,
+      exitPlan.deployment.classHash,
+    ),
+  "The private-exit Mainnet class-hash read-back failed.");
+  if (exitDeployment.canary?.passed === true) {
+    assert(exitDeployment.canary.walletState === "private_swap_confirmed"
+      && exitDeployment.canary.inputToken === "USDC"
+      && BigInt(exitDeployment.canary.inputAtomic) > 0n
+      && exitDeployment.canary.outputToken === "STRK"
+      && Number(exitDeployment.canary.anonymizerVerifiedBlockNumber) > 0,
+    "The signed private-exit canary evidence is malformed.");
+  }
+}
 
 let vestingTopologyVerified = false;
 if (vestingDeployment) {
@@ -257,7 +294,8 @@ assert(hostedRollout.prover?.runtimeConfig?.selfHostedProverEnabled === true
 const hostedWiringVerified = true;
 
 const vestingCanaryPassed = vestingTopologyVerified && vestingDeployment?.canary?.passed === true;
-const exitTopologyVerified = exitDeployment?.verification?.passed === true;
+const exitTopologyVerified = exitDeploymentRecorded
+  && exitDeployment?.verification?.passed === true;
 const exitCanaryPassed = exitTopologyVerified && exitDeployment?.canary?.passed === true;
 const remainingFeeFri = (vestingTopologyVerified ? 0n : BigInt(vestingEstimate.totalFeeFri))
   + (exitTopologyVerified ? 0n : BigInt(exitPlanRecord.feeEstimate.feeFri));
