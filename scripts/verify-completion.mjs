@@ -56,9 +56,27 @@ for (const entry of [...data.roadmap, ...data.architecture]) {
 }
 
 const readme = await readFile(resolve(root, "README.md"), "utf8");
-if (!readme.includes("## Master implementation roadmap")) errors.push("README roadmap heading is missing.");
-if (!readme.includes("### Phase 5")) errors.push("README Phase 5 is missing.");
-if (!readme.includes("[architecture.md](./architecture.md)")) errors.push("README architecture link is missing.");
+for (const heading of [
+  "## Verified capabilities",
+  "## Run locally",
+  "## Verify the repository",
+  "## Security and limitations",
+]) {
+  if (!readme.includes(heading)) errors.push(`README section is missing: ${heading}.`);
+}
+if (!readme.includes("](./architecture.md)")) errors.push("README architecture link is missing.");
+
+const architecture = await readFile(resolve(root, "architecture.md"), "utf8");
+for (const heading of [
+  "## Architecture at a glance",
+  "### Proof-to-settlement pipeline",
+  "## 3. Trust and leakage boundaries",
+  "## 15. Failure behavior",
+  "## 16. Verification strategy",
+]) {
+  if (!architecture.includes(heading)) errors.push(`Architecture section is missing: ${heading}.`);
+}
+if (!architecture.includes("```mermaid")) errors.push("Architecture diagrams are missing.");
 
 const roadmapCounts = Object.groupBy(data.roadmap, ({ status }) => status);
 const score = data.roadmap.reduce((total, entry) => total + data.scoring[entry.status], 0);

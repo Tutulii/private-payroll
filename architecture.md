@@ -1,6 +1,67 @@
 # PAYO Architecture
 
-This document is the normative technical design for PAYO. The README describes the product and current status; this file defines component responsibilities, trust boundaries, public interfaces, proof semantics, and failure behavior.
+**Document purpose:** describe the system that exists in this repository: its runtime components, data and trust boundaries, proof semantics, deployed contract interactions, recovery behavior, and verification strategy.
+
+This is the technical companion to the [README](./README.md). The canonical inventory of current Mainnet addresses and class hashes lives in [`docs/MAINNET_CONTRACTS.md`](./docs/MAINNET_CONTRACTS.md); measured proof and fee data lives in [`docs/MAINNET_BENCHMARKS.md`](./docs/MAINNET_BENCHMARKS.md). Selected deployment anchors are repeated here only when they explain a verified protocol boundary.
+
+## Reader guide
+
+| Reader | Start here |
+|---|---|
+| Product or hackathon reviewer | System context, trust boundaries, payroll sequence, and selective disclosure |
+| Application engineer | Client-encrypted vault, domain model, state machine, failure behavior, and source map |
+| Proof engineer | Commitments, PayrollIntegrity, SettlementMatch, and verification strategy |
+| Starknet engineer | Token model, contracts, registries, vesting book, and private exit boundary |
+| Operator or security reviewer | Runtime deployment, trust boundaries, recovery, MCP signing boundary, and failure behavior |
+
+The architecture uses four kinds of evidence deliberately:
+
+- **Source invariant:** enforced by application, circuit, or contract code.
+- **Test evidence:** reproduced locally, in CI, or on Devnet.
+- **Deployment evidence:** address, class, configuration, or receipt read back from Mainnet.
+- **User assertion:** useful operational input that is never promoted to cryptographic or chain evidence.
+
+## Architecture at a glance
+
+```mermaid
+flowchart TB
+    subgraph Browser[Authorized browser]
+        UI[Next.js client]
+        Crypto[Vault crypto and witness composer]
+        Wallet[Ready wallet]
+    end
+
+    subgraph Services[PAYO services]
+        API[Authenticated API and workers]
+        DB[(PostgreSQL ciphertext store)]
+        Prover[Authenticated proof service]
+        MCP[MCP policy gateway]
+        Signer[Private structured-intent signer]
+    end
+
+    subgraph Mainnet[Starknet Mainnet]
+        Pool[STRK20 privacy pool]
+        Verifiers[Garaga verifier bundles]
+        Seal[PAYO seals and registries]
+        Book[Ordered private payroll book]
+    end
+
+    UI --> Crypto
+    UI --> API
+    API --> DB
+    Crypto -->|encrypted proof request| Prover
+    Prover -->|proof and public inputs| Crypto
+    UI -->|human approval| Wallet
+    MCP --> API
+    MCP --> Signer
+    Wallet --> Pool
+    Signer --> Pool
+    Pool --> Seal
+    Seal --> Verifiers
+    Seal --> Book
+```
+
+The browser is the plaintext workspace for stored payroll data. PostgreSQL retains authenticated ciphertext plus the minimum operational metadata needed for authorization, scheduling, retries, and chain recovery. The hosted prover is a separate, authenticated trust boundary: it receives an encrypted job plus an ephemeral decryption principal and opens the witness in volatile job memory. A deployment that cannot accept that transient trust must run the prover under its own control.
 
 ## 1. Design principles
 
@@ -23,7 +84,7 @@ flowchart LR
     Auth --> Vault[Encrypted data service]
     Web --> Vault[Encrypted data service]
     MCP --> Vault
-    Web --> Prover[Local proof worker]
+    Web --> Prover[Browser or authenticated proof runtime]
     MCP --> Prover
     MCP --> Signer[Structured-intent signer]
     Ready --> Pool[STRK20 privacy pool]
@@ -45,7 +106,7 @@ flowchart LR
 | Ready | Hold human STRK20 keys and request approval | Reveal a recovery phrase or viewing key to PAYO |
 | Ready session service | Verify domain-separated account signatures and issue revocable tenant sessions | Treat an authentication signature as transaction authority or store bearer tokens in plaintext |
 | Encrypted data service | Authorize tenants and store ciphertext/workflow metadata | Decrypt sensitive records |
-| Proof worker | Generate PayrollIntegrity and later SettlementMatch proofs | Log private witnesses |
+| Proof runtime | Generate PayrollIntegrity, advanced-obligation, vesting, claim, remediation, and SettlementMatch proofs | Persist or log private witnesses |
 | MCP gateway | Offer structured payroll tools and redact responses | Expose arbitrary calls or keys |
 | Structured-intent signer | Rebuild and validate permitted agent actions | Sign caller-supplied arbitrary calldata |
 | STRK20 | Private notes, channels, proving, and settlement | Enforce PAYO employment policy |
@@ -53,7 +114,130 @@ flowchart LR
 | Bundle verifier | Verify both linked shards with one proof-bound Garaga verifier | Accept a missing, duplicated, or reordered shard |
 | Private-exit adapter | Validate a canonical Ekubo quote and build the reviewed STRK20 anonymizer call | Call arbitrary routers, pools, bridges, exchanges, or label public withdrawal private |
 
+### Runtime deployment
+
+The repository defines five deployable services and one durable store. Public exposure is minimized by role:
+
+| Component | Network boundary | Sensitive material handled | Fail-closed condition |
+|---|---|---|---|
+| Browser client | User device | Decrypted vault records, Ready approvals, report plaintext | Locked vault, wrong identity, stale chain binding, or unsupported wallet |
+| `private-payroll` | Public HTTPS | Ciphertext, session-token hashes, workflow metadata, transaction references | Invalid session, tenant mismatch, unavailable database, or mismatched deployment config |
+| `private-payroll-prover` | Authenticated HTTPS with origin allowlist | One proof witness in volatile job memory | Disabled runtime, invalid session, wrong tenant, oversized request, or full queue |
+| `payo-privacy-discovery` | Fly private network | Public/block-pinned STRK20 index data | Stale index, wrong chain, or unavailable service |
+| `payo-transaction-prover` | Fly private network | Transaction-OS proving state for direct SDK execution | Unpinned build, invalid request, or unavailable service |
+| `payo-policy-signer` | Fly private network only | Policy-account owner key and signer HMAC | Wrong caller, replay, noncanonical envelope, unknown method, or policy mismatch |
+| PostgreSQL | Private database network | Authenticated ciphertext, operational metadata, leases, cursors, and token hashes | Unavailable migration, tenant mismatch, revision conflict, or failed transaction |
+
+The web release runs schema migration before activation. Health checks cover service availability; correctness still depends on the application, proof, chain read-back, and evidence gates described below. Secrets are server-side only and must never use a `NEXT_PUBLIC_` name.
+
+### Proof-to-settlement pipeline
+
+```mermaid
+flowchart LR
+    A[Encrypted agreements] --> B[Select exact due set]
+    B --> C[Recalculate and build private witness]
+    C --> D[Encrypt idempotent proof job]
+    D --> E[Generate linked Noir proof shards]
+    E --> F[Validate public inputs and calldata bounds]
+    F --> G[Persist durable approval intent]
+    G --> H[Ready review and signature]
+    H --> I[STRK20 private settlement]
+    I --> J[PAYO seal and Garaga verification]
+    J --> K[Finality plus canonical event indexing]
+    K --> L[Encrypted receipt and payroll-book source]
+    L --> M[Scoped employer, worker, or reviewer evidence]
+
+    D -. same request ID .-> R[Resume queued proof]
+    H -. hash callback missing .-> S[Bounded event recovery]
+    S --> K
+    J -. invalid proof, root, expiry, or replay .-> X[Reject without verified state]
+```
+
+Stages A through F handle private payroll data and proof construction. Mainnet receives only the proof statement, commitments, validity data, nullifiers, and the private STRK20 call. Stages K through M preserve transaction evidence and encrypted source material so a later disclosure can reproduce the selected onchain book without trusting a screenshot or manually entered summary.
+
+### Human private-payroll sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Employer
+    participant Client as PAYO browser
+    participant API as PAYO API
+    participant Prover as Authenticated prover
+    participant Ready as Ready wallet
+    participant Pool as STRK20 pool
+    participant Seal as PAYO seal/verifiers
+    participant Chain as Starknet/indexer
+
+    Employer->>Client: Unlock vault and select due obligations
+    Client->>API: Fetch authenticated ciphertext
+    API-->>Client: Ciphertext and operational metadata
+    Client->>Client: Decrypt, recalculate, compose witness
+    Client->>Prover: Encrypted job plus ephemeral proof principal
+    Prover-->>Client: Proof shards and public inputs
+    Client->>Client: Verify roots, versions, validity, and calldata bounds
+    Client->>API: Persist idempotent approval/proof intent
+    Client->>Ready: Request exact private settlement
+    Employer->>Ready: Review and approve
+    Ready->>Pool: Submit STRK20 transaction
+    Pool->>Seal: Execute proof-bound PAYO call
+    Seal->>Seal: Verify profile, roots, caller, expiry, and replay state
+    Ready-->>Client: Return transaction hash when available
+    Client->>API: Record hash idempotently
+    API->>Chain: Poll receipt and index canonical PAYO/STRK20 events
+    Chain-->>API: Finality and contract state
+    API-->>Client: Independent confirmed and proven states
+```
+
+If Ready confirms a transaction but its callback does not return the hash, the durable intent remains pending. The recovery worker searches only the bounded canonical window for an event matching the exact account, pool, seal, roots, nullifier, and request context. It records one unique match and never asks the user to pay again merely because a callback timed out.
+
+### Compliance-disclosure sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Employer
+    participant EmployerClient as Employer browser
+    participant Vault as Ciphertext API
+    participant Chain as VestingBook checkpoint
+    participant RecipientClient as Worker or reviewer browser
+
+    Employer->>EmployerClient: Choose disclosure scope and recipient identity
+    EmployerClient->>Vault: Load encrypted source for every selected book entry
+    Vault-->>EmployerClient: Authenticated ciphertext
+    EmployerClient->>Chain: Read entry count and accumulator root
+    Chain-->>EmployerClient: Canonical checkpoint
+    EmployerClient->>EmployerClient: Rebuild lines, policies, entry commitments, and accumulator
+    EmployerClient->>EmployerClient: Encrypt scoped package to recipient identity
+    EmployerClient-->>RecipientClient: Transfer downloaded package out of band
+    RecipientClient->>RecipientClient: Decrypt and validate package locally
+    RecipientClient->>Chain: Re-read canonical checkpoint
+    Chain-->>RecipientClient: Current root, count, block, and chain
+    RecipientClient->>RecipientClient: Verify package against live book
+    RecipientClient->>RecipientClient: Render authorized readable evidence
+```
+
+Employer and authorized-tax-reviewer packages cover the complete selected book. Worker packages contain only that worker's lines and the checkpoint needed to verify them. A readable export is a deliberate privacy exit and is treated as sensitive.
+
+### Source-to-runtime map
+
+| Source area | Runtime responsibility |
+|---|---|
+| `app/` | Product routes, API endpoints, authentication entry points, and wallet UX |
+| `lib/client/` | Local decryption, agreement selection, witness construction, proof orchestration, disclosure, and recovery |
+| `lib/domain/` | Versioned schemas, exact arithmetic, canonical commitments, and state transitions |
+| `lib/persistence/` | Tenant-scoped repositories, PostgreSQL transactions, idempotency, leases, and chain cursors |
+| `lib/proof/` | Proof worker protocol, hosted proving, public-input checks, and verifier calldata |
+| `lib/starknet/` | Ready/STRK20 adapters, RPC read-back, contract bindings, quotes, and transaction recovery |
+| `circuits/` | Noir statements, fixtures, verification keys, and proof artifacts |
+| `contracts/` | Cairo seals, registries, verifier bundles, generated verifiers, and integration harnesses |
+| `packages/mcp/` | Structured tools and capability-constrained agent surface |
+| `scripts/` | Migrations, background workers, artifact reproduction, deployment planning, and evidence verification |
+
+
 ## 3. Trust and leakage boundaries
+
+The boundaries below distinguish public-chain and persistent-service exposure. An authorized browser necessarily sees the records it decrypts, and the configured hosted prover transiently sees a witness while generating its proof.
 
 ### Hidden by design
 
@@ -663,4 +847,4 @@ tests plus an explicitly approved live canary pass.
 - Private-exit tests for quote commitment/expiry, canonical block and class binding, route substitution, fee reserve, rendered disclosure, and the upstream STRK20 open-note composition.
 - Mainnet smoke tests with deliberately small STRK and USDC values.
 
-No roadmap item is marked working until its relevant artifact builds, its negative tests pass, and its evidence is linked from the repository.
+A capability is described as working only after its relevant artifact builds, its negative tests pass, and its evidence is linked from the repository.

@@ -1189,10 +1189,16 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
 
       if (!walletAccount) throw new Error("Connect Ready wallet first.");
       const activeTokens = PAYROLL_TOKEN_LIST.filter((token) => totals[token.symbol] > 0n);
-      const [feeQuotes, currentShieldedBalances] = await Promise.all([
-        Promise.all(activeTokens.map((token) => requestPrivateFeeQuote(token.symbol))),
-        refreshBalanceForAccount(walletAccount),
-      ]);
+      // The connected Ready session already supplied these balances. Asking
+      // strk20Balances again here creates a second interactive wallet request;
+      // some Ready builds leave that read unresolved and never receive the
+      // following strk20InvokeTransaction. Use the cached session snapshot for
+      // the advisory reserve check and let Ready enforce the authoritative
+      // balance atomically when it handles the transaction.
+      const feeQuotes = await Promise.all(
+        activeTokens.map((token) => requestPrivateFeeQuote(token.symbol)),
+      );
+      const currentShieldedBalances = shieldedBalances;
       const feeReserves: Record<PayrollTokenSymbol, bigint> = { STRK: 0n, USDC: 0n };
       for (const quote of feeQuotes) feeReserves[quote.token] = quote.walletFee;
       const requiredReserves = requiredPayrollReservesForQuotes(totals, feeReserves);
@@ -1222,7 +1228,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
         },
       );
     },
-    [assertPrivateActionAvailable, refreshBalanceForAccount, requestPrivateFeeQuote, submitPrivateActions, walletAccount],
+    [assertPrivateActionAvailable, requestPrivateFeeQuote, shieldedBalances, submitPrivateActions, walletAccount],
   );
 
   const prepareProofBoundException = useCallback(

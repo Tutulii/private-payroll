@@ -26,12 +26,12 @@ describe("proof-worker privacy protocol", () => {
     const values = Array.from({ length: 17 }, (_, index) => `0x${index.toString(16)}`);
     const mapped = mapPayrollPublicInputs(values);
     expect(mapped).toEqual({
-      chainId: "0x0", sealAddress: "0x1", proofVersion: "0x2", schemaVersion: "0x3",
-      agreementRootHigh: "0x4", agreementRootLow: "0x5",
-      manifestRootHigh: "0x6", manifestRootLow: "0x7",
-      policyRootHigh: "0x8", policyRootLow: "0x9", fxRootHigh: "0xa", fxRootLow: "0xb",
-      runNullifierHigh: "0xc", runNullifierLow: "0xd", validityStart: "0xe", validityExpiry: "0xf",
-      shardIndex: "0x10",
+      chainId: "0x0", sealAddress: "0x1", proofVersion: "2", schemaVersion: "3",
+      agreementRootHigh: "4", agreementRootLow: "5",
+      manifestRootHigh: "6", manifestRootLow: "7",
+      policyRootHigh: "8", policyRootLow: "9", fxRootHigh: "10", fxRootLow: "11",
+      runNullifierHigh: "12", runNullifierLow: "13", validityStart: "14", validityExpiry: "15",
+      shardIndex: "16",
     });
     expect(Object.keys(mapped)).toHaveLength(17);
   });

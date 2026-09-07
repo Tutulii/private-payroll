@@ -1,301 +1,241 @@
 # PAYO
 
-> **Proof-carrying private payroll for humans and AI agents — pay in STRK or USDC and prove every obligation was met without revealing a single salary.**
+[![PAYO CI](https://github.com/Tutulii/private-payroll/actions/workflows/ci.yml/badge.svg)](https://github.com/Tutulii/private-payroll/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-1f2937.svg)](./LICENSE)
+[![Node.js 24](https://img.shields.io/badge/Node.js-24-3c873a.svg)](./toolchains.lock.json)
+[![Starknet Mainnet](https://img.shields.io/badge/network-Starknet%20Mainnet-6c63ff.svg)](./docs/MAINNET_CONTRACTS.md)
 
-PAYO is a non-custodial payroll workspace on Starknet. It combines STRK20 private settlement with encrypted pay agreements, payroll-integrity proofs, selective disclosure, and policy-constrained MCP access for AI agents.
+> **Private payroll with public proof and disclosure controlled by the people who need it.**
 
-The project is being built for the [STRK20 Private Sprint](https://strk20.starknet.io/hackathon). The protocol design follows the sprint's private-payroll RFP: private batches, recurring channels, vesting, termination records, scoped signing authority, and receipts that reveal only what their holder chooses.
+PAYO is a non-custodial payroll workspace on Starknet. Organizations can pay people and bounded AI agents in private STRK or native USDC, prove that committed payroll rules were followed, and produce encrypted evidence for employers, workers, and authorized reviewers without publishing individual salaries.
 
-## Why PAYO exists
+[Live application](https://private-payroll.fly.dev) · [Architecture](./architecture.md) · [Mainnet contracts](./docs/MAINNET_CONTRACTS.md) · [Proof benchmarks](./docs/MAINNET_BENCHMARKS.md) · [Evidence directory](./evidence)
 
-Normal onchain payroll exposes who was paid, how much they earn, when they are paid, and which treasury funds them. Centralized payroll hides this from the public by creating a new data custodian that sees everything.
+PAYO was built for the [STRK20 Private Sprint](https://strk20.starknet.io/hackathon) and follows its private-payroll brief: private batches, recurring agreements, vesting, wage claims, scoped agent authority, and selective disclosure.
 
-PAYO is designed around a different promise:
+## Why PAYO
 
-- **Private from the public:** STRK20 conceals private transfer recipients, assets, and amounts.
-- **Private from PAYO:** sensitive payroll records are encrypted before they leave an authorized client.
-- **Accountable to the right people:** workers, auditors, and tax professionals receive scoped proof packages instead of an entire payroll database.
-- **Programmable for humans and agents:** people receive wages and agents receive policy-bounded budgets through the same obligation system.
+Public payroll transactions expose a company's contributor graph, compensation bands, payment timing, and treasury behavior. A conventional private database hides those details from the public but asks workers and reviewers to trust the payroll operator's records.
 
-Privacy alone is not enough. An employer could otherwise hide underpayment as easily as it hides a legitimate salary. PAYO's protocol goal is therefore **proof-carrying payroll**: a private payment travels with evidence that the committed calculation and payment policy were satisfied.
+PAYO combines three properties:
 
-## Status
+- **Confidential settlement.** STRK20 hides recipient, asset, and amount details inside private notes.
+- **Verifiable calculation.** Noir proofs bind the payment to encrypted agreements, policy snapshots, schedules, and a complete selected payroll book.
+- **Scoped disclosure.** The employer can export a complete book, a worker can open only their statement, and an authorized reviewer can receive an encrypted complete-book package.
 
-PAYO labels capabilities according to evidence, not intention.
+The core idea is simple: privacy should remove payroll data from public surveillance without removing evidence that the committed obligations were handled consistently.
 
-| Capability | Status | Evidence |
+## Review PAYO in five minutes
+
+1. Open the [live application](https://private-payroll.fly.dev). The public deployment and proof-benchmark surfaces can be inspected without moving funds.
+2. Read the [active Mainnet contract inventory](./docs/MAINNET_CONTRACTS.md), including addresses, class hashes, and the verified vesting/compliance-book topology.
+3. Inspect the machine-readable evidence for [STRK payroll](./evidence/payo-strk-mainnet.json), [native-USDC payroll](./evidence/payo-usdc-mainnet.json), [mixed payroll](./evidence/payo-mixed-mainnet.json), [vesting and the complete payroll book](./evidence/vesting-tax-mainnet.json), and the [private exit](./evidence/private-exit-mainnet.json).
+4. Review the measured [proof and Mainnet gas benchmarks](./docs/MAINNET_BENCHMARKS.md).
+5. Clone the repository and run the verified build path below.
+
+Live payroll actions use Mainnet assets and require a compatible Ready wallet. Repository evidence lets a reviewer inspect deployed bindings and historical runs without spending funds or waiting for proof generation.
+
+## Verified capabilities
+
+| Capability | What the implementation does | Primary evidence |
 |---|---|---|
-| Ready wallet discovery and Wallet API detection | Working | Browser integration |
-| Mainnet STRK shielding with a live privacy-fee quote | Working | Ready + STRK20 |
-| Mainnet private STRK batch payroll, up to 50 recipients | Working | Ready + STRK20 |
-| Confirmation tracking and shielded-balance refresh | Working | Starknet receipt |
-| Native USDC private payroll | Working | Live proof-bound Mainnet payroll, durable finality, recipient Ready observation, and both verifier shards recorded; SettlementMatch remains later work |
-| Private STRK/USDC exit boundary | Working; Mainnet anonymizer, live quotes and a signed Ready-wallet canary passed | Canonical single-hop Ekubo quote/class/pool binding, canonical Starknet invoke calldata, Ready open-note action, explicit public-exit warning, unsupported-destination blocking, and [Mainnet deployment evidence](./evidence/private-exit-mainnet.json) |
-| Encrypted persistent payroll vault | Built and tested locally | XChaCha20-Poly1305/X25519 envelopes, authenticated API, PostgreSQL migration |
-| PayrollIntegrity ZK proof core | Phase 1 complete; verifier deployed | [Green Phase 1 evidence](./docs/phase1-evidence.md): 45 Noir tests, two linked native and browser ZK proofs, reproducible Garaga verifier, and real Cairo verifier → bundle → seal checks; the proof-bound generated verifier is deployed on Mainnet |
-| PAYO payroll-seal contract | Deployed and live-proven for STRK, USDC, and mixed batches | The five-contract Mainnet topology is binding-verified. Ready STRK-only, native-USDC-only, and mixed STRK/USDC payrolls reached durable `confirmed`, seal `proven`, and two-shard `onchain_verified` states in [Phase 2 evidence](./docs/phase2-evidence.md) |
-| Advanced obligation engine | Transaction-safe v2 and stateful vesting v3 active; live vesting USDC E2E verified | One proof retains PayrollIntegrity plus statutory, FX, classification, schedules, vesting, and offboarding constraints; the v3 canary combined the ordered v2/v3 proof pairs with a private USDC payment and atomic VestingBook update. See [Phase 3 evidence](./docs/phase3-evidence.md) and [Mainnet vesting evidence](./evidence/vesting-tax-mainnet.json) |
-| Compliance proof export | Built and tested locally | Balanced journal and verifier-bound ZIP package |
-| Universal accountable payroll book | Mainnet v3 topology active; live vesting release and complete-book accumulator verified | Ordinary, vesting, agent, claim and remediation entry kinds; the approved canary finalized entry 2 of a three-entry Mainnet book in transaction `0x06aea4…deaf1`, with deployment and read-back evidence in [`evidence/vesting-tax-mainnet.json`](./evidence/vesting-tax-mainnet.json) and compact canary input in [`evidence/vesting-tax-mainnet-canary-2026-09-06.json`](./evidence/vesting-tax-mainnet-canary-2026-09-06.json) |
-| Worker-controlled income statements | Built and browser-tested; Mainnet payroll-book canary verified | Direct STRK20 holders derive a reporting-only identity with a viewing-key ownership proof, receive only their encrypted book lines, and generate the final statement locally; Ready is an explicit PAYO-X25519 fallback |
-| Familiar private tax evidence | Built and browser-tested; Mainnet payroll-book canary verified | One checkpoint-bound verified-income schema renders W-2-, P60- and T4-style evidence with exact policy/catalog bindings; these are explicitly not official filings or legal advice |
-| Private external fact attestations | Mainnet v3 topology active and proof-verified; no separate issuer-credential live canary claimed | An issuer-signed package binds residency, employment and tax status to one private recipient, exact policy catalog and one-hour proof window; the v3 proof exposes only an approved, revocable catalog root. See [`evidence/vesting-tax-devnet.json`](./evidence/vesting-tax-devnet.json), [`evidence/block4-external-attestation-browser.json`](./evidence/block4-external-attestation-browser.json), and [`evidence/vesting-tax-mainnet.json`](./evidence/vesting-tax-mainnet.json) |
-| MCP policy gateway | Phase 4 complete; Mainnet agent canary remains Phase 5 | All eight tools, encrypted capability authority, transactional limits, human approval and bounded direct-SDK execution are linked in [Phase 4 evidence](./docs/phase4-evidence.md) |
-| SettlementMatch proof | Working for direct Privacy SDK policy accounts | Real proof, generated verifier, atomic `FINALIZE`, exact private balance delta and replay rejection are recorded in [Phase 4 evidence](./docs/phase4-evidence.md); Ready does not expose its viewing key, so Ready-backed runs remain `confirmed` |
+| Human private payroll | Builds STRK, native-USDC, and mixed private batches; Ready remains the human signer | [STRK](./evidence/payo-strk-mainnet.json), [USDC](./evidence/payo-usdc-mainnet.json), [mixed](./evidence/payo-mixed-mainnet.json) |
+| Proof-bound payroll | Generates two linked PayrollIntegrity shards and binds roots, policy version, validity window, and run nullifier to the PAYO seal | [Phase 1 evidence](./docs/phase1-evidence.md), [Phase 2 evidence](./docs/phase2-evidence.md) |
+| Advanced agreements | Supports recurring, checkpoint, milestone, vesting, classification, FX-floor, and offboarding inputs | [Advanced-obligation evidence](./docs/phase3-evidence.md) |
+| Stateful vesting | Proves accrued release from immutable terms, rejects stale state/replay, and appends the release to an ordered book | [Vesting Mainnet evidence](./evidence/vesting-tax-mainnet.json) |
+| Private compliance book | Produces encrypted employer, worker, and authorized-reviewer evidence checked against the live book accumulator | [Compliance-book evidence](./evidence/vesting-tax-mainnet.json) |
+| Wage claims and remediation | Binds a private shortfall claim to a protected obligation snapshot and a later private remedy | [Wage-claim deployment evidence](./evidence/phase3-wage-claim-mainnet.json) |
+| Private STRK/USDC swap | Uses a reviewed single-hop Ekubo anonymizer with quote, route, block, and class-hash checks | [Private-exit evidence](./evidence/private-exit-mainnet.json) |
+| Bounded agent payroll | Exposes eight MCP tools, encrypted capabilities, transactional limits, a restricted policy account, and SettlementMatch for direct Privacy SDK accounts | [Agent evidence](./docs/phase4-evidence.md) |
 
-Three distinct states are never collapsed into one:
+The autonomous agent path has implementation and Devnet evidence; this repository does not claim a completed autonomous Mainnet payroll canary. Ready-backed runs can prove calculation and transaction confirmation, while SettlementMatch requires a locally controlled viewing key that Ready does not expose to a dapp.
 
-1. **Calculation proven** — the private manifest satisfied the committed payroll rules.
-2. **Wallet confirmed** — Starknet confirmed the STRK20 transaction.
-3. **Settlement proven** — private note evidence was reconciled with the approved manifest.
+## How it works
 
-A Ready transaction can reach the first two states. The third requires viewing-key-derived evidence that the current Ready Wallet API does not expose to a dapp.
+```mermaid
+flowchart LR
+    User[Employer, worker, or reviewer] --> Client[PAYO web client]
+    Client -->|authenticated ciphertext| Vault[(PostgreSQL vault)]
+    Client -->|encrypted proof job| Prover[Noir + Barretenberg prover]
+    Prover -->|proof + public roots| Client
+    Client -->|review and approve| Ready[Ready wallet]
+    Ready --> Pool[STRK20 privacy pool]
+    Pool --> Seal[PAYO seal + Garaga verifiers]
+    Seal --> Book[Ordered payroll book]
+    Client -->|recipient-encrypted package| Evidence[Employer, worker, or reviewer evidence]
+    Book -->|public checkpoint| Evidence
+```
 
-## Working application
+Sensitive vault records are encrypted in the browser with XChaCha20-Poly1305. Data-encryption keys are wrapped independently to authorized X25519 identities. The hosted prover receives an encrypted job and an ephemeral decryption principal, opens the witness only in volatile job memory, and must not log it. Teams that cannot trust the hosted prover with transient witness access can run the prover themselves.
 
-The current Next.js application includes:
+The onchain system sees commitments, verifier versions, validity windows, nullifiers, and explicitly public aggregates. It does not receive plaintext salary lines.
 
-- Overview (`/`) — private treasury, payday, team, activity, and MCP summary.
-- Payroll (`/payroll`) — live Mainnet shielding and private batch execution.
-- People & Agents (`/team`) — compensation directory and scoped agent access.
-- Activity (`/activity`) — privacy-aware records and selective-disclosure concepts.
-- Wallet (`/wallet`) — Ready discovery, Ready-signed PAYO identity, balances, the reviewed private STRK/USDC swap route, and explicit public-exit boundary.
+### Evidence states
 
-The visual system uses warm paper tones, flat illustration, strong outlines, and restrained 2D animation instead of glass, neon, or sci-fi crypto styling.
+PAYO keeps three states separate:
 
-### Try the current Mainnet flow
+1. **Calculation proven** — PayrollIntegrity accepted the committed agreement and payroll arithmetic.
+2. **Wallet confirmed** — Starknet accepted the STRK20 transaction.
+3. **Settlement proven** — SettlementMatch reconciled approved manifest lines with locally opened private-note evidence.
 
-1. Install Ready and select Starknet Mainnet.
-2. Open `/wallet`, connect Ready, and approve account access.
-3. If the account is unregistered, complete the one-time setup at the linked STRK20 application.
-4. Open `/payroll#private-payroll` and shield a deliberately small amount of STRK.
-5. Add registered Starknet recipients and review all amounts in Ready.
-6. Approve once, wait for confirmation, and inspect the Starkscan receipt.
+A Ready-backed payroll can reach the first two states. The third state is available to direct Privacy SDK accounts that control their viewing key.
 
-Mainnet assets have real value. PAYO never requests or stores a recovery phrase, viewing key, or Ready private key.
+## Product surfaces
 
-## Master implementation roadmap
-
-The roadmap below is the target, not a completion claim. The evidence-backed status is tracked in [`docs/implementation-status.json`](./docs/implementation-status.json), and the strict execution and release gates are in [`MASTER_PLAN.md`](./MASTER_PLAN.md). Run `npm run verify:status` for the current count. “Built locally” is deliberately different from “deployed.”
-
-### Phase 0 — Protocol and safety foundation
-
-- Lock canonical encrypted schemas and cross-language commitment encoding.
-- Add this roadmap and the full [architecture specification](./architecture.md).
-- Pin the Starknet, Scarb, Noir, Barretenberg, and Garaga toolchains.
-- Publish an explicit visible-versus-hidden privacy model.
-- Verify native Circle USDC against Ready and the live STRK20 pool before enabling it.
-
-### Phase 1 — ZK-first PayrollIntegrity
-
-- Build a fixed 64-leaf Noir circuit supporting up to 50 real recipients.
-- Prove completeness, uniqueness, pay arithmetic, policy application, FX floors, schedule eligibility, and final-pay components.
-- Generate a version-pinned Garaga verifier for Starknet.
-- Run proof generation in a browser worker and reveal only roots, a nullifier, proof version, and validity window.
-- Ship versioned US, UK and Canadian reference policy packs as narrow examples, not legal certification.
-
-### Phase 2 — Dual-token settlement and durable payroll
-
-- Make STRK and native USDC first-class token descriptors with correct decimal handling.
-- Support single-token and mixed-token payroll batches.
-- Add client-encrypted organizations, agreements, payroll runs, proof bundles, and receipts.
-- Add durable idempotency, confirmation recovery, reorg handling, and transaction indexing.
-- Deploy the non-custodial PAYO seal, verifier, and policy-registry contracts.
-
-### Phase 3 — Advanced obligations
-
-- `StatutoryCorrect`: prove that a committed deductions policy was applied.
-- `FXFloor`: prove that settlement value met the worker's chosen reference-currency floor.
-- `ClassificationConsistency`: prove that payment treatment matched committed facts and policy; never claim a legal-status determination.
-- Batch, recurring, checkpoint-streamed, milestone, and private vesting plans.
-- `OffboardingCorrect`: ordinary pay, accrued leave, notice, severance, and adjustments.
-- Private wage claims and private remediation payments.
-- Encrypted accounting and auditor proof packages.
-
-The stateful vesting/compliance-book extension now has local, Devnet and Mainnet
-topology evidence:
-a v3 proof binds immutable vesting terms, exact accrued-release deltas and sequential
-state; the seal rejects stale/replayed releases and appends every finalized entry to
-an ordered period accumulator. Employer, worker and tax-reviewer reports are encrypted
-and verified against that complete book. The v3 verifier, ordered bundle and
-VestingBook seal are deployed at their reviewed deterministic Mainnet addresses;
-their class hashes, immutable dependency wiring, active registry profile, real ordered
-proof pair and reversed-shard rejection passed read-back. On 2026-09-06, the approved
-vesting canary reached transaction
-`0x06aea439656addfd17b315879696f0ace3880d9878ec01221033ee367d0deaf1`
-at block `14461163`. Read-back confirmed the consumed release nullifier, exact next
-state, book entry index 2 of 3 and recomputed complete-book accumulator root. The
-deployment and canary result are recorded in `evidence/vesting-tax-mainnet.json`, with
-the compact canary identifiers in
-`evidence/vesting-tax-mainnet-canary-2026-09-06.json`. The deployed web and prover
-releases are bound to this exact seal, and automatic post-wallet confirmation recovery
-is deployed for the v3 authorization path. The private-exit anonymizer is deployed and
-class-verified. On 2026-09-07, a signed Ready-wallet canary confirmed a private swap of
-0.2 USDC into a 6.481607 STRK private note after the invoke calldata was normalized to
-canonical Starknet felts. The autonomous-agent Mainnet canary remains separate Phase 5 work.
-
-### Phase 4 — Human and AI-agent payroll
-
-- Expose structured MCP tools for drafting, validating, requesting, and verifying payroll.
-- Issue encrypted, expiring agent capabilities with token, recipient, purpose, amount, and period limits.
-- Keep human approval as the initial default.
-- Add bounded autonomy through a structured-intent signing gateway that never signs arbitrary calldata.
-- Use direct Privacy SDK accounts for agent workflows that require local viewing-key control.
-
-### Post-Phase 4 — ZK Proof Inspector
-
-- Add one privacy-safe evidence screen for each payroll; this is an inspector for the existing proof system, not a replacement prover or verifier.
-- Show the full operational path: proof generated, local verification, private settlement finality, shard 0 verification, shard 1 verification, and final `onchain_verified` state.
-- Decode only public evidence: circuit/proof/VK versions and hashes, commitment roots, shortened run nullifier, chain and PAYO contract bindings, validity window, block numbers, timestamps, confirmation depth, gas, and transaction links.
-- Detect and explain missing, mismatched, reordered, rejected, or stalled shards instead of presenting a generic success state.
-- Export an auditor-safe proof receipt while never exposing witnesses, salaries, recipient identities, payout addresses, agreements, or viewing keys.
-
-### Phase 5 — Mainnet evidence and release
-
-- **Starting state:** Phase 4 agents can inspect scope, read due metadata, submit encrypted drafts, validate bounded payment intents, request payroll, and track receipts; Mainnet execution still stops for human PAYO/Ready approval.
-- Begin Phase 5 with the isolated-signer cutover: configure the private signer service and private Fly networking, separate the owner and treasury-viewing secrets, add replay-protected HMAC authentication, attest the pinned chain/account/pool configuration, and keep owner material out of the web, MCP, worker, prover, and relayer.
-- Register and verify the treasury viewing identity, complete any required owner rotation or policy activation transactions, fund only the policy account's public gas budget, and read every resulting Mainnet value back before enabling dispatch.
-- Authorize one exact, short-lived, one-run policy and complete a small autonomous Mainnet payroll canary through private settlement, finality, proof receipt, and reconciliation. Human-approved execution remains the default and fail-safe path.
-- Record at least three successful Mainnet transactions that touch STRK20 and PAYO contracts.
-- Demonstrate STRK payroll, USDC payroll, and one advanced obligation or agent flow.
-- Publish contract addresses, class hashes, proof benchmarks, demo URL, and a three-minute demo.
-- The current application topology and RPC-verifiable class hashes are published
-  in [Active PAYO Mainnet contracts](./docs/MAINNET_CONTRACTS.md).
-- Reproducible proof timings and historical/Phase 5 gas evidence are published in
-  [PAYO proof and Mainnet gas benchmarks](./docs/MAINNET_BENCHMARKS.md).
-- Complete `strk20.json` and publish deployment, recovery, security, and known-limitations runbooks.
+| Route | Purpose |
+|---|---|
+| `/` | Treasury, payday, team, activity, and agent summary |
+| `/team` | Contributors, one-wallet/one-contributor enforcement, encrypted agreements, and agent capabilities |
+| `/payroll` | Due-obligation selection, proof generation, Ready approval, submission recovery, and confirmation |
+| `/activity` | Receipts, proof inspection, compliance-book exports, reviewer imports, wage claims, and remediation |
+| `/my-pay` | Worker-only encrypted statement opening and live-book verification |
+| `/wallet` | Ready connection, shielded balances, private swap, and explicit public-exit boundary |
+| `/deployment` | Public deployment and verifier bindings |
+| `/proof-benchmark` | Reproducible proof measurements and evidence links |
 
 ## Privacy model
 
-| Data | Public | PAYO service | Authorized employer | Worker |
-|---|---:|---:|---:|---:|
-| Pool interaction and timing | Yes | Yes | Yes | Yes |
-| PAYO contract and proof version | Yes | Yes | Yes | Yes |
-| Commitment roots and nullifier | Yes | Yes | Yes | Yes |
-| Worker identity and payout address | No | Ciphertext | Yes | Own record |
-| Salary, deductions, token choice | No | Ciphertext | Yes | Own record |
-| Full payroll book | No | Ciphertext | Yes | No |
-| Scoped income or audit receipt | Holder chooses | Ciphertext | Holder chooses | Holder chooses |
+| Data | Public chain | PAYO storage | Authorized client or recipient |
+|---|---:|---:|---:|
+| Pool interaction and timing | Visible | Operational metadata | Visible |
+| Contract, verifier, and proof version | Visible | Visible | Visible |
+| Commitment roots and nullifier | Visible | Visible | Visible |
+| Worker identity and payout address | Hidden | Ciphertext | Decrypted by scope |
+| Salary, deductions, and token choice | Hidden | Ciphertext | Decrypted by scope |
+| Full payroll book | Hidden | Ciphertext | Employer or selected reviewer |
+| Worker income statement | Hidden | Ciphertext | Selected worker |
 
-Direct wallet submission may reveal the transaction-signing Starknet account and timing. A paymaster or relay is required when hiding the submitter is part of the threat model.
+Direct wallet submission can reveal the transaction-signing account and timing. A relay or paymaster is required when hiding the submitter is part of the threat model. Commitments also do not protect low-entropy values by themselves, so sensitive leaves include random salts.
 
-## Architecture
+## Run locally
 
-The normative design is in [architecture.md](./architecture.md). It covers:
+### Prerequisites
 
-- trust boundaries and encrypted-key ownership;
-- domain schemas and workflow states;
-- PayrollIntegrity and SettlementMatch proofs;
-- STRK20 `privacy_invoke` contracts;
-- STRK/USDC and FX handling;
-- MCP capabilities and the signing boundary;
-- failure recovery, versioning, and disclosure limits.
+- Node.js `24.17.0`
+- npm `12.0.2`
+- PostgreSQL 17
+- Git
+- A Starknet Mainnet RPC endpoint
+- Ready Wallet API `0.10.3` or newer for live wallet flows
 
-## Development
+Exact cryptographic and Starknet toolchain versions are pinned in [`toolchains.lock.json`](./toolchains.lock.json).
 
-### Requirements
-
-- Node.js 24+
-- npm 12+
-- A Starknet Mainnet RPC URL
-- Ready for live STRK20 wallet tests
-- Scarb and Starknet Foundry for Cairo work
-- Noir, Barretenberg, and Garaga for proof work
-
-### Frontend
+### Install and start
 
 ```bash
-npm install
-npm run dev
+git clone https://github.com/Tutulii/private-payroll.git
+cd private-payroll
+npm ci
+cp .env.example .env.local
 ```
 
-Open `http://localhost:3000`.
-
-### Environment
-
-Copy `.env.example` to `.env.local` and provide only the values required by the layer being run.
+Start a disposable local PostgreSQL instance, or point `DATABASE_URL` at an existing PostgreSQL 17 database:
 
 ```bash
+docker run --name payo-postgres \
+  -e POSTGRES_USER=payo \
+  -e POSTGRES_PASSWORD=password \
+  -e POSTGRES_DB=payo \
+  -p 5432:5432 \
+  -d postgres:17
+```
+
+Set these values in `.env.local` before starting the application:
+
+```dotenv
+DATABASE_URL=postgresql://payo:password@localhost:5432/payo
 NEXT_PUBLIC_STARKNET_RPC_URL=https://your-mainnet-rpc
 STARKNET_RPC_URL=https://your-server-side-mainnet-rpc
 PAYO_AUTH_AUDIENCE=http://localhost:3000
+PAYO_WORKER_SECRET=replace-with-at-least-32-random-bytes
 ```
 
-Ready signs a five-minute, domain-separated typed-data challenge and PAYO issues
-a revocable session (12 hours by default). Session-token hashes—not bearer tokens
-or wallet keys—are stored in PostgreSQL. A session authenticates encrypted API
-access only; every shield, registry update, and private payroll still requires a
-separate Ready approval. Existing Privy-era workspaces can be linked by importing
-their recovery package: PAYO encrypts a one-time proof to the existing X25519
-vault key before binding the Ready address, so the recovery secret never leaves
-the browser.
-
-### Verify
+Then migrate and start:
 
 ```bash
+npm run db:migrate
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000). Generate secrets with a cryptographically secure tool such as `openssl rand -hex 32`; never commit `.env.local`.
+
+The basic web build needs the variables above. Live proof, worker, agent, and Mainnet execution services require the additional fail-closed variables documented in [`.env.example`](./.env.example). Public deployed addresses and their class hashes are recorded in [`docs/MAINNET_CONTRACTS.md`](./docs/MAINNET_CONTRACTS.md).
+
+## Verify the repository
+
+The default CI path runs dependency, TypeScript, domain, database, browser, evidence, lint, and production-build checks.
+
+```bash
+npm run audit:production
 npm run typecheck
 npm test
 npm run lint
 npm run build
-npm run verify:status
-npm run verify:payo-strk
-npm run verify:payo-usdc
-npm run verify:payo-mixed
 ```
 
-`npm run verify:completion` is the release gate. It intentionally fails while any roadmap or architecture requirement lacks integrated code, tests, deployment, or Mainnet evidence.
-
-Database migration:
+Database integration tests intentionally require an explicit disposable test database:
 
 ```bash
-npm run db:migrate
+PAYO_TEST_DATABASE_URL=postgresql://payo:password@localhost:5432/payo_test \
+DATABASE_URL=postgresql://payo:password@localhost:5432/payo_test \
+npm run test:db
 ```
 
-Database integration tests require a disposable, migrated test database and
-intentionally refuse to run without an explicit URL:
+Rendered browser paths:
 
 ```bash
-PAYO_TEST_DATABASE_URL=postgresql://... DATABASE_URL=postgresql://... npm run test:db
+npm run test:browser:phase3
+npm run test:browser:phase4
+npm run test:browser:recovery
 ```
 
-Never use the production database for this command.
+Noir, Barretenberg, Garaga, Cairo, and Devnet verification needs the pinned native toolchain and substantially more memory than the web build. Reproduction commands and artifact checks are documented in [`circuits/README.md`](./circuits/README.md) and [`contracts/README.md`](./contracts/README.md).
 
-Durable confirmation, proof-relay, and event-indexing workers:
+## Repository map
 
-```bash
-npm run workers
-```
+| Path | Contents |
+|---|---|
+| [`app/`](./app) | Next.js routes, wallet flows, API endpoints, and product UI |
+| [`lib/client/`](./lib/client) | Client vault, agreement, payroll, proof, disclosure, and recovery orchestration |
+| [`lib/domain/`](./lib/domain) | Versioned schemas, commitments, calculations, and state transitions |
+| [`lib/persistence/`](./lib/persistence) | PostgreSQL repositories, transactions, idempotency, leases, and reorg-safe cursors |
+| [`lib/proof/`](./lib/proof) | Browser/hosted proof protocols, witness composition, and verifier calldata |
+| [`lib/starknet/`](./lib/starknet) | Ready, STRK20, Mainnet contract, quote, and transaction adapters |
+| [`circuits/`](./circuits) | Noir circuits and reproducible verification artifacts |
+| [`contracts/`](./contracts) | Cairo seals, registries, bundles, generated verifiers, and integration tests |
+| [`packages/mcp/`](./packages/mcp) | Structured MCP payroll gateway and adversarial tests |
+| [`drizzle/`](./drizzle) | Versioned PostgreSQL migrations |
+| [`scripts/`](./scripts) | Evidence verification, deployment planning, workers, and recovery tooling |
+| [`evidence/`](./evidence) | Machine-readable Mainnet, Devnet, browser, and deployment evidence |
+| [`docs/`](./docs) | Contract inventory, benchmarks, runbooks, and technical evidence reports |
 
-Use a process supervisor in hosted environments. The full Mainnet database,
-relayer, secret, indexer, and incident precautions are in
-[the Phase 2 deployment runbook](./docs/phase2-mainnet-deployment.md).
+## Deployment model
 
-The ordered signer cutover, autonomous canary, rollback, privacy, security,
-legal-boundary and known-limitations procedure is in the
-[Phase 5 Mainnet release runbook](./docs/MAINNET_RELEASE_RUNBOOK.md).
+The hosted system is split by trust and resource requirements:
 
-Circuit, proof, and contract verification:
+| Service | Exposure | Responsibility |
+|---|---|---|
+| `private-payroll` | Public HTTPS | Next.js UI/API, authentication, encrypted vault access, and durable workflow workers |
+| `private-payroll-prover` | Authenticated HTTPS | Dedicated, serialized proof jobs for heavy browser-incompatible workloads |
+| `payo-privacy-discovery` | Fly private network | Block-pinned STRK20 note discovery |
+| `payo-transaction-prover` | Fly private network | Transaction-OS proving for direct Privacy SDK execution |
+| `payo-policy-signer` | Fly private network only | Narrow policy-owner signatures; no arbitrary-call API |
 
-```bash
-cd circuits/payroll_integrity
-nargo test && nargo build
-nargo execute witness-shard-0 --prover-name Prover
-nargo execute witness-shard-1 --prover-name Prover-shard-1
-cd ../.. && npm run proof:prove
-cd contracts && scarb build && snforge test
-cd integrity_verifier && scarb build && snforge test
-```
+Production releases run database migrations before the new web image becomes active. Service definitions are versioned in `fly.*.toml`; operational safeguards, rollback steps, and secret boundaries are documented in [`docs/MAINNET_RELEASE_RUNBOOK.md`](./docs/MAINNET_RELEASE_RUNBOOK.md).
 
-The version-pinned proof/verifier commands are in [circuits/README.md](./circuits/README.md), and MCP setup is in [packages/mcp/README.md](./packages/mcp/README.md). A roadmap item is not considered shipped merely because its source directory exists.
+## Security and limitations
 
-## Security and legal boundaries
+- PAYO is non-custodial: Ready or the restricted policy account authorizes settlement; PAYO contracts do not hold the payroll treasury.
+- Vault records are encrypted before persistence, but the configured hosted prover is trusted with the plaintext witness during a proof job. Self-hosting removes that operator dependency.
+- Ready does not expose a STRK20 viewing key to the dapp, so Ready-backed private-note reconciliation cannot be labelled SettlementMatch-proven.
+- Reference US, UK, and Canadian policy packs demonstrate committed calculations. They are not official filings, legal advice, tax advice, or a substitute for authority rules.
+- Contracts and circuits are experimental and have not received an independent production security audit.
+- A private transaction still exposes timing, contract interaction, calldata size, and possibly the submitting account.
 
-- Contracts and proof circuits are experimental until independently reviewed.
-- Reference policy packs demonstrate verifiable calculation; they are not legal, tax, accounting, or employment advice.
-- Classification depends on real-world facts and cannot be certified from a contract label alone.
-- PAYO is non-custodial; funds remain controlled by the user's Starknet or policy account.
-- Native USDC will not be silently substituted with a bridged asset if STRK20 support is unavailable.
+Please report security issues privately through [GitHub Security Advisories](https://github.com/Tutulii/private-payroll/security/advisories/new). See [`SECURITY.md`](./SECURITY.md) for scope and reporting guidance.
 
-## License
+## Contributing
 
-MIT
+Contributions are welcome. Read [`CONTRIBUTING.md`](./CONTRIBUTING.md) for setup, test tiers, cryptographic-change requirements, and pull-request expectations.
+
+PAYO is available under the [MIT License](./LICENSE).

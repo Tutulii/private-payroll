@@ -41,6 +41,15 @@ function canonicalFelt(value: string): string {
   return `0x${parsed.toString(16)}`;
 }
 
+function canonicalPayrollInputs<T extends PayrollIntegrityPublicInputs>(publicInputs: T): T {
+  return Object.fromEntries(Object.entries(publicInputs).map(([key, value]) => [
+    key,
+    key === "chainId" || key === "sealAddress"
+      ? canonicalFelt(value)
+      : canonicalDecimal(value),
+  ])) as T;
+}
+
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
   for (let offset = 0; offset < bytes.length; offset += 0x8000) {
@@ -134,11 +143,7 @@ export function prepareEncryptedPayrollIntegrityBundle(input: {
       proofBase64: bytesToBase64(shard.proof),
       proofCalldata: shard.proofCalldata,
       calldataHash: shard.calldataHash,
-      publicInputs: {
-        ...shard.publicInputs,
-        chainId: canonicalFelt(shard.publicInputs.chainId),
-        sealAddress: canonicalFelt(shard.publicInputs.sealAddress),
-      },
+      publicInputs: canonicalPayrollInputs(shard.publicInputs),
     })),
     ...(input.proof.vestingBook
       ? { vestingBook: prepareVestingBookProofSubmission(input.proof.vestingBook) }

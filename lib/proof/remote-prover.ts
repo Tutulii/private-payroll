@@ -13,25 +13,51 @@ import {
   type VestingBookProof,
 } from "./protocol";
 
-const publicInputsSchema = z.object({
-  chainId: z.string(),
-  sealAddress: z.string(),
-  proofVersion: z.string(),
-  schemaVersion: z.string(),
-  agreementRootHigh: z.string(),
-  agreementRootLow: z.string(),
-  manifestRootHigh: z.string(),
-  manifestRootLow: z.string(),
-  policyRootHigh: z.string(),
-  policyRootLow: z.string(),
-  fxRootHigh: z.string(),
-  fxRootLow: z.string(),
-  runNullifierHigh: z.string(),
-  runNullifierLow: z.string(),
-  validityStart: z.string(),
-  validityExpiry: z.string(),
-  shardIndex: z.string(),
+const canonicalUintStringSchema = z.string().regex(/^(?:0|[1-9]\d*)$/);
+const canonicalPayrollPublicInputsSchema = z.object({
+  chainId: starknetFeltSchema,
+  sealAddress: starknetFeltSchema,
+  proofVersion: canonicalUintStringSchema,
+  schemaVersion: canonicalUintStringSchema,
+  agreementRootHigh: canonicalUintStringSchema,
+  agreementRootLow: canonicalUintStringSchema,
+  manifestRootHigh: canonicalUintStringSchema,
+  manifestRootLow: canonicalUintStringSchema,
+  policyRootHigh: canonicalUintStringSchema,
+  policyRootLow: canonicalUintStringSchema,
+  fxRootHigh: canonicalUintStringSchema,
+  fxRootLow: canonicalUintStringSchema,
+  runNullifierHigh: canonicalUintStringSchema,
+  runNullifierLow: canonicalUintStringSchema,
+  validityStart: canonicalUintStringSchema,
+  validityExpiry: canonicalUintStringSchema,
+  shardIndex: canonicalUintStringSchema,
 }).strict();
+
+function canonicalizeRemotePayrollPublicInputs(input: unknown): unknown {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  return Object.fromEntries(Object.entries(input).map(([key, value]) => {
+    if (typeof value !== "string") return [key, value];
+    try {
+      const parsed = BigInt(value);
+      return [
+        key,
+        key === "chainId" || key === "sealAddress"
+          ? `0x${parsed.toString(16)}`
+          : parsed.toString(),
+      ];
+    } catch {
+      return [key, value];
+    }
+  }));
+}
+
+// Accept fixed-width bb.js fields from a prover during a rolling deployment,
+// but return only PAYO's canonical public-input representation.
+export const remotePayrollPublicInputsSchema = z.preprocess(
+  canonicalizeRemotePayrollPublicInputs,
+  canonicalPayrollPublicInputsSchema,
+);
 
 function canonicalizeRemoteVestingPublicInputs(input: unknown): unknown {
   if (!input || typeof input !== "object" || Array.isArray(input)) return input;
@@ -98,14 +124,14 @@ export const remotePayrollProofResponseSchema = z.object({
       proofBase64: z.string().min(1).max(100_000),
       proofCalldata: z.array(starknetFeltSchema).min(1).max(PAYO_MAX_PROOF_CALLDATA_FELTS),
       calldataHash: starknetFeltSchema,
-      publicInputs: publicInputsSchema,
+      publicInputs: remotePayrollPublicInputsSchema,
     }).strict(),
     z.object({
       shardIndex: z.literal(1),
       proofBase64: z.string().min(1).max(100_000),
       proofCalldata: z.array(starknetFeltSchema).min(1).max(PAYO_MAX_PROOF_CALLDATA_FELTS),
       calldataHash: starknetFeltSchema,
-      publicInputs: publicInputsSchema,
+      publicInputs: remotePayrollPublicInputsSchema,
     }).strict(),
   ]),
 }).strict();

@@ -4,7 +4,6 @@ import { hashCanonicalJson } from "@/lib/crypto/digest";
 import { decryptVaultRecord, type VaultPrincipalKeyPair } from "@/lib/crypto/vault";
 import {
   payrollIntegrityBundleMetadataSchema,
-  payrollIntegrityCommonInputsSchema,
   payrollProofCalldataSchema,
   starknetFeltSchema,
   vestingBookProofSubmissionSchema,
@@ -15,13 +14,9 @@ import {
   type ProofWorkerSuccess,
   type VestingBookProof,
 } from "@/lib/proof/protocol";
+import { remotePayrollPublicInputsSchema } from "@/lib/proof/remote-prover";
 import { hashProofCalldata } from "@/lib/proof/starknet-calldata";
 import type { PayoClient } from "./payo-client";
-
-const uintStringSchema = z.string().regex(/^(?:0|[1-9]\d*)$/);
-const payrollPublicInputsSchema = payrollIntegrityCommonInputsSchema.extend({
-  shardIndex: uintStringSchema,
-}).strict();
 
 export const encryptedPayrollProofPayloadSchema = z.object({
   schemaVersion: z.literal(1),
@@ -35,14 +30,14 @@ export const encryptedPayrollProofPayloadSchema = z.object({
       proofBase64: z.string().min(1),
       proofCalldata: payrollProofCalldataSchema,
       calldataHash: starknetFeltSchema,
-      publicInputs: payrollPublicInputsSchema,
+      publicInputs: remotePayrollPublicInputsSchema,
     }).strict(),
     z.object({
       shardIndex: z.literal(1),
       proofBase64: z.string().min(1),
       proofCalldata: payrollProofCalldataSchema,
       calldataHash: starknetFeltSchema,
-      publicInputs: payrollPublicInputsSchema,
+      publicInputs: remotePayrollPublicInputsSchema,
     }).strict(),
   ]),
   vestingBook: vestingBookProofSubmissionSchema.optional(),
