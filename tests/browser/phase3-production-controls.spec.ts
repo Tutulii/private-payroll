@@ -69,7 +69,7 @@ const workflows = [
     name: "Statutory worker",
     plan: "statutory_classification",
     option: "Recurring payroll",
-    token: "USDC",
+    token: "STRK",
   },
   {
     name: "FX-floor worker",

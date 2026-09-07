@@ -6,6 +6,7 @@ import { prepareEncryptedPayee } from "./payee-directory";
 import {
   advanceEncryptedRecurringAgreement,
   agreementProofScheduleCommitment,
+  alignEncryptedRecurringAgreementPaydays,
   agreementScheduleCommitment,
   lockedPayrollScheduleCommitments,
   payrollScheduleReferenceFromManifestLine,
@@ -461,6 +462,65 @@ describe("encrypted pay agreements", () => {
     const request = storeEncryptedRecord.mock.calls[0][0];
     expect(JSON.stringify(request.envelope)).not.toContain("25500000");
     expect(decryptVaultRecord(request.envelope, principal)).toEqual(record);
+  });
+
+  it("atomically aligns nearby recurring agreements to one later payday commitment", async () => {
+    const principal = generateVaultPrincipal("admin:payday-cohort");
+    const payee = prepareEncryptedPayee({
+      organizationId,
+      displayName: "Maya",
+      principalKind: "human",
+      recipientAddress: "0x456",
+      tokenPreference: "USDC",
+      jurisdictionCode: "US",
+      principal,
+      now,
+    }).record;
+    const build = (createdAt: Date, nextDueAt: string) => storeEncryptedAdvancedAgreement({
+      client: { storeEncryptedRecord: vi.fn().mockResolvedValue({ record: {} }) } as never,
+      organizationId,
+      payee,
+      token: "USDC",
+      classification: "contractor",
+      classificationAnswers: referenceClassificationAnswers("contractor"),
+      policyId: "payo-net-invoice-no-withholding-v1",
+      policyVersion: 1,
+      paymentPlan: {
+        planVersion: "payo-payment-plan-v1" as const,
+        kind: "recurring" as const,
+        cadence: "monthly" as const,
+        anchorAt: nextDueAt,
+        nextDueAt,
+        occurrence: 0,
+      },
+      fixedAmount: "1",
+      principal,
+      now: createdAt,
+    });
+    const first = await build(now, "2026-08-24T12:10:00.000Z");
+    const second = await build(new Date(now.getTime() + 10), "2026-08-24T12:11:00.000Z");
+    const storeEncryptedRecords = vi.fn().mockResolvedValue({ records: [] });
+    const aligned = await alignEncryptedRecurringAgreementPaydays({
+      client: { storeEncryptedRecords } as never,
+      records: [first, second],
+      dueAt: "2026-08-24T12:11:00.000Z",
+      principal,
+      now,
+    });
+    expect(aligned).toHaveLength(2);
+    expect(aligned.map(({ revision }) => revision)).toEqual([2, 1]);
+    expect(aligned.map(({ agreement }) => agreement.schedule)).toEqual([
+      { kind: "recurring", cadence: "monthly", nextDueAt: "2026-08-24T12:11:00.000Z" },
+      { kind: "recurring", cadence: "monthly", nextDueAt: "2026-08-24T12:11:00.000Z" },
+    ]);
+    expect(aligned[0].proofScheduleCommitment).not.toBe(first.proofScheduleCommitment);
+    expect(aligned[1].proofScheduleCommitment).toBe(second.proofScheduleCommitment);
+    expect(aligned[0].proofScheduleCommitment).not.toBe(aligned[1].proofScheduleCommitment);
+    const request = storeEncryptedRecords.mock.calls[0][0];
+    expect(request.records).toHaveLength(1);
+    expect((decryptVaultRecord(request.records[0].envelope, principal) as {
+      agreement: { paymentPlan: { nextDueAt: string } };
+    }).agreement.paymentPlan.nextDueAt).toBe("2026-08-24T12:11:00.000Z");
   });
 
   it("binds an advanced US employee obligation to the executable statutory policy", async () => {

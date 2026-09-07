@@ -18,6 +18,16 @@ describe("payroll execution policy catalog", () => {
       at,
     });
     expect(calculatePolicyDeductions(policy, ["1000000", "500000"])).toEqual(["330000"]);
+    const strkPolicy = resolveExecutionPolicy({
+      policyId: "us-irs-supplemental-flat-2026-v1",
+      policyVersion: 1,
+      jurisdictionCode: "US-NY",
+      classification: "employee",
+      settlementToken: "STRK",
+      at,
+    });
+    expect(calculatePolicyDeductions(strkPolicy, ["1000000000000000000"]))
+      .toEqual(["220000000000000000"]);
   });
 
   it("fails closed on jurisdiction, classification, version, and mixed-policy cohorts", () => {

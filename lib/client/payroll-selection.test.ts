@@ -3,6 +3,7 @@ import {
   obligationAuthorizationSelectionKey,
   payeesMissingActiveAgreements,
   reconcileProofProfileSelection,
+  selectUpcomingPaydayCohort,
   toggleProofProfileSelection,
 } from "./payroll-selection";
 
@@ -36,6 +37,58 @@ describe("payroll proof-profile selection", () => {
       dueIds: ["legacy-a", "advanced-a", "advanced-b"],
       agreements,
     })).toEqual(["advanced-a"]);
+  });
+
+  it("aligns compatible recurring agreements entered one minute apart into one protected payday", () => {
+    const candidate = (id: string, dueAt: bigint, policyRoot = "0x1") => ({
+      dueAt,
+      agreement: {
+        id,
+        agreement: {
+          agreementVersion: "payo-agreement-v2" as const,
+          statutoryPolicy: { catalogRoot: policyRoot },
+          paymentPlan: { kind: "recurring" },
+        },
+      },
+    });
+    const cohort = selectUpcomingPaydayCohort([
+      candidate("first", 1_000n),
+      candidate("second", 1_060n),
+      candidate("later", 2_000n),
+      candidate("other-policy", 1_030n, "0x2"),
+    ]);
+    expect(cohort.obligations.map(({ agreement }) => agreement.id)).toEqual(["first", "second"]);
+    expect(cohort.dueAt).toBe(1_060n);
+    expect(cohort.requiresAlignment).toBe(true);
+  });
+
+  it("does not rewrite exact non-recurring checkpoints into a nearby payroll", () => {
+    const cohort = selectUpcomingPaydayCohort([
+      {
+        dueAt: 1_000n,
+        agreement: {
+          id: "milestone",
+          agreement: {
+            agreementVersion: "payo-agreement-v2" as const,
+            statutoryPolicy: { catalogRoot: "0x1" },
+            paymentPlan: { kind: "milestone" },
+          },
+        },
+      },
+      {
+        dueAt: 1_060n,
+        agreement: {
+          id: "recurring",
+          agreement: {
+            agreementVersion: "payo-agreement-v2" as const,
+            statutoryPolicy: { catalogRoot: "0x1" },
+            paymentPlan: { kind: "recurring" },
+          },
+        },
+      },
+    ]);
+    expect(cohort.obligations.map(({ agreement }) => agreement.id)).toEqual(["milestone"]);
+    expect(cohort.requiresAlignment).toBe(false);
   });
 
   it("keeps different policy catalog roots in separate payroll cohorts", () => {

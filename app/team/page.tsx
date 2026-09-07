@@ -93,7 +93,7 @@ function policyForClassification(
   classification: "employee" | "contractor" | "agent_service",
 ): string {
   if (classification !== "employee") return NET_INVOICE_POLICY_ID;
-  return payee.tokenPreference === "USDC" && payee.jurisdictionCode.split("-")[0] === "US"
+  return payee.jurisdictionCode.split("-")[0] === "US"
     ? PAYO_EMPLOYEE_POLICY_OPTIONS.US.id
     : "";
 }
@@ -1051,9 +1051,9 @@ export default function TeamPage() {
             </>}
             <label className="team-add-form__address"><span>Policy profile</span><select value={policyId} onChange={(event) => setPolicyId(event.target.value)} required>
               {agreementClassification === "employee"
-                ? <option value={agreementFormPayee ? policyForClassification(agreementFormPayee, "employee") : ""}>{policyId ? "US 2026 supplemental wages · 22% withholding" : "No executable employee policy for this jurisdiction/token"}</option>
+                ? <option value={agreementFormPayee ? policyForClassification(agreementFormPayee, "employee") : ""}>{policyId ? "US 2026 supplemental wages · 22% same-token withholding" : "No executable employee policy for this jurisdiction"}</option>
                 : <option value={NET_INVOICE_POLICY_ID}>Net invoice · no withholding</option>}
-            </select><small>{agreementClassification === "employee" ? "Narrow example only: US employee, separately identified supplemental wages, and USDC settlement. It is not a general payroll-tax engine or legal advice." : "The proof catalog root is derived locally from this version-pinned policy, never pasted into the agreement."}</small></label>
+            </select><small>{agreementClassification === "employee" ? "Narrow example only: US employee and separately identified supplemental wages, settled in USDC or STRK with the same 22% proportional withholding. Employer eligibility review is still required." : "The proof catalog root is derived locally from this version-pinned policy, never pasted into the agreement."}</small></label>
             {agreementPlanKind === "recurring" && agreementFormPayee?.tokenPreference === "STRK" && <label><span>Optional USD value floor</span><input value={fxFloorAmount} onChange={(event) => setFxFloorAmount(event.target.value)} inputMode="decimal" placeholder="1250.00" /><small>Six-decimal USD floor chosen by the worker. Payroll binds it to Pragma&apos;s fresh STRK median and conservative 24-hour TWAP (maximum median age: 15 minutes).</small></label>}
             {agreementPlanKind === "recurring" && agreementFormPayee?.tokenPreference === "USDC" && <p className="team-form-note">USDC payroll remains available, but USDC/USD FXFloor is disabled because Pragma Mainnet currently has no usable TWAP checkpoint history for that pair.</p>}
             <button className="button button--ink" type="submit" disabled={directoryLoading || !classificationAnswers || !classificationMatches || !policyId}>{directoryLoading ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />} Encrypt proof-bound agreement</button>

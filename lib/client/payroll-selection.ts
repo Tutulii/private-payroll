@@ -107,3 +107,57 @@ export function reconcileProofProfileSelection(input: {
     ? input.current.filter((id) => compatible.includes(id))
     : compatible;
 }
+
+
+export const PAYDAY_COHORT_WINDOW_SECONDS = 15 * 60;
+
+type UpcomingPaydayCandidate = {
+  dueAt: bigint;
+  agreement: ProofProfileAgreement & {
+    agreement: ProofProfileAgreement["agreement"] & {
+      paymentPlan?: { kind: string };
+    };
+  };
+};
+
+/**
+ * Groups nearby recurring agreements into the payday people expect from the UI.
+ * The common timestamp is always the latest original due time, so alignment can
+ * delay an earlier obligation by at most 15 minutes but can never accelerate it.
+ * Non-recurring obligations retain their exact contractual checkpoint.
+ */
+export function selectUpcomingPaydayCohort<T extends UpcomingPaydayCandidate>(
+  candidates: readonly T[],
+  windowSeconds = PAYDAY_COHORT_WINDOW_SECONDS,
+): { obligations: T[]; dueAt: bigint | null; requiresAlignment: boolean } {
+  if (!Number.isSafeInteger(windowSeconds) || windowSeconds < 0 || windowSeconds > 60 * 60) {
+    throw new Error("The payroll cohort window must be between zero and 60 minutes.");
+  }
+  const ordered = [...candidates].sort((left, right) =>
+    left.dueAt === right.dueAt
+      ? left.agreement.id.localeCompare(right.agreement.id)
+      : left.dueAt < right.dueAt ? -1 : 1);
+  const first = ordered[0];
+  if (!first) return { obligations: [], dueAt: null, requiresAlignment: false };
+  const firstProfile = profileFor(first.agreement.id, ordered.map(({ agreement }) => agreement));
+  const firstPlan = first.agreement.agreement;
+  const recurring = firstPlan.agreementVersion === "payo-agreement-v2"
+    && firstPlan.paymentPlan?.kind === "recurring";
+  const maximumDueAt = first.dueAt + BigInt(windowSeconds);
+  const obligations = ordered.filter((candidate) => {
+    if (profileFor(candidate.agreement.id, ordered.map(({ agreement }) => agreement)) !== firstProfile) return false;
+    if (!recurring) return candidate.dueAt === first.dueAt;
+    return candidate.agreement.agreement.agreementVersion === "payo-agreement-v2"
+      && candidate.agreement.agreement.paymentPlan?.kind === "recurring"
+      && candidate.dueAt <= maximumDueAt;
+  });
+  const dueAt = obligations.reduce(
+    (latest, candidate) => candidate.dueAt > latest ? candidate.dueAt : latest,
+    first.dueAt,
+  );
+  return {
+    obligations,
+    dueAt,
+    requiresAlignment: obligations.some((candidate) => candidate.dueAt !== dueAt),
+  };
+}

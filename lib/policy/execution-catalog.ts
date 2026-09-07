@@ -7,9 +7,9 @@ import { PAYO_NET_INVOICE_POLICY } from "@/lib/proof/input-builder";
 
 export const PAYO_EXECUTION_POLICIES: readonly PolicyPack[] = Object.freeze([
   PAYO_NET_INVOICE_POLICY,
-  // This is the only employee pack whose percentage calculation is invariant
-  // under the USDC atomic scale. The UK pence-threshold pack remains a tested
-  // reference example until the circuit consumes reference-currency gross.
+  // This flat percentage is invariant across STRK and USDC atomic scales.
+  // Threshold-based packs remain reference examples until the circuit consumes
+  // a verified reference-currency gross amount.
   US_2026_SUPPLEMENTAL_FLAT.pack,
 ]);
 
@@ -26,9 +26,6 @@ export function resolveExecutionPolicy(input: {
   if (!policy) throw new Error(`Policy ${input.policyId} v${input.policyVersion} is not installed.`);
   if (!policy.appliesTo.includes(input.classification)) {
     throw new Error(`Policy ${policy.id} does not apply to ${input.classification} agreements.`);
-  }
-  if (input.classification === "employee" && input.settlementToken !== "USDC") {
-    throw new Error(`Policy ${policy.id} requires USDC settlement in this reference implementation.`);
   }
   if (policy.id !== PAYO_NET_INVOICE_POLICY.id) {
     const jurisdiction = input.jurisdictionCode.split("-")[0];

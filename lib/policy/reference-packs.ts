@@ -22,7 +22,7 @@ export const US_2026_SUPPLEMENTAL_FLAT: ReferencePolicyRelease = {
   assumptions: [
     "The employer withheld federal income tax from regular wages in the current or immediately preceding calendar year.",
     "The payment is separately identified supplemental wages and year-to-date supplemental wages do not exceed USD 1,000,000.",
-    "The atomic input and output use the same USD scale.",
+    "The flat percentage is applied in the settlement token's atomic scale; employer review must establish the source rule's USD eligibility conditions.",
   ],
   unsupportedCases: [
     "Regular wage withholding or Form W-4 calculations",

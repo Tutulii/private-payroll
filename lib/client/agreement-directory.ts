@@ -39,6 +39,7 @@ import type { PayeeDirectoryRecord } from "./payee-directory";
 import { materializedPayrollRuns } from "./payroll-run-listing";
 import {
   loadCanonicalEncryptedRecords,
+  prepareCanonicalEncryptedRecord,
   storeCanonicalEncryptedRecord,
 } from "./encrypted-records";
 
@@ -130,6 +131,95 @@ export async function advanceEncryptedRecurringAgreement(input: {
     record,
     principals: [input.principal],
   });
+}
+
+export async function alignEncryptedRecurringAgreementPaydays(input: {
+  client: Pick<PayoClient, "storeEncryptedRecords">;
+  records: readonly PayAgreementDirectoryRecord[];
+  dueAt: string;
+  principal: VaultPrincipalKeyPair;
+  maximumDelaySeconds?: number;
+  now?: Date;
+}): Promise<PayAgreementDirectoryRecord[]> {
+  if (input.records.length < 1 || input.records.length > 50) {
+    throw new Error("Payday alignment requires 1–50 recurring agreements.");
+  }
+  if (new Set(input.records.map(({ id }) => id)).size !== input.records.length) {
+    throw new Error("Payday alignment contains a duplicate encrypted agreement.");
+  }
+  if (new Set(input.records.map(({ organizationId }) => organizationId)).size !== 1) {
+    throw new Error("Payday alignment cannot cross encrypted organizations.");
+  }
+  const maximumDelaySeconds = input.maximumDelaySeconds ?? 15 * 60;
+  if (!Number.isSafeInteger(maximumDelaySeconds) || maximumDelaySeconds < 0 || maximumDelaySeconds > 60 * 60) {
+    throw new Error("Payday alignment must stay within a 60-minute window.");
+  }
+  const dueAt = new Date(input.dueAt);
+  const now = input.now ?? new Date();
+  if (Number.isNaN(dueAt.getTime()) || dueAt <= now) {
+    throw new Error("The shared payroll payday must still be in the future.");
+  }
+  const updatedAt = now.toISOString();
+  const records = await Promise.all(input.records.map(async (record) => {
+    const agreement = record.agreement;
+    if (
+      record.effectiveUntil
+      || agreement.agreementVersion !== "payo-agreement-v2"
+      || agreement.paymentPlan.kind !== "recurring"
+    ) throw new Error("Only active recurring advanced agreements can join a nearby payday cohort.");
+    const currentDueAt = new Date(agreement.paymentPlan.nextDueAt);
+    const delayMs = dueAt.getTime() - currentDueAt.getTime();
+    if (delayMs < 0 || delayMs > maximumDelaySeconds * 1_000) {
+      throw new Error("A recurring agreement falls outside the approved payroll cohort window.");
+    }
+    if (delayMs === 0) return record;
+    const paymentPlan = {
+      ...agreement.paymentPlan,
+      ...(agreement.paymentPlan.occurrence === 0 ? { anchorAt: dueAt.toISOString() } : {}),
+      nextDueAt: dueAt.toISOString(),
+    };
+    const alignedAgreement = {
+      ...agreement,
+      paymentPlan,
+      schedule: proofScheduleForAdvancedPlan(paymentPlan),
+    };
+    return payAgreementRecordSchema.parse({
+      ...record,
+      revision: record.revision + 1,
+      updatedAt,
+      agreement: alignedAgreement,
+      proofScheduleCommitment: await agreementProofScheduleCommitment(alignedAgreement),
+      agreementCommitment: hashCanonicalJson({
+        domain: "PAYO_ENCRYPTED_AGREEMENT_V1",
+        agreement: alignedAgreement,
+        recipientCommitment: record.recipientCommitment,
+        agreementSalt: record.agreementSalt,
+      }),
+    });
+  }));
+  const changedIds = new Set(records
+    .filter((record, index) => record !== input.records[index])
+    .map(({ id }) => id));
+  const prepared = records
+    .filter(({ id }) => changedIds.has(id))
+    .map((record) => prepareCanonicalEncryptedRecord({
+      organizationId: record.organizationId,
+      recordType: "pay-agreement",
+      record,
+      principals: [input.principal],
+    }));
+  if (prepared.length > 0) {
+    await input.client.storeEncryptedRecords({
+      organizationId: records[0].organizationId,
+      records: prepared.map(({ record, envelope }) => ({
+        recordId: record.id,
+        recordType: "pay-agreement",
+        revision: record.revision,
+        envelope,
+      })),
+    });
+  }
+  return records;
 }
 
 export async function scheduleEncryptedVestingRelease(input: {

@@ -73,11 +73,13 @@ import {
   obligationAuthorizationSelectionKey,
   payeesMissingActiveAgreements,
   reconcileProofProfileSelection,
+  selectUpcomingPaydayCohort,
   toggleProofProfileSelection,
 } from "@/lib/client/payroll-selection";
 import { decryptVaultRecord, type EncryptedVaultRecord } from "@/lib/crypto/vault";
 import { hashCanonicalJson } from "@/lib/crypto/digest";
 import {
+  alignEncryptedRecurringAgreementPaydays,
   obligationScheduleForRecord,
   recordProofScheduleCommitment,
   loadEncryptedPayAgreements,
@@ -619,16 +621,19 @@ export default function PayrollPage() {
   const claimIdentityBlockedObligations = useMemo(() => upcomingObligationCandidates
     .filter(({ claimIdentityIssue }) => claimIdentityIssue !== null),
   [upcomingObligationCandidates]);
-  const nextSnapshotDueAt = claimEnabledUpcomingObligations[0]?.dueAt ?? null;
+  const upcomingPaydayCohort = useMemo(
+    () => selectUpcomingPaydayCohort(claimEnabledUpcomingObligations),
+    [claimEnabledUpcomingObligations],
+  );
+  const nextSnapshotDueAt = upcomingPaydayCohort.dueAt;
   const nextSnapshotDisplayDueAt = nextSnapshotDueAt
     ?? claimIdentityBlockedObligations[0]?.dueAt
     ?? null;
-  const upcomingSnapshotObligations = useMemo(() => nextSnapshotDueAt === null
-    ? []
-    : claimEnabledUpcomingObligations
-      .filter(({ dueAt }) => dueAt === nextSnapshotDueAt)
-      .map(({ agreement, payee }) => ({ agreement, payee })),
-  [claimEnabledUpcomingObligations, nextSnapshotDueAt]);
+  const upcomingSnapshotObligations = useMemo(
+    () => upcomingPaydayCohort.obligations.map(({ agreement, payee }) => ({ agreement, payee })),
+    [upcomingPaydayCohort.obligations],
+  );
+  const upcomingSnapshotNeedsAlignment = upcomingPaydayCohort.requiresAlignment;
   const snapshotCycleId = useMemo(() => {
     if (!vault.session || upcomingSnapshotObligations.length === 0) return null;
     return deriveObligationSnapshotCycleId(
@@ -1073,15 +1078,42 @@ export default function PayrollPage() {
         throw new Error("This payday exceeds the 50-obligation proof limit and must not be partially snapshotted.");
       }
 
+      let protectionObligations = upcomingSnapshotObligations;
+      if (upcomingSnapshotNeedsAlignment) {
+        const alignedRecords = await alignEncryptedRecurringAgreementPaydays({
+          client: vault.client,
+          records: upcomingSnapshotObligations.map(({ agreement }) => agreement),
+          dueAt: new Date(Number(nextSnapshotDueAt) * 1_000).toISOString(),
+          principal: vault.session.principal,
+        });
+        const alignedById = new Map(alignedRecords.map((record) => [record.id, record]));
+        protectionObligations = upcomingSnapshotObligations.map(({ agreement, payee }) => ({
+          agreement: alignedById.get(agreement.id) ?? agreement,
+          payee,
+        }));
+        await vault.client.registerObligationSchedules({
+          organizationId: vault.session.organizationId,
+          schedules: alignedRecords.map(obligationScheduleForRecord),
+        });
+        setAgreements((current) => current.map((record) => alignedById.get(record.id) ?? record));
+      }
+
+      const protectionCycleId = deriveObligationSnapshotCycleId(
+        vault.session.organizationId,
+        protectionObligations,
+      );
+      const protectionSnapshotPlan = snapshotPlans
+        .filter(({ cycleId }) => cycleId === protectionCycleId)
+        .sort((left, right) => right.revision - left.revision)[0] ?? null;
       let registrationPlan: Parameters<typeof registerDurableObligationSnapshotPlan>[0]["plan"];
-      if (currentSnapshotPlan) {
-        const { plan } = await vault.client.getObligationSnapshotPlan(currentSnapshotPlan.id);
+      if (protectionSnapshotPlan) {
+        const { plan } = await vault.client.getObligationSnapshotPlan(protectionSnapshotPlan.id);
         const privatePlan = openObligationSnapshotPlan({
           plan,
           principal: vault.session.principal,
           organizationId: vault.session.organizationId,
           ownerAddress: starknet.address,
-          obligations: upcomingSnapshotObligations,
+          obligations: protectionObligations,
         });
         registrationPlan = {
           id: plan.id,
@@ -1096,7 +1128,7 @@ export default function PayrollPage() {
           organizationId: vault.session.organizationId,
           organizationSecret: vault.session.organizationSecret,
           ownerAddress: starknet.address,
-          obligations: upcomingSnapshotObligations,
+          obligations: protectionObligations,
           principal: vault.session.principal,
           revision: 1,
         });
@@ -2077,7 +2109,9 @@ export default function PayrollPage() {
                       : currentSnapshotPlan?.state === "prepared"
                         ? "Encrypted snapshot saved; Ready registration pending"
                         : upcomingSnapshotObligations.length > 0
-                          ? `${upcomingSnapshotObligations.length} claim-enabled obligation${upcomingSnapshotObligations.length === 1 ? "" : "s"} ready to protect`
+                          ? upcomingSnapshotNeedsAlignment
+                            ? `${upcomingSnapshotObligations.length} nearby recurring obligations ready for one payday`
+                            : `${upcomingSnapshotObligations.length} claim-enabled obligation${upcomingSnapshotObligations.length === 1 ? "" : "s"} ready to protect`
                           : claimIdentityBlockedObligations.length > 0
                             ? `${claimIdentityBlockedObligations.length} obligation${claimIdentityBlockedObligations.length === 1 ? " needs" : "s need"} a worker identity`
                           : "No future payday to protect"}</strong>
@@ -2090,7 +2124,7 @@ export default function PayrollPage() {
                       : currentSnapshotPlan?.state === "submitted"
                         ? "PAYO will reconcile the recorded transaction and will never open a duplicate Ready request."
                         : upcomingSnapshotObligations.length > 0
-                          ? `Includes ${upcomingSnapshotObligations.slice(0, 3).map(({ payee }) => payee.displayName).join(", ")}${upcomingSnapshotObligations.length > 3 ? ` and ${upcomingSnapshotObligations.length - 3} more` : ""}. The encrypted plan is saved before Ready opens.${claimIdentityBlockedObligations.length > 0 ? ` ${claimIdentityBlockedObligations.length} legacy obligation${claimIdentityBlockedObligations.length === 1 ? " is" : "s are"} excluded because its worker identity is missing or stale.` : ""}`
+                          ? `${upcomingSnapshotNeedsAlignment ? `Their nearby times will be delayed to one shared payday at ${unambiguousLocalDateTime(Number(nextSnapshotDueAt) * 1_000)} before commitments are protected. ` : ""}Includes ${upcomingSnapshotObligations.slice(0, 3).map(({ payee }) => payee.displayName).join(", ")}${upcomingSnapshotObligations.length > 3 ? ` and ${upcomingSnapshotObligations.length - 3} more` : ""}. The encrypted plan is saved before Ready opens.${claimIdentityBlockedObligations.length > 0 ? ` ${claimIdentityBlockedObligations.length} legacy obligation${claimIdentityBlockedObligations.length === 1 ? " is" : "s are"} excluded because its worker identity is missing or stale.` : ""}`
                           : claimIdentityBlockedObligations.length > 0
                             ? "These legacy agreements are still payable, but they cannot create worker-owned claim evidence. Import each worker's v2 identity and create a replacement agreement."
                           : "Set a future due time and worker claim identity on an active agreement to enable historical wage-claim evidence."}</small>
@@ -2109,7 +2143,9 @@ export default function PayrollPage() {
                       ? <>Resume protection <Clock3 size={15} /></>
                       : claimIdentityBlockedObligations.length > 0 && upcomingSnapshotObligations.length === 0
                         ? <>Worker identity required <KeyRound size={15} /></>
-                      : <>Protect next payday <ShieldCheck size={15} /></>}
+                      : upcomingSnapshotNeedsAlignment
+                        ? <>Align &amp; protect payday <ShieldCheck size={15} /></>
+                        : <>Protect next payday <ShieldCheck size={15} /></>}
               </button>
             </div>
 
