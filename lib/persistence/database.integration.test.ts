@@ -107,6 +107,7 @@ import {
   getChainCursor,
   getIndexedBlock,
   persistIndexedBlock,
+  replaceIndexedRecoveryEvents,
   rollbackIndexedChain,
 } from "./chain-indexer-repository";
 import { closeDatabase, getDatabase } from "./db";
@@ -173,6 +174,7 @@ import {
   exceptionAuthorizationJobs,
   employerStatements,
   fxPublicationJobs,
+  indexedChainEvents,
   organizationMembers,
   obligationClaimAccessGrants,
   obligationSchedules,
@@ -2022,7 +2024,16 @@ databaseSuite("PostgreSQL durability integration", () => {
     expect(decryptVaultRecord(storedEnvelope.envelope as typeof request.envelope, prepared.vaultPrincipal))
       .toMatchObject({ tokenTotals: prepared.totals });
     const settlementId = first.id;
-    await recordSettlementSubmission({ settlementId, transactionHash: "0xabc", principal: admin });
+    await expect(recordSettlementSubmission({
+      settlementId,
+      transactionHash: "0x000abc",
+      principal: admin,
+    })).resolves.toMatchObject({ transactionHash: "0xabc", replayed: false });
+    await expect(recordSettlementSubmission({
+      settlementId,
+      transactionHash: "0x0abc",
+      principal: admin,
+    })).resolves.toMatchObject({ transactionHash: "0xabc", replayed: true });
 
     const [leased] = await leaseConfirmationJobs("worker-before-restart", 10, new Date("2030-08-24T12:00:00Z"));
     expect(leased.transactionHash).toBe("0xabc");
@@ -3807,6 +3818,53 @@ databaseSuite("PostgreSQL durability integration", () => {
     ))).rejects.toMatchObject({ code: "AGENT_TOKEN_INVALID" });
   });
 
+
+  it("indexes and replaces finalized recovery events behind an advanced historical cursor", async () => {
+    await persistIndexedBlock({
+      chainId: "SN_MAIN",
+      consumer: "payo-seal",
+      blockNumber: 20n,
+      blockHash: "0x20",
+      parentHash: "0x19",
+      events: [],
+    });
+    const scope = {
+      chainId: "SN_MAIN",
+      fromBlock: 10n,
+      toBlock: 19n,
+      addresses: ["0x0123"],
+      eventNames: ["0x0456"],
+    } as const;
+    await replaceIndexedRecoveryEvents({
+      ...scope,
+      events: [{
+        transactionHash: "0xabc",
+        eventIndex: 0,
+        blockNumber: 15n,
+        blockHash: "0x15",
+        contractAddress: "0x123",
+        eventName: "0x456",
+        payload: { keys: ["0x456"], data: ["0x789"] },
+      }],
+    });
+
+    await expect(getChainCursor("SN_MAIN", "payo-seal")).resolves.toMatchObject({
+      blockNumber: 20n,
+      blockHash: "0x20",
+    });
+    await expect(getDatabase()
+      .select({ canonical: indexedChainEvents.canonical })
+      .from(indexedChainEvents)
+      .where(eq(indexedChainEvents.transactionHash, "0xabc")))
+      .resolves.toEqual([{ canonical: true }]);
+
+    await replaceIndexedRecoveryEvents({ ...scope, events: [] });
+    await expect(getDatabase()
+      .select({ canonical: indexedChainEvents.canonical })
+      .from(indexedChainEvents)
+      .where(eq(indexedChainEvents.transactionHash, "0xabc")))
+      .resolves.toEqual([{ canonical: false }]);
+  });
 
   it("rolls indexed blocks back and accepts the canonical replacement", async () => {
     await persistIndexedBlock({

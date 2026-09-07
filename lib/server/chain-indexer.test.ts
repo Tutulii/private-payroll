@@ -65,7 +65,7 @@ describe("durable Starknet event indexer", () => {
       getEvents: vi.fn(async (filter: { address?: string; keys?: string[][] }) => {
         void filter;
         return { events: [
-          { transaction_hash: "0xaa", from_address: "0x00bb", keys: ["0x1"], data: [] },
+          { transaction_hash: "0x00aa", from_address: "0x00bb", keys: ["0x01"], data: [] },
           { transaction_hash: "0xcc", from_address: "0xcc", keys: ["0x2"], data: [] },
           { transaction_hash: "0xdd", from_address: "0xdd", keys: ["0x2"], data: [] },
         ] };

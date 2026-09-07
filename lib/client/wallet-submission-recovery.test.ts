@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   awaitWalletOrRecoveredTransaction,
+  isDefinitiveWalletNonSubmission,
   readRecoveredSettlementTransactionHash,
 } from "./wallet-submission-recovery";
 
@@ -20,6 +21,15 @@ describe("wallet submission recovery", () => {
     expect(readRecoveredTransactionHash).not.toHaveBeenCalled();
     expect(onRecoveryPolling).not.toHaveBeenCalled();
     expect(onRecoveredTransactionHash).not.toHaveBeenCalled();
+  });
+
+  it("normalizes equivalent leading-zero wallet hashes before recording", async () => {
+    await expect(awaitWalletOrRecoveredTransaction({
+      submit: async () => "0x000abc",
+      readRecoveredTransactionHash: vi.fn(),
+      pollIntervalMs: 1,
+      timeoutMs: 50,
+    })).resolves.toBe("0xabc");
   });
 
   it("continues from the durable settlement when Ready never resolves", async () => {
@@ -60,6 +70,29 @@ describe("wallet submission recovery", () => {
     expect(readRecoveredTransactionHash).not.toHaveBeenCalled();
     expect(onRecoveryPolling).not.toHaveBeenCalled();
     expect(onRecoveredTransactionHash).not.toHaveBeenCalled();
+  });
+
+  it("keeps polling when Ready times out after an accepted approval", async () => {
+    const onRecoveryPolling = vi.fn();
+    const readRecoveredTransactionHash = vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce("0xcafe");
+    await expect(awaitWalletOrRecoveredTransaction({
+      submit: async () => { throw new Error("Timeout"); },
+      readRecoveredTransactionHash,
+      onRecoveryPolling,
+      pollIntervalMs: 1,
+      timeoutMs: 100,
+      recoveryNoticeDelayMs: 50,
+    })).resolves.toBe("0xcafe");
+    expect(readRecoveredTransactionHash).toHaveBeenCalledTimes(2);
+    expect(onRecoveryPolling).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats Wallet API UNKNOWN_ERROR as ambiguous but explicit refusal as final", () => {
+    expect(isDefinitiveWalletNonSubmission({ code: 163, message: "Timeout" })).toBe(false);
+    expect(isDefinitiveWalletNonSubmission({ error: { code: 113 } })).toBe(true);
+    expect(isDefinitiveWalletNonSubmission(new Error("An error occurred (NOT_REGISTERED)"))).toBe(true);
   });
 
   it("keeps the canonical recovery authoritative when a browser callback fails", async () => {

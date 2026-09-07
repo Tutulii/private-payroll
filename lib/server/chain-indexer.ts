@@ -102,10 +102,10 @@ async function loadBlockEvents(input: {
       const contractAddress = normalizedAddress(rawContractAddress);
       if (allowedAddresses.size > 0 && !allowedAddresses.has(contractAddress)) continue;
       events.push({
-        transactionHash,
+        transactionHash: normalizedAddress(transactionHash),
         eventIndex: events.length,
         contractAddress,
-        eventName: keys[0]?.toLowerCase() ?? "anonymous",
+        eventName: keys[0] ? normalizedAddress(keys[0]) : "anonymous",
         payload: { keys, data },
       });
     }

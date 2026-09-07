@@ -49,6 +49,16 @@ jobs:
         run: npm run test:browser:phase3
       - name: Exercise rendered Phase 4 production controls
         run: npm run test:browser:phase4
+      - name: Exercise rendered payroll submission recovery
+        run: npm run test:browser:recovery
+      - name: Upload rendered payroll recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: payroll-submission-recovery-browser
+          path: test-results/payroll-recovery-browser
+          if-no-files-found: error
+          retention-days: 30
       - name: Upload rendered Phase 3 evidence
         if: always()
         uses: actions/upload-artifact@v4

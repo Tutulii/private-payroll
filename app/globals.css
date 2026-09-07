@@ -3530,13 +3530,24 @@ button:focus-visible {
 .composer-summary .button { min-height: 43px; padding: 0 14px; font-size: 12px; }
 .runner-error { margin-top: 12px; padding: 10px 12px; display: flex; align-items: center; gap: 8px; color: #91483b; background: var(--coral-soft); border: 1px solid #e4ada0; border-radius: 10px; font-size: 12px; line-height: 1.45; }
 .runner-error svg { flex: 0 0 auto; }
-.runner-recovery { align-items: flex-start; }
-.runner-recovery > span { flex: 1 1 auto; min-width: 0; }
-.runner-recovery strong, .runner-recovery p { display: block; margin: 0; }
+.runner-recovery {
+  align-items: start;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+.runner-recovery > span { min-width: 0; }
+.runner-recovery strong, .runner-recovery p { display: block; margin: 0; overflow-wrap: anywhere; }
 .runner-recovery p { margin-top: 3px; }
-.runner-recovery input { width: 100%; margin-top: 8px; padding: 8px 9px; color: var(--ink); background: var(--white); border: 1px solid #d28f80; border-radius: 7px; font-size: 12px; }
-.runner-recovery__actions { display: flex; flex: 0 0 auto; gap: 6px; }
-.runner-recovery__actions .button { min-height: 34px; padding: 0 10px; font-size: 12px; white-space: nowrap; }
+.runner-recovery input { width: 100%; min-width: 0; margin-top: 8px; padding: 8px 9px; color: var(--ink); background: var(--white); border: 1px solid #d28f80; border-radius: 7px; font-size: 12px; }
+.runner-recovery__actions {
+  width: 100%;
+  min-width: 0;
+  grid-column: 2;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  gap: 6px;
+}
+.runner-recovery__actions .button { width: 100%; min-width: 0; min-height: 38px; padding: 7px 10px; font-size: 12px; line-height: 1.25; white-space: normal; overflow-wrap: anywhere; }
 .transaction-receipt { margin-top: 12px; padding: 12px; display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; color: #526f84; background: var(--blue-soft); border: 1px solid #aec9df; border-radius: 11px; }
 .transaction-receipt--confirmed { color: #4f734e; background: var(--green-soft); border-color: #abc6a8; }
 .transaction-receipt--failed { color: #934c3f; background: var(--coral-soft); border-color: #e2aa9d; }
@@ -4165,7 +4176,15 @@ body {
     min-height: 42px;
   }
 
-  .runner-recovery,
+  .runner-recovery {
+    align-items: start;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .runner-recovery__actions {
+    grid-column: 1 / -1;
+  }
+
   .obligation-root-control {
     align-items: stretch;
     flex-direction: column;
@@ -4177,7 +4196,6 @@ body {
     flex-wrap: wrap;
   }
 
-  .runner-recovery__actions .button,
   .external-facts-card__actions .button {
     flex: 1 1 160px;
   }

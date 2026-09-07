@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq, gt, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, lte, sql } from "drizzle-orm";
 import { getDatabase } from "./db";
 import { chainCursors, indexedChainBlocks, indexedChainEvents } from "./schema";
 
@@ -32,6 +32,10 @@ function validateIdentifier(value: string, label: string): string {
 function validateHash(value: string, label: string): string {
   if (!STARKNET_HASH.test(value)) throw new Error(`${label} must be a Starknet hash.`);
   return value.toLowerCase();
+}
+
+function validateFelt(value: string, label: string): string {
+  return `0x${BigInt(validateHash(value, label)).toString(16)}`;
 }
 
 function lockKey(chainId: string, consumer: string): string {
@@ -68,8 +72,8 @@ export async function persistIndexedBlock(input: IndexedBlockInput) {
   const parentHash = validateHash(input.parentHash, "Parent hash");
   const seenEvents = new Set<string>();
   const events = input.events.map((event) => {
-    const transactionHash = validateHash(event.transactionHash, "Event transaction hash");
-    const contractAddress = validateHash(event.contractAddress, "Event contract address");
+    const transactionHash = validateFelt(event.transactionHash, "Event transaction hash");
+    const contractAddress = validateFelt(event.contractAddress, "Event contract address");
     if (!Number.isSafeInteger(event.eventIndex) || event.eventIndex < 0) {
       throw new Error("Event index must be a non-negative safe integer.");
     }
@@ -160,6 +164,105 @@ export async function persistIndexedBlock(input: IndexedBlockInput) {
         set: { blockNumber: input.blockNumber, blockHash, updatedAt: now },
       });
     return { blockNumber: input.blockNumber, blockHash, replayed: false };
+  });
+}
+
+export type IndexedRecoveryEventInput = IndexedEventInput & {
+  blockNumber: bigint;
+  blockHash: string;
+};
+
+/**
+ * Replaces the finalized recovery-event scope for a bounded near-head window.
+ * This scan is deliberately cursorless: adding a new seal address cannot skip
+ * a recently submitted wallet transaction because an older cursor is ahead.
+ */
+export async function replaceIndexedRecoveryEvents(input: {
+  chainId: string;
+  fromBlock: bigint;
+  toBlock: bigint;
+  addresses: readonly string[];
+  eventNames: readonly string[];
+  events: readonly IndexedRecoveryEventInput[];
+}) {
+  const chainId = validateIdentifier(input.chainId, "Chain ID");
+  if (input.fromBlock < 0n || input.toBlock < input.fromBlock) {
+    throw new Error("Recovery event window is invalid.");
+  }
+  const addresses = [...new Set(input.addresses.map((value) => validateFelt(value, "Recovery address")))];
+  const eventNames = [...new Set(input.eventNames.map((value) => validateFelt(value, "Recovery event selector")))];
+  if (addresses.length === 0 || eventNames.length === 0) {
+    throw new Error("Recovery event replacement requires an address and selector scope.");
+  }
+  const allowedAddresses = new Set(addresses);
+  const allowedEventNames = new Set(eventNames);
+  const seenEvents = new Set<string>();
+  const events = input.events.map((event) => {
+    const transactionHash = validateFelt(event.transactionHash, "Recovery transaction hash");
+    const contractAddress = validateFelt(event.contractAddress, "Recovery contract address");
+    const eventName = validateFelt(event.eventName, "Recovery event selector");
+    const blockHash = validateHash(event.blockHash, "Recovery block hash");
+    if (!Number.isSafeInteger(event.eventIndex) || event.eventIndex < 0) {
+      throw new Error("Recovery event index must be a non-negative safe integer.");
+    }
+    if (event.blockNumber < input.fromBlock || event.blockNumber > input.toBlock) {
+      throw new Error("Recovery event lies outside its finalized scan window.");
+    }
+    if (!allowedAddresses.has(contractAddress) || !allowedEventNames.has(eventName)) {
+      throw new Error("Recovery event lies outside its configured contract scope.");
+    }
+    const identity = `${transactionHash}:${event.eventIndex}`;
+    if (seenEvents.has(identity)) throw new Error("Recovery scan contains duplicate event identities.");
+    seenEvents.add(identity);
+    return { ...event, transactionHash, contractAddress, eventName, blockHash };
+  });
+  const database = getDatabase();
+  const now = new Date();
+
+  return database.transaction(async (transaction) => {
+    await transaction.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey(chainId, "submission-recovery-tail")}, 0))`);
+    await transaction
+      .update(indexedChainEvents)
+      .set({ canonical: false, observedAt: now })
+      .where(and(
+        eq(indexedChainEvents.chainId, chainId),
+        gte(indexedChainEvents.blockNumber, input.fromBlock),
+        lte(indexedChainEvents.blockNumber, input.toBlock),
+        inArray(indexedChainEvents.contractAddress, addresses),
+        inArray(indexedChainEvents.eventName, eventNames),
+      ));
+    for (const event of events) {
+      await transaction
+        .insert(indexedChainEvents)
+        .values({
+          chainId,
+          transactionHash: event.transactionHash,
+          eventIndex: event.eventIndex,
+          blockNumber: event.blockNumber,
+          blockHash: event.blockHash,
+          contractAddress: event.contractAddress,
+          eventName: event.eventName,
+          payload: event.payload,
+          canonical: true,
+        })
+        .onConflictDoUpdate({
+          target: [
+            indexedChainEvents.chainId,
+            indexedChainEvents.transactionHash,
+            indexedChainEvents.eventIndex,
+          ],
+          set: {
+            blockNumber: event.blockNumber,
+            blockHash: event.blockHash,
+            contractAddress: event.contractAddress,
+            eventName: event.eventName,
+            payload: event.payload,
+            canonical: true,
+            observedAt: now,
+          },
+        });
+    }
+    return { indexed: events.length, fromBlock: input.fromBlock, toBlock: input.toBlock };
   });
 }
 

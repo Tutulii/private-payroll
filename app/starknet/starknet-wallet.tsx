@@ -53,6 +53,7 @@ import {
   STRK20_EKUBO_ANONYMIZER_CLASS_HASH,
 } from "@/lib/starknet/private-exit";
 import { describeWalletError } from "@/lib/starknet/wallet-error";
+import { isDefinitiveWalletNonSubmission } from "@/lib/client/wallet-submission-recovery";
 import {
   prepareFxRootPublication,
   preparePayoBaselineSchedule,
@@ -268,6 +269,7 @@ type StarknetWalletContextValue = {
     transactionHash: string,
     options?: { refreshBalance?: boolean },
   ) => Promise<void>;
+  releasePayrollTransaction: () => void;
   scheduleObligationRoot: (agreementRoot: string) => Promise<ObligationRootScheduleResult>;
   registerObligationSnapshot: (input: {
     snapshot: ObligationSnapshotV2;
@@ -789,7 +791,11 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
           privateActionLockRef.current = null;
           privateActionKindRef.current = null;
         }
-        if (walletAccount) {
+        const shouldRefreshPrivateBalance = walletAccount
+          && pending.kind !== "payroll"
+          && pending.kind !== "wage_claim"
+          && pending.kind !== "wage_remediation";
+        if (shouldRefreshPrivateBalance) {
           try {
             const refreshedBalances = await refreshBalanceForAccount(walletAccount);
             const confirmed = { ...pending };
@@ -913,6 +919,18 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
           // The canonical indexer already reconciled this request (or a newer
           // request owns the lock). Preserve its UI state and let the settled
           // recovery race consume this late rejection.
+          throw transactionError;
+        }
+        const walletDefinitelyDidNotSubmit = isDefinitiveWalletNonSubmission(transactionError);
+        const supportsCanonicalRecovery = kind === "payroll"
+          || kind === "wage_claim"
+          || kind === "wage_remediation";
+        if (supportsCanonicalRecovery && !walletDefinitelyDidNotSubmit) {
+          // Ready can time out after broadcasting. Keep the one-payment lock and
+          // neutral progress state while the durable settlement indexer finds
+          // the exact proof-bound event; the caller owns that recovery race.
+          setTransaction({ ...pending, stage: "wallet" });
+          setError("");
           throw transactionError;
         }
         if (privateActionLockRef.current === requestToken) {
@@ -1300,7 +1318,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
           balanceRefreshed: false,
           balanceRefreshError: undefined,
         }));
-    if (walletAccount && options.refreshBalance !== false) {
+    if (walletAccount && options.refreshBalance === true) {
       void refreshBalanceForAccount(walletAccount).then(() => {
         setTransaction((current) => current?.kind === "payroll" && current.hash === transactionHash
           ? { ...current, balanceRefreshed: true, balanceRefreshError: undefined }
@@ -1312,6 +1330,14 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
       });
     }
   }, [refreshBalanceForAccount, walletAccount]);
+
+  const releasePayrollTransaction = useCallback(() => {
+    if (privateActionKindRef.current === "payroll") {
+      privateActionLockRef.current = null;
+      privateActionKindRef.current = null;
+    }
+    setTransaction((current) => current?.kind === "payroll" ? null : current);
+  }, []);
 
   const scheduleObligationRoot = useCallback(async (
     agreementRoot: string,
@@ -2112,6 +2138,7 @@ export function StarknetWalletProvider({ children }: { children: ReactNode }) {
     runPublicWithdrawal,
     assertPrivateActionAvailable,
     reconcilePayrollTransaction,
+    releasePayrollTransaction,
     scheduleObligationRoot,
     registerObligationSnapshot,
     registerEmployerStatement,

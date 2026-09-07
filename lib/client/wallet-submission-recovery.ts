@@ -1,10 +1,87 @@
 const TRANSACTION_HASH = /^0x[0-9a-fA-F]{1,64}$/;
 
+const DEFINITIVE_WALLET_ERROR_CODES = new Set([
+  "111", // NOT_ERC20
+  "112", // UNLISTED_NETWORK
+  "113", // USER_REFUSED_OP
+  "114", // INVALID_REQUEST_PAYLOAD
+  "117", // CHAIN_ID_NOT_SUPPORTED
+  "118", // NOT_REGISTERED
+  "119", // INSUFFICIENT_PRIVATE_BALANCE
+  "120", // PRIVACY_LEAK
+  "162", // API_VERSION_NOT_SUPPORTED
+  "4001", // EIP-1193 user rejection
+  "4100", // EIP-1193 unauthorized
+  "4200", // EIP-1193 unsupported method
+  "-32601", // JSON-RPC method not found
+  "-32602", // JSON-RPC invalid params
+]);
+
+const DEFINITIVE_WALLET_ERROR_NAMES = [
+  "NOT_ERC20",
+  "UNLISTED_NETWORK",
+  "USER_REFUSED_OP",
+  "USER REJECTED",
+  "USER_REJECTED",
+  "USER DENIED",
+  "USER_DENIED",
+  "INVALID_REQUEST_PAYLOAD",
+  "CHAIN_ID_NOT_SUPPORTED",
+  "NOT_REGISTERED",
+  "INSUFFICIENT_PRIVATE_BALANCE",
+  "PRIVACY_LEAK",
+  "API_VERSION_NOT_SUPPORTED",
+  "METHOD_NOT_FOUND",
+  "METHOD NOT FOUND",
+  "UNSUPPORTED METHOD",
+] as const;
+
+function walletErrorDetails(error: unknown): { codes: Set<string>; text: string } {
+  const codes = new Set<string>();
+  const messages: string[] = [];
+  const seen = new WeakSet<object>();
+
+  const visit = (value: unknown, depth: number) => {
+    if (depth > 4 || value === null || value === undefined) return;
+    if (typeof value === "string") {
+      messages.push(value);
+      return;
+    }
+    if (typeof value === "number" || typeof value === "bigint") {
+      messages.push(String(value));
+      return;
+    }
+    if (typeof value !== "object" || seen.has(value)) return;
+    seen.add(value);
+    const candidate = value as Record<string, unknown>;
+    if (typeof candidate.code === "string" || typeof candidate.code === "number") {
+      codes.add(String(candidate.code));
+    }
+    for (const key of ["message", "name", "data", "cause", "error"] as const) {
+      visit(candidate[key], depth + 1);
+    }
+  };
+
+  visit(error, 0);
+  return { codes, text: messages.join(" ").toUpperCase() };
+}
+
+/**
+ * Only errors which prove that the wallet did not submit may stop canonical
+ * recovery. Ready can report a generic timeout/UNKNOWN_ERROR after broadcast;
+ * treating that as a failed payment can invite a duplicate payroll.
+ */
+export function isDefinitiveWalletNonSubmission(error: unknown): boolean {
+  const { codes, text } = walletErrorDetails(error);
+  if ([...codes].some((code) => DEFINITIVE_WALLET_ERROR_CODES.has(code))) return true;
+  return DEFINITIVE_WALLET_ERROR_NAMES.some((name) => text.includes(name));
+}
+
 function requireTransactionHash(value: unknown): string {
   if (typeof value !== "string" || !TRANSACTION_HASH.test(value)) {
     throw new Error("Ready submitted without returning a valid transaction hash.");
   }
-  return value;
+  return `0x${BigInt(value).toString(16)}`;
 }
 
 function wait(milliseconds: number): Promise<void> {
@@ -49,20 +126,24 @@ export async function awaitWalletOrRecoveredTransaction(input: {
   ) throw new Error("Wallet recovery notice delay must fit inside the polling window.");
 
   let settled = false;
+  let recoveryPollingNotified = false;
+  const notifyRecoveryPolling = async () => {
+    if (recoveryPollingNotified) return;
+    recoveryPollingNotified = true;
+    try {
+      await input.onRecoveryPolling?.();
+    } catch {
+      // Display callbacks must never interrupt canonical transaction recovery.
+    }
+  };
   const recovered = async (): Promise<string> => {
     const startedAt = Date.now();
     const deadline = Date.now() + timeoutMs;
-    let recoveryPollingNotified = false;
     while (!settled && Date.now() < deadline) {
       await wait(pollIntervalMs);
       if (settled) break;
       if (!recoveryPollingNotified && Date.now() - startedAt >= recoveryNoticeDelayMs) {
-        recoveryPollingNotified = true;
-        try {
-          await input.onRecoveryPolling?.();
-        } catch {
-          // Display callbacks must never interrupt canonical transaction recovery.
-        }
+        await notifyRecoveryPolling();
       }
       try {
         const transactionHash = await input.readRecoveredTransactionHash();
@@ -78,7 +159,7 @@ export async function awaitWalletOrRecoveredTransaction(input: {
         }
       } catch {
         // Auth refreshes and transient network failures are retried while Ready
-        // remains open. The wallet promise still fails fast on an explicit reject.
+        // remains open. Definitive wallet rejection still fails independently.
       }
     }
     throw new Error(
@@ -86,11 +167,20 @@ export async function awaitWalletOrRecoveredTransaction(input: {
     );
   };
 
+  const submitted = Promise.resolve()
+    .then(input.submit)
+    .then(requireTransactionHash)
+    .catch(async (error: unknown) => {
+      if (isDefinitiveWalletNonSubmission(error)) throw error;
+      // A timeout, UNKNOWN_ERROR, transport loss, or malformed post-submit
+      // response does not prove the transaction was never broadcast. Keep the
+      // durable on-chain recovery race alive instead of inviting a second pay.
+      await notifyRecoveryPolling();
+      return new Promise<string>(() => undefined);
+    });
+
   try {
-    return await Promise.race([
-      Promise.resolve().then(input.submit).then(requireTransactionHash),
-      recovered(),
-    ]);
+    return await Promise.race([submitted, recovered()]);
   } finally {
     settled = true;
   }

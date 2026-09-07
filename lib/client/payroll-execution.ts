@@ -926,6 +926,7 @@ export async function resumePendingPayrollApproval(input: {
   ) => Promise<string>;
   persistPendingSubmission?: (submission: PendingPayrollSubmission | null) => void;
   onStage?: (stage: PayrollExecutionStage) => void;
+  onRecoveredTransactionHash?: (transactionHash: string) => void | Promise<void>;
   walletRecoveryPollIntervalMs?: number;
   walletRecoveryTimeoutMs?: number;
   walletRecoveryNoticeDelayMs?: number;
@@ -1053,6 +1054,7 @@ export async function resumePendingPayrollApproval(input: {
     submit: () => input.submitPayroll(recipients, payoAction),
     readRecoveredTransactionHash: () => readRecoveredSettlementTransactionHash(input.client, pending.settlementId),
     onRecoveryPolling: () => input.onStage?.("wallet_recovery"),
+    onRecoveredTransactionHash: input.onRecoveredTransactionHash,
     pollIntervalMs: input.walletRecoveryPollIntervalMs,
     timeoutMs: input.walletRecoveryTimeoutMs,
     recoveryNoticeDelayMs: input.walletRecoveryNoticeDelayMs,

@@ -16,6 +16,7 @@
     "test:browser:phase4": "playwright test --config playwright.phase4.config.ts",
     "test:browser:block4": "playwright test --config playwright.block4.config.ts",
     "test:browser:block5": "playwright test --config playwright.block5.config.ts",
+    "test:browser:recovery": "playwright test --config playwright.recovery.config.ts",
     "block5:upstream:verify": "tsx scripts/verify-block5-private-exit-upstream.ts",
     "test:db": "vitest run lib/persistence/database.integration.test.ts",
     "verify:pre-hackathon": "node scripts/verify-pre-hackathon-release.mjs",

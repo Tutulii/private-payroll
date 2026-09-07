@@ -1,7 +1,12 @@
 import { RpcProvider } from "starknet";
+import { replaceIndexedRecoveryEvents } from "@/lib/persistence/chain-indexer-repository";
 import { recoverApprovalSubmissionsFromSealEvents } from "@/lib/persistence/settlement-repository";
-import { processEventIndexBatch } from "@/lib/server/chain-indexer";
+import { processEventIndexBatch, type StarknetEventIndexerRpc } from "@/lib/server/chain-indexer";
 import { authorizeInternalWorker } from "@/lib/server/internal-auth";
+import {
+  buildRecoveryTailIndexPlan,
+  scanRecoveryTailEvents,
+} from "@/lib/server/recovery-tail-index";
 import { PAYO_RECOVERY_EVENT_SELECTORS } from "@/lib/starknet/payo-event-selectors";
 
 export const runtime = "nodejs";
@@ -36,6 +41,12 @@ export async function POST(request: Request) {
   const finalityLag = configuredNumber(process.env.PAYO_INDEX_FINALITY_LAG, 2, 0, 10_000);
   const prefetchConcurrency = configuredNumber(process.env.PAYO_INDEX_PREFETCH_CONCURRENCY, 4, 1, 16);
   const maxReorgDepth = configuredNumber(process.env.PAYO_INDEX_MAX_REORG_DEPTH, 128, 1, 10_000);
+  const recoveryLookback = configuredNumber(
+    process.env.PAYO_RECOVERY_INDEX_LOOKBACK_BLOCKS,
+    512,
+    1,
+    10_000,
+  );
   if (
     !rpcUrl
     || !contractAddress
@@ -44,6 +55,7 @@ export async function POST(request: Request) {
     || finalityLag === null
     || prefetchConcurrency === null
     || maxReorgDepth === null
+    || recoveryLookback === null
   ) {
     return Response.json({
       error: {
@@ -54,36 +66,73 @@ export async function POST(request: Request) {
   }
   try {
     const provider = new RpcProvider({ nodeUrl: rpcUrl });
+    const rpc: StarknetEventIndexerRpc = {
+      getBlockNumber: () => provider.getBlockNumber(),
+      getBlockWithTxHashes: (blockNumber) => provider.getBlockWithTxHashes(blockNumber),
+      getEvents: (filter) => provider.getEvents(filter),
+    };
     const chainId = process.env.PAYO_INDEX_CHAIN_ID ?? "SN_MAIN";
-    const result = await processEventIndexBatch({
-      rpc: {
-        getBlockNumber: () => provider.getBlockNumber(),
-        getBlockWithTxHashes: (blockNumber) => provider.getBlockWithTxHashes(blockNumber),
-        getEvents: (filter) => provider.getEvents(filter),
-      },
-      chainId,
-      consumer: process.env.PAYO_INDEX_CONSUMER ?? "payo-seal",
-      fromBlock,
-      maxBlocks: batchSize,
+    const baseConsumer = process.env.PAYO_INDEX_CONSUMER ?? "payo-seal";
+    const addresses = bookSealAddress
+      ? [contractAddress, bookSealAddress]
+      : [contractAddress];
+    let primaryIndex: Awaited<ReturnType<typeof processEventIndexBatch>> | null = null;
+    let primaryFailure: unknown;
+    try {
+      primaryIndex = await processEventIndexBatch({
+        rpc,
+        chainId,
+        consumer: baseConsumer,
+        fromBlock,
+        maxBlocks: batchSize,
+        finalityLag,
+        prefetchConcurrency,
+        maxReorgDepth,
+        addresses,
+        keys: [[...PAYO_RECOVERY_EVENT_SELECTORS]],
+      });
+    } catch (error) {
+      // Recovery is deliberately independent from the historical cursor. Run
+      // it even when catch-up or reorg handling fails, then surface the primary
+      // failure so worker monitoring still reports it.
+      primaryFailure = error;
+    }
+
+    const recoveryPlan = buildRecoveryTailIndexPlan({
+      configuredFromBlock: fromBlock,
+      chainHead: BigInt(await provider.getBlockNumber()),
       finalityLag,
-      prefetchConcurrency,
-      maxReorgDepth,
-      addresses: bookSealAddress
-        ? [contractAddress, bookSealAddress]
-        : [contractAddress],
-      keys: [[...PAYO_RECOVERY_EVENT_SELECTORS]],
+      lookbackBlocks: recoveryLookback,
+      addresses,
+      selectors: PAYO_RECOVERY_EVENT_SELECTORS,
     });
+    const recoveryEvents = await scanRecoveryTailEvents({ rpc, plan: recoveryPlan });
+    const recoveryIndex = recoveryPlan.hasRange
+      ? await replaceIndexedRecoveryEvents({
+          chainId,
+          fromBlock: recoveryPlan.fromBlock,
+          toBlock: recoveryPlan.toBlock,
+          addresses: recoveryPlan.addresses,
+          eventNames: recoveryPlan.selectors,
+          events: recoveryEvents,
+        })
+      : { indexed: 0, fromBlock: recoveryPlan.fromBlock, toBlock: recoveryPlan.toBlock };
     const recovery = await recoverApprovalSubmissionsFromSealEvents({
       chainId,
       sealAddress: contractAddress,
       ...(bookSealAddress ? { bookSealAddress } : {}),
     });
+    if (primaryFailure) throw primaryFailure;
+    if (!primaryIndex) throw new Error("Historical event indexing did not return a result.");
     return Response.json({
-      ...result,
+      indexed: primaryIndex.indexed,
+      recoveryIndexed: recoveryIndex.indexed,
+      recoveryFromBlock: recoveryIndex.fromBlock.toString(),
+      recoveryToBlock: recoveryIndex.toBlock.toString(),
       recoveredSubmissions: recovery.recovered,
-      rolledBack: result.rolledBack.toString(),
-      headBlockNumber: result.headBlockNumber.toString(),
-      nextBlockNumber: result.nextBlockNumber.toString(),
+      rolledBack: primaryIndex.rolledBack.toString(),
+      headBlockNumber: primaryIndex.headBlockNumber.toString(),
+      nextBlockNumber: primaryIndex.nextBlockNumber.toString(),
     });
   } catch (error) {
     console.error("PAYO event indexer failed", error instanceof Error ? error.message : "Unknown indexer failure");

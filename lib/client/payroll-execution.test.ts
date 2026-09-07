@@ -661,6 +661,32 @@ describe("proof-bound payroll browser orchestration", () => {
     expect(result.transactionHash).toBe("0xfeed");
   });
 
+  it("recovers the exact settlement after Ready times out post-broadcast", async () => {
+    const mockClient = client();
+    const input = await executionInput(mockClient);
+    const onStage = vi.fn();
+    const onRecoveredTransactionHash = vi.fn();
+    input.submitPayroll.mockRejectedValue({ code: 163, message: "Timeout" });
+    mockClient.getSettlement
+      .mockResolvedValueOnce({ settlement: { transactionHash: null } })
+      .mockResolvedValue({ settlement: { transactionHash: "0xfeed" } });
+
+    const result = await executeProofBoundPayroll({
+      ...input,
+      onStage,
+      onRecoveredTransactionHash,
+      walletRecoveryPollIntervalMs: 1,
+      walletRecoveryTimeoutMs: 100,
+      walletRecoveryNoticeDelayMs: 50,
+    });
+
+    expect(input.submitPayroll).toHaveBeenCalledTimes(1);
+    expect(onStage).toHaveBeenCalledWith("wallet_recovery");
+    expect(onRecoveredTransactionHash).toHaveBeenCalledWith("0xfeed");
+    expect(mockClient.recordSettlementSubmission).toHaveBeenCalledWith(result.settlementId, "0xfeed");
+    expect(result.transactionHash).toBe("0xfeed");
+  });
+
   it("never opens the wallet when an on-chain binding is inactive", async () => {
     const mockClient = client(false);
     const input = await executionInput(mockClient);
@@ -893,10 +919,13 @@ describe("proof-bound payroll browser orchestration", () => {
       bookSealAddress,
       entryKind: "ordinary" as const,
     };
-    input.submitPayroll.mockRejectedValueOnce(new Error("wallet boundary rejected before Ready"));
+    input.submitPayroll.mockRejectedValueOnce(Object.assign(
+      new Error("An error occurred (USER_REFUSED_OP)"),
+      { code: 113 },
+    ));
 
     await expect(executeProofBoundPayroll({ ...input, vestingBook }))
-      .rejects.toThrow("wallet boundary rejected before Ready");
+      .rejects.toThrow("USER_REFUSED_OP");
 
     const persistedRun = mockClient.createPayrollRun.mock.calls[0][0];
     const storedProof = mockClient.storeEncryptedProofBundle.mock.calls[0][0];

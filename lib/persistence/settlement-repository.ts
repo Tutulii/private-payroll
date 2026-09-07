@@ -298,7 +298,7 @@ function assertTransactionHash(hash: string): string {
   if (!/^0x[0-9a-fA-F]{1,64}$/.test(hash)) {
     throw new ApiError(400, "A valid Starknet transaction hash is required.", "TRANSACTION_HASH_INVALID");
   }
-  return hash.toLowerCase();
+  return `0x${BigInt(hash).toString(16)}`;
 }
 
 export async function createSettlementIntent(input: {
@@ -600,7 +600,7 @@ export async function recordSettlementSubmission(input: {
     if (!existing) throw new ApiError(404, "Settlement not found.", "SETTLEMENT_NOT_FOUND");
     await requireOrganizationRoleWith(transaction, existing.organizationId, input.principal, ["admin", "operator"]);
     if (existing.transactionHash) {
-      if (existing.transactionHash.toLowerCase() !== transactionHash) {
+      if (BigInt(existing.transactionHash) !== BigInt(transactionHash)) {
         throw new ApiError(409, "Settlement already has a different transaction hash.", "TRANSACTION_HASH_CONFLICT");
       }
       return {
