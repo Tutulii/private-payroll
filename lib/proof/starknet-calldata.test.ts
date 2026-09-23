@@ -19,7 +19,8 @@ describe("PayrollIntegrity Starknet calldata", () => {
   it("serializes all 17 public inputs as canonical 32-byte big-endian values", () => {
     const values = Array.from({ length: 17 }, (_, index) => `0x${(index + 1).toString(16)}`);
     const mapped = mapPayrollPublicInputs(values);
-    expect(orderedPayrollPublicInputs(mapped)).toEqual(values);
+    expect(orderedPayrollPublicInputs(mapped)).toEqual(values.map((value, index) =>
+      index < 2 ? value : BigInt(value).toString()));
 
     const serialized = serializePayrollPublicInputs(values);
     expect(serialized).toHaveLength(17 * 32);

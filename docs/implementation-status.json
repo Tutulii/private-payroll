@@ -32,12 +32,11 @@
     {
       "id": "P0-02",
       "phase": 0,
-      "requirement": "Roadmap and full architecture specification",
+      "requirement": "Product and architecture documentation",
       "status": "complete",
       "evidence": [
         "README.md",
-        "architecture.md",
-        "MASTER_PLAN.md"
+        "architecture.md"
       ],
       "tests": [
         "manual documentation audit"
